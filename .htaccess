@@ -1,0 +1,10 @@
+DirectoryIndex index.php index.html index.htm
+
+# Redirect any old .asp URLs to the equivalent .php
+RewriteEngine On
+RewriteRule ^(.+)\.asp$ $1.php [R=301,L,NC]
+
+# Block direct access to backup/old files
+<FilesMatch "(-old|_old|\.bak|~)\.php$">
+    Require all denied
+</FilesMatch>

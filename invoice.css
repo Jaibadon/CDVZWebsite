@@ -1,0 +1,37 @@
+	body {
+		background-color: #FFFFFF;
+		}
+	TD { 
+		font-family: arial, helv;
+		font-size: 12px;
+		} 
+	h1 {
+		font-family: arial, helv;
+		text-align:left;
+	}
+	h2 {
+		font-family: arial, helv;
+		text-align:left;
+	}
+		
+	p {
+		font-family: arial, helv;
+		text-align:left;
+		}		
+/* nav link standards */
+	
+	a:link {
+		text-decoration: none; 
+		}
+
+	a:visited {
+		text-decoration: none; 
+		}
+		
+	a:hover {
+		text-decoration: none; 
+		}
+
+	a:active {
+		text-decoration: none; 
+		}
