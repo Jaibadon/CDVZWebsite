@@ -91,12 +91,14 @@ body  { background:#515559; font-family:Arial,sans-serif; font-size:12px; margin
 .hdr  { background:#9B9B1B; color:#fff; }
 .hdr a{ color:#fff; }
 table { border-collapse:collapse; }
-input[type=text] { font-size:11px; }
-.tbl-main { width:660px; margin:0 auto; }
-th,td { padding:2px 4px; }
+input[type=text] { font-size:11px; box-sizing:border-box; }
+input[type=text].day-input,
+input[type=text].tot-inp { padding:1px; }
+.tbl-main { width:660px; margin:0 auto; table-layout:fixed; }
+.tbl-main td, .tbl-main th { padding:2px 2px; overflow:hidden; }
 .day-input { width:34px; text-align:center; }
-.proj-sel  { width:130px; }
-.desc-inp  { width:200px; }
+.proj-sel  { width:128px; box-sizing:border-box; }
+.desc-inp  { width:198px; box-sizing:border-box; }
 .tot-inp   { width:34px; background:#ddd; }
 th { background:#9B9B1B; color:#fff; font-size:11px; }
 .vt-cell input { background:#ddd; }
@@ -211,7 +213,7 @@ window.onload = function () {
   <input type="submit" name="Submit" value="Submit Timesheet" style="padding:4px 14px;background:#9B9B1B;color:#fff;border:none;cursor:pointer;border-radius:3px">
 </div>
 
-<div style="overflow-x:auto">
+<div>
 <table class="tbl-main" border="0" cellpadding="0" cellspacing="0">
 
 <!-- Column headings row -->

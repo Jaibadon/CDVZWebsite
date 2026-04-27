@@ -1,28 +1,21 @@
 <?php
+// ─────────────────────────────────────────────────────────────────────────
+// Do ALL processing (session, validation, DB work) BEFORE any HTML output.
+// HTTP/2 is strict: if the server starts streaming HTML and then the
+// connection or response is interrupted (slow query, error mid-write,
+// chunked-encoding hiccup), Chrome raises ERR_HTTP2_PROTOCOL_ERROR.
+// Buffering the whole response and only flushing once it's complete
+// avoids that class of failure.
+// ─────────────────────────────────────────────────────────────────────────
 session_start();
-require_once 'db_connect.php';
+require_once 'db_connect.php';   // also enables output buffering + 120s time limit
 require_once 'helpers.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
     exit;
 }
-?>
-<html>
-<head>
-<STYLE TYPE="text/css">
-<!--
-	.style1 {
-	background-color: #9B9B1B;
-}
-	-->
-</STYLE>
-<meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
-<title>CADViz Timesheet</title>
-<link rel="stylesheet" href="global.css" type="text/css">
-</head>
-<body bgcolor=#DFEFEF>
-<?php
+
 // If accessed directly without form POST, redirect to main.php
 if ($_SERVER['REQUEST_METHOD'] !== 'POST' || empty($_POST['hidden_week'])) {
     header('Location: main.php');
@@ -116,8 +109,22 @@ if ($locked === "true") {
         $error = "<font color=red><b>FAILED: " . htmlspecialchars($e->getMessage()) . "</b></font>";
     }
 }
+
+// ─── DB work done — start emitting the response page ────────────────────
 ?>
-<?php if ($locked === "false" || $error === "successful"): ?>
+<!DOCTYPE html>
+<html>
+<head>
+<style type="text/css">
+.style1 { background-color: #9B9B1B; }
+</style>
+<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<title>CADViz Timesheet</title>
+<link rel="stylesheet" href="global.css" type="text/css">
+</head>
+<body bgcolor="#DFEFEF">
+<?php if ($errorShown): ?>
+<?php elseif ($locked === "false" || $error === "successful"): ?>
 <p>&nbsp;</p><p>&nbsp;</p>
 <?php endif; ?>
           <table align="center" border="0" cellspacing="0" width="90%" cellpadding="0" id="table1" class="style1">
