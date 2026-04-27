@@ -62,9 +62,28 @@ function print_dd_box($pdo, $table_name, $index_name, $display_name, $default_va
     echo '</SELECT>';
 }
 
-$sql = "SELECT * FROM Payments WHERE (Payments.Invoice_No IN (SELECT INVOICE_NO FROM Invoices WHERE PAID=0) OR Payments.Invoice_No=0)";
+$sql = "SELECT * FROM Payments WHERE (Payments.Invoice_No IN (SELECT Invoice_No FROM Invoices WHERE Paid=0) OR Payments.Invoice_No=0)";
 $stmt = $pdo->query($sql);
 $payments = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Case-insensitive lookup helper for variant date column names
+function ci(array $row, array $keys, $default = '') {
+    foreach ($keys as $key) {
+        foreach ($row as $k => $v) {
+            if (strcasecmp($k, $key) === 0) return $v;
+        }
+    }
+    return $default;
+}
+
+// Robust date parser — accepts ISO (Y-m-d) AND UK (d/m/Y) forms
+function parseDate($s) {
+    if (empty($s)) return false;
+    if (preg_match('#^(\d{1,2})[/-](\d{1,2})[/-](\d{4})#', $s, $m)) {
+        return mktime(0, 0, 0, (int)$m[2], (int)$m[1], (int)$m[3]); // d/m/Y
+    }
+    return strtotime($s);
+}
 ?>
 
 <form method="POST" name="payment_update_form" action="payment_update.php">
@@ -83,17 +102,20 @@ if (!empty($payments)) {
     foreach ($payments as $ts) {
         $a++;
         echo "<tr>";
-        $dateRcvd = !empty($ts['Date_Received']) ? date('d/m/Y', strtotime($ts['Date_Received'])) : '';
-        echo "<td width='88'><input size='5' name='Date_Received_box" . $a . "' value='" . htmlspecialchars($dateRcvd) . "'></td>";
+        // Look for Date_Received under any of its likely names + parse robustly
+        $rawDate = ci($ts, ['Date_Received', 'Date_Recieved', 'DateReceived', 'date_received', 'Date']);
+        $t = parseDate($rawDate);
+        $dateRcvd = $t ? date('d/m/Y', $t) : '';
+        echo "<td width='88'><input size='10' name='Date_Received_box" . $a . "' value='" . htmlspecialchars($dateRcvd) . "'></td>";
         echo "<td width='40'>";
-        echo "<input size='5' type='hidden' name='Payment_ID_" . $a . "' value='" . htmlspecialchars($ts['Payment_ID'] ?? '') . "'>";
-        echo "<input size='5' name='Inv_box" . $a . "' value='" . htmlspecialchars((string)($ts['Invoice_No'] ?? '')) . "'>";
+        echo "<input size='5' type='hidden' name='Payment_ID_" . $a . "' value='" . htmlspecialchars((string)ci($ts, ['Payment_ID','PaymentID','payment_id'])) . "'>";
+        echo "<input size='5' name='Inv_box" . $a . "' value='" . htmlspecialchars((string)ci($ts, ['Invoice_No','invoice_no'])) . "'>";
         echo "</td>";
         echo "<td width='50'>";
-        print_dd_box($pdo, 'Clients', 'client_id', 'Client_name', $ts['Client_ID'] ?? 0, 'Client_box' . $a);
+        print_dd_box($pdo, 'Clients', 'client_id', 'Client_name', ci($ts, ['Client_ID','client_id'], 0), 'Client_box' . $a);
         echo "</td>";
-        echo "<td><input size='35' name='notes_box" . $a . "' value='" . htmlspecialchars($ts['Notes'] ?? '') . "'></td>";
-        echo "<td width='60' align='Right'><input size='5' name='amount" . $a . "' value='" . htmlspecialchars((string)($ts['Amount'] ?? '')) . "'></td>";
+        echo "<td><input size='35' name='notes_box" . $a . "' value='" . htmlspecialchars((string)ci($ts, ['Notes','notes'])) . "'></td>";
+        echo "<td width='60' align='Right'><input size='5' name='amount" . $a . "' value='" . htmlspecialchars((string)ci($ts, ['Amount','amount'])) . "'></td>";
         echo "</tr>";
     }
     echo "<input size='5' type='hidden' name='rowcount' value='" . $a . "'>";

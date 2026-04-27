@@ -73,34 +73,46 @@ if ($_SESSION['UserID'] == "jen") {
 <p></p>
 
 <?php
+function fmtDate($d) {
+    if (empty($d)) return '';
+    $t = strtotime($d);
+    return $t ? date('d/m/Y', $t) : '';
+}
+
+try {
 $pdo = get_db();
-$stmt = $pdo->query("SELECT * FROM Projects ORDER BY JOBNAME");
+$stmt = $pdo->query("SELECT * FROM Projects ORDER BY JobName");
+$shown = 0;
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $shown++;
+    $projId  = $row['proj_id']    ?? '';
+    $jobName = $row['JobName']    ?? $row['JOBNAME'] ?? '';
+    $status  = $row['Status']     ?? '';
+    $draftDt = $row['Draft_Date'] ?? '';
+    $finalDt = $row['Final_Date'] ?? '';
+
     echo "<br>";
-    echo "<a href=\"updateform_admin1.php?proj_id=" . htmlspecialchars($row['proj_id']) . "\">";
-    echo htmlspecialchars($row['JOBNAME']);
+    echo "<a href=\"updateform_admin1.php?proj_id=" . htmlspecialchars((string)$projId) . "\">";
+    echo htmlspecialchars((string)$jobName);
     echo "</a>";
     echo "&nbsp;&nbsp;";
     if (!empty($row['Active']) && $row['Active'] != 0) {
-        echo "<font size=3 color=Red>*Active*";
+        echo "<font size=3 color=Red>*Active*</font>";
     } else {
-        echo "<font size=2 color=black>-Inactive-";
+        echo "<font size=2 color=black>-Inactive-</font>";
     }
-    echo "</font>";
     echo "&nbsp;&nbsp;";
-    echo htmlspecialchars($row['Status'] ?? '');
+    echo htmlspecialchars((string)$status);
     echo "&nbsp;&nbsp;";
-    if (!empty($row['Draft_Date'])) {
-        echo "Draft: ";
-        echo htmlspecialchars($row['Draft_Date']);
-        echo "&nbsp;&nbsp;";
-    }
-    if (!empty($row['Final_Date'])) {
-        echo "Final: ";
-        echo htmlspecialchars($row['Final_Date']);
-        echo "&nbsp;&nbsp;";
-    }
+    if (!empty($draftDt)) echo "Draft: " . fmtDate($draftDt) . "&nbsp;&nbsp;";
+    if (!empty($finalDt)) echo "Final: " . fmtDate($finalDt) . "&nbsp;&nbsp;";
     echo "<br>";
+}
+if ($shown === 0) {
+    echo '<p style="color:#888">No projects found.</p>';
+}
+} catch (Exception $e) {
+    echo '<p style="color:red">DB Error: ' . htmlspecialchars($e->getMessage()) . '</p>';
 }
 ?>
 

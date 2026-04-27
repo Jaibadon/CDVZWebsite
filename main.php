@@ -187,23 +187,25 @@ window.onload = function () {
 </table>
 
 <!-- ── Week selector (retrieve form) ─────────────────────────────────────── -->
-<div style="width:680px;margin:0 auto;padding:4px 0">
-<form action="main.php" name="retrieve_form" method="post">
-  <font color="#515559" face="Arial">Week starting:</font>
+<div style="width:680px;margin:0 auto;padding:6px 0;color:#fff">
+<form action="main.php" name="retrieve_form" method="post" style="display:inline">
+  <span style="color:#fff;font-family:Arial">Week starting:</span>
   <select name="week" onchange="this.form.submit()">
     <?php foreach ($weekOptions as $wo): ?>
       <option value="<?= $wo ?>" <?= ($wo === $weekStart) ? 'selected' : '' ?>><?= date('d/m/Y', strtotime($wo)) ?></option>
     <?php endforeach; ?>
   </select>
   <input type="submit" name="Retrieve" value="Retrieve">
-  <font color="#515559" face="Arial" size="1">&nbsp;&nbsp;&nbsp;(Enter time in decimal hours e.g. 15min = 0.25)</font>
+  <span style="color:#ccc;font-family:Arial;font-size:11px">&nbsp;&nbsp;&nbsp;(Enter time in decimal hours e.g. 15min = 0.25)</span>
 </form>
 </div>
 
 <!-- ── Submit form ───────────────────────────────────────────────────────── -->
-<form action="submit.php" id="submit_form" name="submit_form" method="post">
+<form action="submit.php" id="submit_form" name="submit_form" method="post" style="width:680px;margin:0 auto">
 <input type="hidden" name="hidden_week" value="<?= htmlspecialchars($weekStart) ?>">
-&nbsp;<input type="submit" name="Submit" value="Submit">
+<div style="padding:4px 0">
+  <input type="submit" name="Submit" value="Submit Timesheet" style="padding:4px 14px;background:#9B9B1B;color:#fff;border:none;cursor:pointer;border-radius:3px">
+</div>
 
 <div style="overflow-x:auto">
 <table class="tbl-main" border="0" cellpadding="0" cellspacing="0">

@@ -85,42 +85,72 @@ if ($_SESSION['UserID'] == 'jen') {
 <?php
 try {
 $pdo = get_db();
-$tot = 0;
 $grand = 0;
 
-$sql = "SELECT * FROM Invoices LEFT OUTER JOIN Clients on Invoices.Client_ID = Clients.Client_ID LEFT OUTER JOIN Projects ON Invoices.Proj_ID = Projects.Proj_ID WHERE Paid=0";
+// Explicit columns + aliases avoid name-collision when SELECT * over a JOIN
+$sql = "SELECT Invoices.Invoice_No   AS Invoice_No,
+               Invoices.Date         AS InvDate,
+               Invoices.Subtotal     AS Subtotal,
+               Invoices.Tax_Rate     AS Tax_Rate,
+               Invoices.Status_INV   AS Status_INV,
+               Invoices.Proj_ID      AS Proj_ID,
+               Clients.Client_Name   AS Client_Name,
+               Projects.JobName      AS JobName
+          FROM Invoices
+          LEFT OUTER JOIN Clients  ON Invoices.Client_ID = Clients.Client_id
+          LEFT OUTER JOIN Projects ON Invoices.Proj_ID   = Projects.proj_id
+         WHERE Invoices.Paid = 0
+         ORDER BY Invoices.Invoice_No DESC";
 $stmt = $pdo->query($sql);
 
+$count = 0;
 while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $count++;
+    $invNo    = $rs['Invoice_No'];
+    $invDate  = $rs['InvDate'];
+    $subtotal = $rs['Subtotal'];
+    $taxRate  = $rs['Tax_Rate'];
+    $status   = $rs['Status_INV'];
+    $projId   = $rs['Proj_ID'];
+    $client   = $rs['Client_Name'] ?? '';
+    $jobName  = $rs['JobName']     ?? '';
+
     echo "<br>";
-    echo "<a href=\"invoice.php?invoice_no=" . htmlspecialchars($rs['invoice_no']) . "\">";
-    echo htmlspecialchars($rs['invoice_no']);
+    echo "<a href=\"invoice.php?Invoice_No=" . htmlspecialchars((string)$invNo) . "\">";
+    echo htmlspecialchars((string)$invNo);
     echo "</a>";
     echo "&nbsp;-&nbsp;";
-    echo htmlspecialchars(date('d/m/Y', strtotime($rs['Date'])));
+    echo htmlspecialchars($invDate ? date('d/m/Y', strtotime($invDate)) : '');
     echo "&nbsp;-&nbsp;";
-    if (is_null($rs['Subtotal'])) {
+    if (is_null($subtotal)) {
         echo "*unprocessed*";
     } else {
-        $tot = '$' . number_format((float)$rs['Subtotal'] + ((float)$rs['Subtotal'] * (float)$rs['Tax_Rate']), 2);
-        echo $tot;
-        $grand += (float)$rs['Subtotal'] + ((float)$rs['Subtotal'] * (float)$rs['Tax_Rate']);
+        $line = (float)$subtotal + ((float)$subtotal * (float)$taxRate);
+        echo '$' . number_format($line, 2);
+        $grand += $line;
     }
     echo "&nbsp;-&nbsp;";
-    echo htmlspecialchars($rs['Client_name']);
+    echo htmlspecialchars((string)$client);
     echo "&nbsp;-&nbsp;";
-    echo htmlspecialchars($rs['JOBNAME']);
+    if ($projId) {
+        echo "<a href=\"updateform_admin1.php?proj_id=" . htmlspecialchars((string)$projId) . "\">";
+        echo "#" . htmlspecialchars((string)$projId) . "&nbsp;" . htmlspecialchars((string)$jobName);
+        echo "</a>";
+    } else {
+        echo htmlspecialchars((string)$jobName);
+    }
     echo "&nbsp;-&nbsp;";
 
-    if ($rs['Status_INV'] == 0) {
+    if ($status == 0) {
         echo "<font size=4 color=Grey>***HOLD - Not Checked :(</font>";
-    }
-    if ($rs['Status_INV'] == 1) {
+    } elseif ($status == 1) {
         echo "<font size=4 color=Red>***READY to Send Jen and I love you sweet thing :)</font>";
-    }
-    if ($rs['Status_INV'] == 2) {
+    } elseif ($status == 2) {
         echo "<font size=4>***SENT - everything is awesome!</font>";
     }
+}
+if ($count === 0) {
+    echo '<p style="color:#888">No unpaid invoices.</p>';
 }
 echo "<br><strong>&nbsp;&nbsp;GRAND TOTAL......";
 echo '$' . number_format($grand, 2);
