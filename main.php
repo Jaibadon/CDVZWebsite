@@ -6,8 +6,12 @@ try {
 $pdo = get_db();
 
 // ── Week selection ──────────────────────────────────────────────────────────
-$currentWeek = $_POST['week'] ?? $_SESSION['Week'] ?? date('Y-m-d', strtotime('monday this week'));
-$currentWeek = date('Y-m-d', strtotime($currentWeek));
+// Accept either 'week' or 'Week' (form fields posted from various pages)
+$currentWeek = $_POST['week'] ?? $_POST['Week']
+            ?? $_GET['week']  ?? $_GET['Week']
+            ?? $_SESSION['Week'] ?? date('Y-m-d', strtotime('monday this week'));
+$ts = strtotime($currentWeek);
+$currentWeek = $ts ? date('Y-m-d', $ts) : date('Y-m-d', strtotime('monday this week'));
 $_SESSION['Week'] = $currentWeek;
 
 $weekStart = $currentWeek;

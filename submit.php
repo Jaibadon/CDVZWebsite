@@ -55,51 +55,65 @@ if ($lockMonths < 0) {
     $error = "<font color=red><b>FAILED</b></font>";
 }
 
-// Delete all rows for this week (prepared statement)
+$totaltime = 0;
+$errorShown = false;
+
 if ($locked === "true") {
     echo "<br><br><font color=red size=2 face=tahoma><b>You are attempting to modify your timesheet in an unauthorised period!  You may only modify your timesheet for the last couple months.<br><br></font></b>";
 } else {
-    $delStmt = $pdo->prepare("DELETE FROM Timesheets WHERE TS_DATE BETWEEN ? AND ? AND Employee_id = ? AND Invoice_No = 0");
-    $delStmt->execute([$weekStartISO, $weekEndISO, (int)$_SESSION['Employee_id']]);
-}
+    // Wrap delete + all inserts in a single transaction — much faster than
+    // 30 individual auto-commits, and atomic if anything fails.
+    $pdo->beginTransaction();
+    try {
+        $delStmt = $pdo->prepare("DELETE FROM Timesheets WHERE TS_DATE BETWEEN ? AND ? AND Employee_id = ? AND Invoice_No = 0");
+        $delStmt->execute([$weekStartISO, $weekEndISO, (int)$_SESSION['Employee_id']]);
 
-// Compute next TS_ID once (Timesheets.TS_ID isn't auto_increment in this DB)
-$nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
-$nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+        // Compute next TS_ID once. If the column is now AUTO_INCREMENT this is
+        // still safe — MySQL will use whichever is higher.
+        $nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
+        $nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
 
-// Re-use a prepared INSERT with explicit TS_ID
-$insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_ID, TS_DATE, Employee_id, proj_id, Task, Hours, Invoice_No) VALUES (?, ?, ?, ?, ?, ?, 0)");
+        $insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_ID, TS_DATE, Employee_id, proj_id, Task, Hours, Invoice_No) VALUES (?, ?, ?, ?, ?, ?, 0)");
 
-$totaltime = 0;
-for ($a = 1; $a <= 40; $a++) {
-    if (isset($_POST['Project' . $a]) && $_POST['Project' . $a] !== "" && isset($_POST['Invoice_No' . $a]) && $_POST['Invoice_No' . $a] === "0") {
-        for ($b = 1; $b <= 7; $b++) {
-            $dayKey = "D" . $b . "_" . $a;
-            if (isset($_POST[$dayKey]) && $_POST[$dayKey] !== "") {
-                $totaltime = $totaltime + ((float)$_POST[$dayKey]);
+        for ($a = 1; $a <= 40; $a++) {
+            if (!isset($_POST['Project' . $a])
+                || $_POST['Project' . $a] === ""
+                || ($_POST['Invoice_No' . $a] ?? '') !== "0") {
+                continue;
+            }
+            for ($b = 1; $b <= 7; $b++) {
+                $dayKey = "D" . $b . "_" . $a;
+                if (!isset($_POST[$dayKey]) || $_POST[$dayKey] === "") continue;
+
+                $hours = (float)$_POST[$dayKey];
+                $totaltime += $hours;
+
                 $descKey = "Desc" . $a;
                 if (!isset($_POST[$descKey]) || $_POST[$descKey] === "") {
                     $descKey = "desc" . $a;
                 }
                 if (!isset($_POST[$descKey]) || $_POST[$descKey] === "") {
+                    if (!$errorShown) {
+                        echo "<font face=tahoma size=2 color=red><br><hr>There was an error in your submission.  Hit the back button and correct your data.<br>Remember you MUST fill in a description.<br><hr></font>";
+                        $errorShown = true;
+                    }
                     $error = "not cool";
+                    continue;
                 }
+
                 $tsDate = date('Y-m-d', strtotime("+" . ($b - 1) . " days", strtotime($weekStart)));
                 $projId = (int)$_POST['Project' . $a];
-                $desc   = $_POST[$descKey] ?? '';
-                $hours  = (float)$_POST[$dayKey];
+                $desc   = $_POST[$descKey];
                 $empId  = (int)$_SESSION['Employee_id'];
 
-                if ($error === "not cool") {
-                    echo "<font face=tahoma size=2 color=red><br><hr>There was an error in your submission.  Hit the back button and correct your data.<br>Remember you MUST fill in a description.<br><hr></font>";
-                } else {
-                    if ($locked === "false") {
-                        $insStmt->execute([$nextTsId, $tsDate, $empId, $projId, $desc, $hours]);
-                        $nextTsId++;
-                    }
-                }
+                $insStmt->execute([$nextTsId, $tsDate, $empId, $projId, $desc, $hours]);
+                $nextTsId++;
             }
         }
+        $pdo->commit();
+    } catch (Exception $e) {
+        $pdo->rollBack();
+        $error = "<font color=red><b>FAILED: " . htmlspecialchars($e->getMessage()) . "</b></font>";
     }
 }
 ?>
@@ -164,7 +178,7 @@ function retrieve_part($currentWeek) {
 ?>
 <form action="main.php" name="retrieve_form" method="POST">
   <p><b>Week starting:</b>
-    <SELECT name="Week">
+    <SELECT name="week">
       <?php
     $curdate = date('Y-m-d');
     $wd = (int)date('N', strtotime($curdate)); // 1=Mon, 7=Sun

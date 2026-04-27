@@ -39,7 +39,9 @@ body  { background:#515559; font-family:Arial,sans-serif; margin:0; padding:20px
     <h3>Timesheet</h3>
     <div class="grid">
       <a class="btn" href="main.php">My Timesheet</a>
-      <a class="btn" href="unprocessed.php">Unprocessed Entries</a>
+      <?php if ($isAdmin): ?>
+        <a class="btn" href="unprocessed.php">Unprocessed Entries</a>
+      <?php endif; ?>
       <a class="btn" href="report.php">Reports</a>
     </div>
 
@@ -50,12 +52,14 @@ body  { background:#515559; font-family:Arial,sans-serif; margin:0; padding:20px
       <a class="btn" href="clients.php">Clients</a>
     </div>
 
+    <?php if ($isAdmin): ?>
     <h3>Invoicing &amp; Payments</h3>
     <div class="grid">
       <a class="btn" href="invoice_list.php">Invoice List</a>
       <a class="btn" href="invoice_archive.php">Invoice Archive</a>
       <a class="btn" href="payments.php">Payments</a>
     </div>
+    <?php endif; ?>
 
     <?php if ($isAdmin): ?>
     <h3>Admin</h3>
