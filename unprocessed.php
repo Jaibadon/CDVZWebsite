@@ -52,7 +52,24 @@ $pdo = get_db();
 $subtot = 0;
 $a = 0;
 
-$strSQL = "SELECT *, (Rate * Hours) As amt FROM Timesheets LEFT OUTER JOIN Staff ON Timesheets.Employee_id = Staff.Employee_ID LEFT OUTER JOIN Projects ON Timesheets.proj_id = Projects.proj_ID WHERE Invoice_No=0";
+// Explicit aliased SELECT — `SELECT *` over a JOIN drops columns
+// when names collide (e.g. proj_id is in both Timesheets and Projects)
+$strSQL = "SELECT Timesheets.TS_ID        AS TS_ID,
+                  Timesheets.TS_DATE      AS TS_DATE,
+                  Timesheets.proj_id      AS proj_id,
+                  Timesheets.Task         AS Task,
+                  Timesheets.Hours        AS Hours,
+                  Timesheets.Rate         AS Rate,
+                  Timesheets.Invoice_No   AS Invoice_No,
+                  Timesheets.Employee_id  AS Employee_id,
+                  Staff.Login             AS Login,
+                  Projects.JobName        AS JobName,
+                  (Timesheets.Rate * Timesheets.Hours) AS amt
+             FROM Timesheets
+             LEFT OUTER JOIN Staff    ON Timesheets.Employee_id = Staff.Employee_ID
+             LEFT OUTER JOIN Projects ON Timesheets.proj_id     = Projects.proj_id
+            WHERE Timesheets.Invoice_No = 0
+            ORDER BY Timesheets.TS_DATE";
 $stmt = $pdo->query($strSQL);
 ?>
 

@@ -15,7 +15,24 @@ if ($invoice_no <= 0) {
     exit;
 }
 
-$sql = "SELECT * FROM Invoices LEFT OUTER JOIN Clients on Invoices.Client_ID = Clients.Client_ID LEFT OUTER JOIN Projects ON Invoices.Proj_ID = Projects.Proj_ID WHERE Invoice_No = ?";
+$sql = "SELECT Invoices.Invoice_No    AS Invoice_No,
+               Invoices.Date          AS Date,
+               Invoices.Subtotal      AS Subtotal,
+               Invoices.Tax_Rate      AS Tax_Rate,
+               Invoices.PaymentOption AS PaymentOption,
+               Invoices.Order_No_INV  AS Order_No_INV,
+               Invoices.Notes         AS InvNotes,
+               Clients.Client_id      AS Client_ID,
+               Clients.Client_Name    AS Client_Name,
+               Clients.Address1       AS Address1,
+               Clients.Billing_Email  AS Billing_Email,
+               Projects.proj_id       AS proj_id,
+               Projects.JobName       AS JobName,
+               Projects.Order_No      AS Order_No
+          FROM Invoices
+          LEFT OUTER JOIN Clients  ON Invoices.Client_ID = Clients.Client_id
+          LEFT OUTER JOIN Projects ON Invoices.Proj_ID   = Projects.proj_id
+         WHERE Invoices.Invoice_No = ?";
 $stmt = $pdo->prepare($sql);
 $stmt->execute([$invoice_no]);
 $rs = $stmt->fetch(PDO::FETCH_ASSOC);
@@ -25,7 +42,17 @@ if (!$rs) {
     exit;
 }
 
-$sql2 = "SELECT *, (Rate * Hours) AS amt FROM Timesheets LEFT OUTER JOIN Staff ON Timesheets.Employee_id = Staff.Employee_ID WHERE Invoice_No = ? ORDER BY Timesheets.TS_DATE";
+$sql2 = "SELECT Timesheets.TS_ID   AS TS_ID,
+                Timesheets.TS_DATE AS TS_DATE,
+                Timesheets.Task    AS Task,
+                Timesheets.Hours   AS Hours,
+                Timesheets.Rate    AS Rate,
+                Staff.Login        AS Login,
+                (Timesheets.Rate * Timesheets.Hours) AS amt
+           FROM Timesheets
+           LEFT OUTER JOIN Staff ON Timesheets.Employee_id = Staff.Employee_ID
+          WHERE Timesheets.Invoice_No = ?
+          ORDER BY Timesheets.TS_DATE";
 $stmt2 = $pdo->prepare($sql2);
 $stmt2->execute([$invoice_no]);
 $timesheets = $stmt2->fetchAll(PDO::FETCH_ASSOC);
