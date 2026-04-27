@@ -53,14 +53,16 @@ $subtot = 0;
 $a = 0;
 
 // Explicit aliased SELECT — `SELECT *` over a JOIN drops columns
-// when names collide (e.g. proj_id is in both Timesheets and Projects)
+// when names collide (e.g. proj_id is in both Timesheets and Projects).
+// Use IFNULL on Invoice_No so rows where it is NULL are still considered
+// "uninvoiced" (some old rows may have NULL instead of 0).
 $strSQL = "SELECT Timesheets.TS_ID        AS TS_ID,
                   Timesheets.TS_DATE      AS TS_DATE,
                   Timesheets.proj_id      AS proj_id,
                   Timesheets.Task         AS Task,
                   Timesheets.Hours        AS Hours,
                   Timesheets.Rate         AS Rate,
-                  Timesheets.Invoice_No   AS Invoice_No,
+                  IFNULL(Timesheets.Invoice_No, 0) AS Invoice_No,
                   Timesheets.Employee_id  AS Employee_id,
                   Staff.Login             AS Login,
                   Projects.JobName        AS JobName,
@@ -68,9 +70,46 @@ $strSQL = "SELECT Timesheets.TS_ID        AS TS_ID,
              FROM Timesheets
              LEFT OUTER JOIN Staff    ON Timesheets.Employee_id = Staff.Employee_ID
              LEFT OUTER JOIN Projects ON Timesheets.proj_id     = Projects.proj_id
-            WHERE Timesheets.Invoice_No = 0
+            WHERE IFNULL(Timesheets.Invoice_No, 0) = 0
             ORDER BY Timesheets.TS_DATE";
 $stmt = $pdo->query($strSQL);
+
+// Optional diagnostic: append ?debug=1 to the URL to see why a project
+// might be missing. Lists row counts grouped by proj_id and JobName,
+// plus what's filtering rows out.
+if (isset($_GET['debug'])) {
+    echo '<div style="background:#ffe;border:1px solid #cc9;padding:8px;margin:8px;font:12px monospace">';
+    echo '<b>Debug — uninvoiced timesheet entries by project</b><br>';
+    $diag = $pdo->query(
+        "SELECT t.proj_id,
+                p.JobName,
+                p.Active,
+                COUNT(*)                                  AS rows_total,
+                SUM(IFNULL(t.Invoice_No,0) = 0)           AS rows_uninvoiced,
+                SUM(IFNULL(t.Invoice_No,0) <> 0)          AS rows_invoiced,
+                SUM(t.Invoice_No IS NULL)                 AS rows_inv_null
+           FROM Timesheets t
+           LEFT JOIN Projects p ON t.proj_id = p.proj_id
+          GROUP BY t.proj_id, p.JobName, p.Active
+          ORDER BY rows_uninvoiced DESC, t.proj_id"
+    );
+    echo '<table border="1" cellpadding="2" cellspacing="0">';
+    echo '<tr><th>proj_id</th><th>JobName</th><th>Project Active</th>'
+       . '<th>total</th><th>uninvoiced</th><th>invoiced</th><th>NULL Invoice_No</th></tr>';
+    while ($r = $diag->fetch(PDO::FETCH_ASSOC)) {
+        $highlight = ((int)$r['proj_id'] === 1436) ? ' style="background:#ffd"' : '';
+        echo '<tr' . $highlight . '>';
+        echo '<td>' . htmlspecialchars((string)$r['proj_id']) . '</td>';
+        echo '<td>' . htmlspecialchars((string)($r['JobName'] ?? '<em>(no Projects row)</em>')) . '</td>';
+        echo '<td align=center>' . htmlspecialchars((string)($r['Active'] ?? '?')) . '</td>';
+        echo '<td align=right>' . (int)$r['rows_total'] . '</td>';
+        echo '<td align=right><b>' . (int)$r['rows_uninvoiced'] . '</b></td>';
+        echo '<td align=right>' . (int)$r['rows_invoiced'] . '</td>';
+        echo '<td align=right>' . (int)$r['rows_inv_null'] . '</td>';
+        echo '</tr>';
+    }
+    echo '</table></div>';
+}
 ?>
 
 <form method="POST" name="ts_update_form" action="ts_update.php">
@@ -140,7 +179,15 @@ echo "<tr>";
 echo "<td width='88'><input size='5' name='TS_date_new' value='" . date('d/m/Y') . "'></td>";
 echo "<td width='40'><input size='5' name='TS_Inv_box_new' value='0'></td>";
 echo "<td width='50'>";
-print_dd_box($pdo, "Projects", "proj_id", "JobName", "", "Project_box_new");
+// Show ALL projects in this dropdown (no Active filter) so leave/sick
+// pseudo-projects like proj_id 1436 are pickable for new entries
+$projOpts = $pdo->query("SELECT proj_id, JobName FROM Projects ORDER BY JobName");
+echo '<select name="Project_box_new"><option value=""></option>';
+while ($p = $projOpts->fetch(PDO::FETCH_ASSOC)) {
+    echo '<option value="' . htmlspecialchars((string)$p['proj_id']) . '">'
+       . htmlspecialchars((string)($p['JobName'] ?? '')) . '</option>';
+}
+echo '</select>';
 echo "</td>";
 echo "<td width='50'>";
 print_dd_box($pdo, "Staff", "Employee_id", "Login", 7, "staff_box_new");
