@@ -91,14 +91,47 @@ if ($_SESSION['UserID'] == "jen") {
 <p></p>
 
 <?php
+// Case-insensitive lookup helper for MySQL row arrays
+function ci(array $row, string $key, $default = '') {
+    foreach ($row as $k => $v) {
+        if (strcasecmp($k, $key) === 0) return $v;
+    }
+    return $default;
+}
+
 try {
     $pdo = get_db();
-    $stmt = $pdo->query("SELECT * FROM Clients WHERE Active<>0 ORDER BY Client_name");
-    while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        $name = $row['Client_name'] ?? $row['CLIENT_NAME'] ?? '';
-        echo "<br><a href=\"client_updateform.php?client_id=" . htmlspecialchars($row['client_id'] ?? $row['CLIENT_ID'] ?? '') . "\">";
-        echo htmlspecialchars($name);
-        echo "</a>";
+    // Pull all clients, no WHERE filter — we'll filter in PHP using a flexible
+    // active check to handle 0/1, '0'/'1', '', NULL, 'Y'/'N', true/false, etc.
+    $stmt = $pdo->query("SELECT * FROM Clients ORDER BY Client_name");
+    $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    if (count($rows) === 0) {
+        echo '<p style="color:red">No rows found in <code>Clients</code> table.</p>';
+    } else {
+        $shown = 0;
+        foreach ($rows as $row) {
+            $active = ci($row, 'Active');
+            // Treat blank, NULL, 0, '0', 'N', 'No', false as inactive — anything else is active
+            $isActive = !($active === '' || $active === null || $active === 0 || $active === '0'
+                       || strcasecmp((string)$active, 'N')  === 0
+                       || strcasecmp((string)$active, 'No') === 0
+                       || $active === false);
+            if (!$isActive) continue;
+
+            $name = ci($row, 'Client_name', ci($row, 'Client_Name', ''));
+            $cid  = ci($row, 'Client_id',   ci($row, 'Client_ID',   ''));
+            echo "<br><a href=\"client_updateform.php?client_id=" . htmlspecialchars((string)$cid) . "\">";
+            echo htmlspecialchars((string)$name);
+            echo "</a>";
+            $shown++;
+        }
+        if ($shown === 0) {
+            echo '<p style="color:#888">'
+                . count($rows) . ' client(s) found in DB but none flagged active.'
+                . ' (To see all clients including inactive, use <a href="clients_archive.php">Client Archive</a>.)'
+                . '</p>';
+        }
     }
 } catch (Exception $e) {
     echo '<p style="color:red">DB Error: ' . htmlspecialchars($e->getMessage()) . '</p>';
