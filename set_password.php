@@ -22,6 +22,22 @@ if (!in_array($_SESSION['UserID'], ['erik', 'jen'], true)) {
 $pdo = get_db();
 $message = '';
 
+// ── Detect & widen the password column if it's too small for bcrypt (60 chars) ─
+$colInfo = $pdo->query("SHOW COLUMNS FROM Staff LIKE 'password'")->fetch(PDO::FETCH_ASSOC);
+$colType = strtolower($colInfo['Type'] ?? '');
+$tooSmall = false;
+if (preg_match('/varchar\((\d+)\)/', $colType, $m) && (int)$m[1] < 60) {
+    $tooSmall = true;
+}
+
+if ($tooSmall && isset($_GET['fix_column'])) {
+    $pdo->exec("ALTER TABLE Staff MODIFY COLUMN `password` VARCHAR(255) NOT NULL DEFAULT ''");
+    $message = '<span style="color:green">Column widened to VARCHAR(255). Reload to confirm.</span>';
+    $tooSmall = false;
+    $colInfo = $pdo->query("SHOW COLUMNS FROM Staff LIKE 'password'")->fetch(PDO::FETCH_ASSOC);
+    $colType = strtolower($colInfo['Type'] ?? '');
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $eid  = (int)($_POST['employee_id'] ?? 0);
     $pass = $_POST['new_password'] ?? '';
@@ -33,11 +49,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = '<span style="color:red">Passwords do not match.</span>';
     } elseif (strlen($pass) < 8) {
         $message = '<span style="color:red">Password must be at least 8 characters.</span>';
+    } elseif ($tooSmall) {
+        $message = '<span style="color:red">Cannot save: <code>Staff.password</code> column is ' . htmlspecialchars($colType) . ' but bcrypt needs VARCHAR(60+). <a href="?fix_column=1">Click here to widen it to VARCHAR(255)</a>.</span>';
     } else {
         $hash = password_hash($pass, PASSWORD_BCRYPT);
         $stmt = $pdo->prepare("UPDATE Staff SET `password` = ? WHERE Employee_ID = ?");
         $stmt->execute([$hash, $eid]);
-        $message = '<span style="color:green">Password updated successfully.</span>';
+
+        // Verify what actually got stored — if the column truncated, we'll see < 60 chars
+        $check = $pdo->prepare("SELECT `password` FROM Staff WHERE Employee_ID = ?");
+        $check->execute([$eid]);
+        $stored = (string)$check->fetchColumn();
+
+        if (strlen($stored) === strlen($hash) && password_verify($pass, $stored)) {
+            $message = '<span style="color:green">Password updated successfully (' . strlen($stored) . ' chars stored, verify=OK).</span>';
+        } else {
+            $message = '<span style="color:red">Password was written but stored hash is ' . strlen($stored) . ' chars (expected ' . strlen($hash) . '). Column is likely truncating — <a href="?fix_column=1">widen the column</a> and try again.</span>';
+        }
     }
 }
 
@@ -59,6 +87,15 @@ input[type=submit] { margin-top:16px; padding:8px 20px; background:#9B9B1B; colo
 <body>
 <h2>Staff Password Reset</h2>
 <p><strong>Delete this file after use.</strong></p>
+<p style="font-size:12px;color:#555">
+  Staff.password column type: <code><?= htmlspecialchars($colType) ?></code>
+  <?php if ($tooSmall): ?>
+    &nbsp;<span style="color:red">⚠ Too narrow for bcrypt (60 chars).</span>
+    &nbsp;<a href="?fix_column=1">Widen to VARCHAR(255) now</a>
+  <?php else: ?>
+    &nbsp;<span style="color:green">✓ OK for bcrypt</span>
+  <?php endif; ?>
+</p>
 <?php if ($message): ?><p><?= $message ?></p><?php endif; ?>
 <form method="post">
   <label>Staff member

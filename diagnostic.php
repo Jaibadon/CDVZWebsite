@@ -63,10 +63,32 @@ try {
     // Show Staff table columns
     echo '<h4>Staff columns</h4><pre>';
     $cols = $pdo->query("DESCRIBE Staff")->fetchAll();
+    $pwdType = '';
     foreach ($cols as $c) {
         echo htmlspecialchars($c['Field']) . "\t" . htmlspecialchars($c['Type']) . "\n";
+        if (strtolower($c['Field']) === 'password') $pwdType = strtolower($c['Type']);
     }
     echo '</pre>';
+
+    // Bcrypt-readiness check on Staff.password column
+    if (preg_match('/varchar\((\d+)\)/', $pwdType, $m)) {
+        $len = (int)$m[1];
+        if ($len < 60) {
+            echo '<p class="err">✗ Staff.password is <code>' . htmlspecialchars($pwdType) . '</code> — too narrow for bcrypt (needs ≥60 chars). Bcrypt hashes will be silently truncated and login will fail. Open <a href="set_password.php?fix_column=1">set_password.php?fix_column=1</a> to widen it.</p>';
+        } else {
+            echo '<p class="ok">✓ Staff.password column (' . htmlspecialchars($pwdType) . ') is wide enough for bcrypt.</p>';
+        }
+    }
+
+    // Show actual stored password lengths so truncation is visible
+    echo '<h4>Stored password lengths</h4><pre>';
+    $rows = $pdo->query("SELECT Login, CHAR_LENGTH(`password`) AS len, LEFT(`password`,4) AS prefix FROM Staff ORDER BY Login")->fetchAll();
+    foreach ($rows as $r) {
+        echo str_pad((string)$r['Login'], 16) . "\tlen=" . str_pad((string)$r['len'], 4)
+           . "\tprefix=" . htmlspecialchars((string)$r['prefix']) . "\n";
+    }
+    echo '</pre>';
+    echo '<p style="font-size:12px;color:#666">Bcrypt hashes start with <code>$2y$</code> and are exactly 60 chars. If a row says <code>len=32</code> with <code>$2y$</code> prefix, that hash was truncated by the column.</p>';
 
 } catch (Exception $e) {
     echo '<p class="err">✗ Connection failed: ' . htmlspecialchars($e->getMessage()) . '</p>';
