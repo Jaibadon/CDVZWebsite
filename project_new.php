@@ -9,19 +9,28 @@ if (empty($_SESSION['UserID'])) {
 
 $pdo = get_db();
 
-// Helper function to print a dropdown box from a DB table
+// Helper function to print a dropdown box from a DB table.
+// Tries with `active` column first; falls back if the table doesn't have it (e.g. Staff).
 function print_dd_box($pdo, $table_name, $index_name, $display_name, $default_value, $obj_name) {
-    $sql = "SELECT " . $index_name . ", " . $display_name . " FROM " . $table_name . " ORDER BY " . $display_name;
-    $stmt = $pdo->query($sql);
+    try {
+        $sql = "SELECT `$index_name`, `$display_name`, active FROM `$table_name` ORDER BY `$display_name`";
+        $stmt = $pdo->query($sql);
+        $hasActive = true;
+    } catch (Exception $e) {
+        $sql = "SELECT `$index_name`, `$display_name` FROM `$table_name` ORDER BY `$display_name`";
+        $stmt = $pdo->query($sql);
+        $hasActive = false;
+    }
     echo '<SELECT name="' . htmlspecialchars($obj_name) . '">';
     echo '<OPTION VALUE=""> ';
     while ($r = $stmt->fetch(PDO::FETCH_ASSOC)) {
-        if ($r[$index_name] == $default_value) {
-            echo '<OPTION SELECTED VALUE="' . htmlspecialchars($r[$index_name]) . '">' . htmlspecialchars($r[$display_name]);
-        } else {
-            if (!empty($r['active']) && $r['active'] != 0) {
-                echo '<OPTION VALUE="' . htmlspecialchars($r[$index_name]) . '">' . htmlspecialchars($r[$display_name]);
-            }
+        $active = $hasActive ? ($r['active'] ?? 1) : 1;
+        $isSelected = ($r[$index_name] == $default_value);
+        // Show row if it's active OR it's the currently selected default
+        if ($active != 0 || $isSelected) {
+            $sel = $isSelected ? ' SELECTED' : '';
+            echo '<OPTION' . $sel . ' VALUE="' . htmlspecialchars((string)$r[$index_name]) . '">'
+               . htmlspecialchars((string)$r[$display_name]);
         }
     }
     echo '</SELECT>';
@@ -113,10 +122,13 @@ if ($_SESSION['UserID'] == "jen") {
 <SELECT name="Client_Name">
   <OPTION VALUE="">
   <?php
-    $clientStmt = $pdo->query("SELECT Client_ID, Client_Name FROM Clients ORDER BY Client_Name");
+    // Pull clients including the active flag so we can filter to active ones
+    $clientStmt = $pdo->query("SELECT Client_ID, Client_Name, Active FROM Clients ORDER BY Client_Name");
     while ($cr = $clientStmt->fetch(PDO::FETCH_ASSOC)) {
-        if (!empty($cr['active']) && $cr['active'] != 0) {
-            echo '<OPTION VALUE="' . htmlspecialchars($cr['Client_ID']) . '">' . htmlspecialchars($cr['Client_Name']);
+        $cActive = $cr['Active'] ?? $cr['active'] ?? 1;
+        if ($cActive != 0) {
+            echo '<OPTION VALUE="' . htmlspecialchars((string)$cr['Client_ID']) . '">'
+               . htmlspecialchars((string)$cr['Client_Name']);
         }
     }
   ?>
