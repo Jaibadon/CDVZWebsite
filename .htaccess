@@ -1,8 +1,14 @@
 DirectoryIndex index.php index.html index.htm
 
-# Redirect any old .asp URLs to the equivalent .php
+# ─── .asp → .php rewrite ────────────────────────────────────────────────
+# Without RewriteBase /, Apache may resolve the substitution against the
+# filesystem path of this directory, producing URLs like
+#   https://remote.cadviz.co.nz/home3/sys_xxx/public_html/.../login.php
+# Setting RewriteBase / and prefixing the substitution with a leading
+# slash anchors the rewrite to the URL root.
 RewriteEngine On
-RewriteRule ^(.+)\.asp$ $1.php [R=301,L,NC]
+RewriteBase /
+RewriteRule ^(.+)\.asp$ /$1.php [R=301,L,NC]
 
 # Block direct access to backup/old files
 <FilesMatch "(-old|_old|\.bak|~)\.php$">
