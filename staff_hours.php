@@ -24,7 +24,7 @@ $pdo = get_db();
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
 <meta http-equiv="Content-Language" content="en-nz">
-<title>Staff Hours</title>
+<title>Uninvoiced Staff Hours</title>
 <link href="global2.css" rel="stylesheet" type="text/css" />
 <basefont face="arial">
 <style type="text/css">
@@ -39,7 +39,7 @@ $pdo = get_db();
       <table border="0" cellspacing="0" width="644" cellpadding="0" id="table9" class="style1">
         <tr>
           <td align="center" colspan="4" height="26">
-            <p align="left"><b>&nbsp;<font size="3">&nbsp;</font><font color="#FFFFFF" size="3">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;STAFF HOURS FOR LAST 12 MONTHS</font></b></td>
+            <p align="left"><b>&nbsp;<font size="3">&nbsp;</font><font color="#FFFFFF" size="3">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;UNINVOICED STAFF HOURS</font></b></td>
           <td align="center" colspan="3" height="26">
             <a href="logout.php"><font color="#FFFFFF" size="2">logout</font></a></td>
         </tr>
@@ -72,22 +72,35 @@ $pdo = get_db();
 <p></p>
 
 <?php
-// Uninvoiced staff hours grouped by login
-$sql = "SELECT SUM(t.hours) AS tothours, s.login
-        FROM Timesheets t
-        LEFT JOIN Staff    s ON t.Employee_id = s.Employee_ID
-        LEFT JOIN Projects p ON t.Proj_id     = p.Proj_ID
-        WHERE t.Invoice_No = 0
-        GROUP BY s.Login";
+try {
+    // Uninvoiced hours per staff member, all time
+    $sql = "SELECT s.Employee_ID, s.Login, SUM(t.Hours) AS tothours
+              FROM Timesheets t
+              LEFT JOIN Staff s ON t.Employee_id = s.Employee_ID
+             WHERE t.Invoice_No = 0
+             GROUP BY s.Employee_ID, s.Login
+             ORDER BY tothours DESC";
+    $stmt  = $pdo->query($sql);
+    $rows  = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $grand = 0.0;
 
-$stmt = $pdo->query($sql);
-$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-foreach ($rows as $row) {
-    echo '<br>';
-    echo htmlspecialchars($row['login'] ?? '');
-    echo '&nbsp;=&nbsp;';
-    echo htmlspecialchars($row['tothours'] ?? '0');
+    if (count($rows) === 0) {
+        echo '<p style="color:#888">No uninvoiced timesheet entries found.</p>';
+    } else {
+        echo '<table cellpadding="4" cellspacing="0" border="0" style="margin:10px">';
+        foreach ($rows as $row) {
+            $h = (float)($row['tothours'] ?? 0);
+            $grand += $h;
+            echo '<tr><td>' . htmlspecialchars((string)($row['Login'] ?? '(unknown)')) . '</td>';
+            echo '<td align="right" style="padding-left:20px"><b>' . number_format($h, 2) . '</b> hours</td></tr>';
+        }
+        echo '<tr><td colspan="2"><hr></td></tr>';
+        echo '<tr><td><b>TOTAL</b></td>';
+        echo '<td align="right" style="padding-left:20px"><b>' . number_format($grand, 2) . '</b> hours</td></tr>';
+        echo '</table>';
+    }
+} catch (Exception $e) {
+    echo '<p style="color:red">DB Error: ' . htmlspecialchars($e->getMessage()) . '</p>';
 }
 ?>
 
