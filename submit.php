@@ -63,8 +63,12 @@ if ($locked === "true") {
     $delStmt->execute([$weekStartISO, $weekEndISO, (int)$_SESSION['Employee_id']]);
 }
 
-// Re-use a prepared INSERT
-$insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_DATE, Employee_id, proj_id, Task, Hours) VALUES (?, ?, ?, ?, ?)");
+// Compute next TS_ID once (Timesheets.TS_ID isn't auto_increment in this DB)
+$nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
+$nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+
+// Re-use a prepared INSERT with explicit TS_ID
+$insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_ID, TS_DATE, Employee_id, proj_id, Task, Hours, Invoice_No) VALUES (?, ?, ?, ?, ?, ?, 0)");
 
 $totaltime = 0;
 for ($a = 1; $a <= 40; $a++) {
@@ -90,7 +94,8 @@ for ($a = 1; $a <= 40; $a++) {
                     echo "<font face=tahoma size=2 color=red><br><hr>There was an error in your submission.  Hit the back button and correct your data.<br>Remember you MUST fill in a description.<br><hr></font>";
                 } else {
                     if ($locked === "false") {
-                        $insStmt->execute([$tsDate, $empId, $projId, $desc, $hours]);
+                        $insStmt->execute([$nextTsId, $tsDate, $empId, $projId, $desc, $hours]);
+                        $nextTsId++;
                     }
                 }
             }

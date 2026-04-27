@@ -22,10 +22,10 @@ for ($a = 1; $a <= $rowcount; $a++) {
     $spec_subcat_order = $_POST['Spec_SubCat_Order' . $a] ?? '';
 
     if ($spec_subcat_order !== '') {
-        $stmt = $pdo->prepare("UPDATE Spec_Subcats SET Spec_SubCat_Name = ?, Spec_SubCat_Order = ? WHERE Spec_SubCat_ID = ?");
+        $stmt = $pdo->prepare("UPDATE Spec_SubCats SET Spec_SubCat_Name = ?, Spec_SubCat_Order = ? WHERE Spec_SubCat_ID = ?");
         $stmt->execute([$spec_subcat_name, $spec_subcat_order, $spec_subcat_id]);
     } else {
-        $stmt = $pdo->prepare("UPDATE Spec_Subcats SET Spec_SubCat_Name = ? WHERE Spec_SubCat_ID = ?");
+        $stmt = $pdo->prepare("UPDATE Spec_SubCats SET Spec_SubCat_Name = ? WHERE Spec_SubCat_ID = ?");
         $stmt->execute([$spec_subcat_name, $spec_subcat_id]);
     }
 }

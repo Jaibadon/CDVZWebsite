@@ -33,6 +33,23 @@ $timesheets = $stmt2->fetchAll(PDO::FETCH_ASSOC);
 $Billto = $rs['Billing_Email'] ?? '-';
 if ($Billto === '') $Billto = '-';
 
+// Resolve Date column from any case (Date / DATE / date)
+function ci(array $row, array $keys, $default = '') {
+    foreach ($keys as $key) {
+        foreach ($row as $k => $v) {
+            if (strcasecmp($k, $key) === 0) return $v;
+        }
+    }
+    return $default;
+}
+function fmtDate($v) {
+    if (empty($v)) return '';
+    $t = strtotime($v);
+    return $t ? date('d/m/Y', $t) : '';
+}
+
+$invDate = ci($rs, ['Date', 'DATE', 'InvDate', 'date']);
+
 $subtot = 0;
 foreach ($timesheets as $ts) {
     $subtot += (float)$ts['amt'];
@@ -116,11 +133,11 @@ echo '</a>';
     </tr>
     <tr>
       <td height="38" valign="top">Address:<br>Email:</td>
-      <td valign="top"><?= htmlspecialchars($rs['ADDRESS1']) ?><br>
+      <td valign="top"><?= htmlspecialchars((string)ci($rs, ['Address1','ADDRESS1','address1'])) ?><br>
        <a href="mailto:<?= htmlspecialchars($Billto) ?>"><?= htmlspecialchars($Billto) ?></a></td>
       <td>&nbsp;</td>
       <td valign="top">Date:&nbsp;</td>
-      <td valign="top"><div align="right"><?= htmlspecialchars(date('d/m/Y', strtotime($rs['DATE']))) ?></div></td>
+      <td valign="top"><div align="right"><?= htmlspecialchars(fmtDate($invDate)) ?></div></td>
     </tr>
     <tr>
       <td>Job Name:</td>
@@ -148,14 +165,14 @@ echo '</a>';
 <tr>
 <td width="647" height="478" valign="top">
 <table width="647" border="0">
-<?php foreach ($timesheets as $ts): ?>
+<?php foreach ($timesheets as $ts): $tsDate = ci($ts, ['TS_DATE','TS_Date','ts_date']); ?>
 <tr>
-<td width="88"><?= htmlspecialchars(date('d/m/Y', strtotime($ts['TS_Date']))) ?></td>
-<td width="50"><?= htmlspecialchars($ts['Login']) ?></td>
-<td width="261"><?= htmlspecialchars($ts['Task']) ?></td>
-<td width="60" align="Right"><?= htmlspecialchars($ts['Hours']) ?></td>
-<td width="60" align="Right"><?= '$' . number_format((float)$ts['Rate'], 2) ?></td>
-<td width="70" align="Right"><?= '$' . number_format((float)$ts['amt'], 2) ?></td>
+<td width="88"><?= htmlspecialchars(fmtDate($tsDate)) ?></td>
+<td width="50"><?= htmlspecialchars((string)ci($ts, ['Login'])) ?></td>
+<td width="261"><?= htmlspecialchars((string)ci($ts, ['Task'])) ?></td>
+<td width="60" align="Right"><?= htmlspecialchars((string)ci($ts, ['Hours'])) ?></td>
+<td width="60" align="Right"><?= '$' . number_format((float)ci($ts, ['Rate'], 0), 2) ?></td>
+<td width="70" align="Right"><?= '$' . number_format((float)($ts['amt'] ?? 0), 2) ?></td>
 </tr>
 <?php endforeach; ?>
 </table>
@@ -197,13 +214,16 @@ if ($subtot >= 0) {
   <tr>
     <td><strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Payment due by:&nbsp;
 <?php
-if ($rs['PaymentOption'] == 1) {
-    $next = date('Y-m-d', strtotime('+1 months', strtotime($rs['DATE'])));
-    echo '20/' . (int)date('n', strtotime($next)) . '/' . (int)date('Y', strtotime($next));
-} elseif ($rs['PaymentOption'] == 2) {
-    echo date('d/m/Y', strtotime('+7 days', strtotime($rs['DATE'])));
-} elseif ($rs['PaymentOption'] == 3) {
-    echo date('d/m/Y', strtotime($rs['DATE']));
+$baseTs = $invDate ? strtotime($invDate) : false;
+if ($baseTs) {
+    if ($rs['PaymentOption'] == 1) {
+        $next = strtotime('+1 months', $baseTs);
+        echo '20/' . (int)date('n', $next) . '/' . (int)date('Y', $next);
+    } elseif ($rs['PaymentOption'] == 2) {
+        echo date('d/m/Y', strtotime('+7 days', $baseTs));
+    } elseif ($rs['PaymentOption'] == 3) {
+        echo date('d/m/Y', $baseTs);
+    }
 }
 ?>
     </strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<font size=1>Thank you for your valued custom</font></td>

@@ -41,10 +41,10 @@ if ((int)$Spec_Cat_ID > 1) {
 }
 
 $sql = "SELECT Spec_Cats.Spec_Cat_ID, Spec_Cats.Spec_Cat_Name, Spec_Cats.Spec_Cat_Order,
-        Spec_Subcats.Spec_SubCat_ID, Spec_Subcats.Spec_SubCat_Name, Spec_Subcats.Spec_SubCat_Order
-        FROM Spec_Cats LEFT OUTER JOIN Spec_Subcats ON Spec_Cats.Spec_Cat_ID = Spec_Subcats.Spec_Cat_ID
+        Spec_SubCats.Spec_SubCat_ID, Spec_SubCats.Spec_SubCat_Name, Spec_SubCats.Spec_SubCat_Order
+        FROM Spec_Cats LEFT OUTER JOIN Spec_SubCats ON Spec_Cats.Spec_Cat_ID = Spec_SubCats.Spec_Cat_ID
         WHERE Spec_Cats.Spec_Cat_ID = " . (int)$Spec_Cat_ID . "
-        ORDER BY Spec_Subcats.Spec_SubCat_Order";
+        ORDER BY Spec_SubCats.Spec_SubCat_Order";
 $rs = $pdo->query($sql);
 $rows = $rs->fetchAll(PDO::FETCH_ASSOC);
 

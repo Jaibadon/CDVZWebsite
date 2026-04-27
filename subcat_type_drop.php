@@ -12,7 +12,7 @@ $pdo = get_db();
 $subcat_id = (string)($_GET['Spec_SubCat_ID'] ?? '');
 
 if ($subcat_id !== '') {
-    $stmt = $pdo->prepare("DELETE FROM Spec_Subcats WHERE Spec_SubCat_ID = ?");
+    $stmt = $pdo->prepare("DELETE FROM Spec_SubCats WHERE Spec_SubCat_ID = ?");
     $stmt->execute([$subcat_id]);
 }
 

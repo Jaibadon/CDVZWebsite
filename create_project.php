@@ -34,8 +34,18 @@ $DP3       = $_POST['DP3'] ?? '';
 $activeIn  = $_POST['ACTIVE'] ?? $_POST['Active'] ?? '';
 $ACT       = (strtoupper($activeIn) === 'ON') ? 1 : 0;
 
-$stmt = $pdo->prepare("INSERT INTO Projects (JobName, Client_ID, JOB_NOTES, Status, Contact_Notes, Contact_Date_Last, Contact_Date_next, Draft_Date, Final_Date, Job_Description, Initial_priority, Order_No, Manager, DP1, DP2, DP3, Active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-$stmt->execute([$jname, $client_id, $jnotes, $stat, $cnotes, $clast, $cnext, $ddate, $fdate, $jd, $ip, $order_no, $Manager, $DP1, $DP2, $DP3, $ACT]);
+// Compute next proj_id (Projects.proj_id isn't auto_increment in this DB)
+$nextStmt = $pdo->query("SELECT COALESCE(MAX(proj_id), 0) + 1 AS nxt FROM Projects");
+$nextId   = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+
+// Convert Manager/DP* empty strings to NULL so they don't insert as 0
+$Manager = ($Manager === '' ? null : (int)$Manager);
+$DP1     = ($DP1     === '' ? null : (int)$DP1);
+$DP2     = ($DP2     === '' ? null : (int)$DP2);
+$DP3     = ($DP3     === '' ? null : (int)$DP3);
+
+$stmt = $pdo->prepare("INSERT INTO Projects (proj_id, JobName, Client_ID, Job_Notes, Status, Contact_Notes, Contact_Date_Last, Contact_Date_Next, Draft_Date, Final_Date, Job_Description, Initial_Priority, Order_No, Manager, DP1, DP2, DP3, Active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+$stmt->execute([$nextId, $jname, $client_id, $jnotes, $stat, $cnotes, $clast, $cnext, $ddate, $fdate, $jd, $ip, $order_no, $Manager, $DP1, $DP2, $DP3, $ACT]);
 
 header('Location: main.php');
 exit;

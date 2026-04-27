@@ -74,16 +74,25 @@ if ($_SESSION['UserID'] == "jen") {
 <p></p>
 
 <?php
+try {
 $pdo = get_db();
-$stmt = $pdo->query("SELECT * FROM Projects WHERE ACTIVE <> 0 AND Client_ID <> 195 ORDER BY JOBNAME");
+$stmt = $pdo->query("SELECT proj_id, JobName FROM Projects WHERE Active <> 0 AND Client_ID <> 195 ORDER BY JobName");
 
+$count = 0;
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
-    echo "<a href=\"updateform_admin1.php?proj_id=" . htmlspecialchars($row['proj_id']) . "\">";
-    echo htmlspecialchars($row['JOBNAME']);
+    $count++;
+    echo "<a href=\"updateform_admin1.php?proj_id=" . htmlspecialchars((string)$row['proj_id']) . "\">";
+    echo htmlspecialchars((string)$row['JobName']);
     echo "</a>";
-    echo "&nbsp;&nbsp;&nbsp;- &nbsp;";
-    echo "<a href=\"jobdone.php?proj_id=" . htmlspecialchars($row['proj_id']) . "\">Click to set Job Done!</a>";
+    echo "&nbsp;&nbsp;&nbsp;-&nbsp;";
+    echo "<a href=\"jobdone.php?proj_id=" . htmlspecialchars((string)$row['proj_id']) . "\">Click to set Job Done!</a>";
     echo "<br>";
+}
+if ($count === 0) {
+    echo '<p style="color:#888">No active projects found.</p>';
+}
+} catch (Exception $e) {
+    echo '<p style="color:red">DB Error: ' . htmlspecialchars($e->getMessage()) . '</p>';
 }
 ?>
 

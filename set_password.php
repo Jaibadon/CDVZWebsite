@@ -47,8 +47,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $message = '<span style="color:red">Select a staff member and enter a password.</span>';
     } elseif ($pass !== $conf) {
         $message = '<span style="color:red">Passwords do not match.</span>';
-    } elseif (strlen($pass) < 8) {
-        $message = '<span style="color:red">Password must be at least 8 characters.</span>';
+    } elseif (strlen($pass) < 4) {
+        $message = '<span style="color:red">Password must be at least 4 characters.</span>';
     } elseif ($tooSmall) {
         $message = '<span style="color:red">Cannot save: <code>Staff.password</code> column is ' . htmlspecialchars($colType) . ' but bcrypt needs VARCHAR(60+). <a href="?fix_column=1">Click here to widen it to VARCHAR(255)</a>.</span>';
     } else {
@@ -110,10 +110,10 @@ input[type=submit] { margin-top:16px; padding:8px 20px; background:#9B9B1B; colo
     </select>
   </label>
   <label>New password
-    <input type="password" name="new_password" minlength="8" required>
+    <input type="password" name="new_password" minlength="4" required>
   </label>
   <label>Confirm password
-    <input type="password" name="confirm_password" minlength="8" required>
+    <input type="password" name="confirm_password" minlength="4" required>
   </label>
   <input type="submit" value="Set Password">
 </form>

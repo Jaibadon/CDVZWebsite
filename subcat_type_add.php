@@ -14,7 +14,7 @@ $subcat_name   = $_POST['Spec_SubCat_Name_new'] ?? '';
 $subcat_order  = $_POST['Spec_SubCat_Order_new'] ?? '';
 
 if ($subcat_name !== '') {
-    $stmt = $pdo->prepare("INSERT INTO Spec_Subcats (Spec_Cat_ID, Spec_SubCat_Name, Spec_SubCat_Order) VALUES (?, ?, ?)");
+    $stmt = $pdo->prepare("INSERT INTO Spec_SubCats (Spec_Cat_ID, Spec_SubCat_Name, Spec_SubCat_Order) VALUES (?, ?, ?)");
     $stmt->execute([$spec_cat_id, $subcat_name, $subcat_order]);
 }
 

@@ -134,7 +134,7 @@ foreach ($rows as $row):
     echo "<input size='6' name='Task_Order" . $a . "' value='" . htmlspecialchars($row['Task_Order']) . "'>";
     echo "</td>";
     echo "<td width='200'>";
-    print_dd_box($pdo, "Spec_Subcats", "Spec_SubCat_ID", "Spec_SubCat_Name", $row['Spec_Subcat_ID'], "Spec_Subcat_ID" . $a);
+    print_dd_box($pdo, "Spec_SubCats", "Spec_SubCat_ID", "Spec_SubCat_Name", $row['Spec_Subcat_ID'], "Spec_Subcat_ID" . $a);
     echo "<input size='5' type='hidden' name='stage_box" . $a . "' value='" . htmlspecialchars($stage_id) . "'>";
     echo "</td>";
     echo "<td><a href='task_type_drop.php?task_id=" . htmlspecialchars($row['Task_ID']) . "' onclick=\"return confirm('Are you sure you want to delete?')\"><img src='drop.gif'></a></td>";
@@ -162,7 +162,7 @@ echo "<td width='200'><textarea cols='53' rows='1' name='Task_Name_new'></textar
 echo "<td width='200'><input size='6' name='Est_Time_new' value=''></td>";
 echo "<td width='200'><input size='6' name='Task_Order_new' value=''></td>";
 echo "<td width='200'>";
-print_dd_box($pdo, "Spec_Subcats", "Spec_SubCat_ID", "Spec_SubCat_Name", "", "Spec_SubCat");
+print_dd_box($pdo, "Spec_SubCats", "Spec_SubCat_ID", "Spec_SubCat_Name", "", "Spec_SubCat");
 echo "</td>";
 echo "</tr>";
 ?>

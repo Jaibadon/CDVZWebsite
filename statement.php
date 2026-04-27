@@ -4,18 +4,30 @@ require_once 'db_connect.php';
 
 $pdo = get_db();
 
-$client_id = (int) $_POST['CLIENT_BOX'];
+$client_id = (int)($_POST['CLIENT_BOX'] ?? $_POST['client_box'] ?? 0);
 
-$sql = "SELECT Invoices.*, Invoices.Invoice_No AS NUM, Invoices.Client_ID AS CID,
-               Clients.Client_Name, Clients.Address1, Clients.Billing_Email,
-               Projects.JobName, Projects.Order_No,
-               PAYMENTS.Amount, PAYMENTS.Date_received
-        FROM Invoices
-        LEFT JOIN Clients  ON Invoices.Client_ID = Clients.Client_ID
-        LEFT JOIN Projects ON Invoices.Proj_ID   = Projects.Proj_ID
-        LEFT JOIN Payments ON Invoices.Invoice_No = Payments.Invoice_No
-        WHERE Invoices.Paid = 0
-          AND Invoices.Client_ID = ?";
+// Aliased SELECT — the JOIN'd table name in the FROM clause has to match in
+// referencing columns (was 'PAYMENTS' but we joined it as 'Payments')
+$sql = "SELECT Invoices.Invoice_No AS NUM,
+               Invoices.Client_ID  AS CID,
+               Invoices.Date       AS InvDate,
+               Invoices.Subtotal   AS Subtotal,
+               Invoices.Tax_Rate   AS Tax_Rate,
+               Invoices.PaymentOption AS PaymentOption,
+               Clients.Client_Name AS Client_Name,
+               Clients.Address1    AS Address1,
+               Clients.Billing_Email AS Billing_Email,
+               Projects.JobName    AS JobName,
+               Projects.Order_No   AS Order_No,
+               Payments.Amount        AS PayAmount,
+               Payments.Date_received AS PayDate
+          FROM Invoices
+          LEFT JOIN Clients  ON Invoices.Client_ID  = Clients.Client_id
+          LEFT JOIN Projects ON Invoices.Proj_ID    = Projects.proj_id
+          LEFT JOIN Payments ON Invoices.Invoice_No = Payments.Invoice_No
+         WHERE Invoices.Paid    = 0
+           AND Invoices.Client_ID = ?
+         ORDER BY Invoices.Invoice_No";
 
 $stmt = $pdo->prepare($sql);
 $stmt->execute([$client_id]);
@@ -131,16 +143,17 @@ foreach ($rows as $row) {
     $total     = $subtotal + ($subtotal * $tax_rate);
 
     $payopt    = (int)($row['PaymentOption'] ?? 0);
-    $inv_date  = $row['DATE'] ?? null;
-    if ($payopt === 1) {
-        $ddate = date('d/m/Y', strtotime('+1 month', strtotime($inv_date)));
-    } elseif ($payopt === 2) {
-        $ddate = date('d/m/Y', strtotime('+7 days', strtotime($inv_date)));
+    $inv_date  = $row['InvDate'] ?? null;
+    $baseTs    = $inv_date ? strtotime($inv_date) : false;
+    if ($payopt === 1 && $baseTs) {
+        $ddate = date('d/m/Y', strtotime('+1 month', $baseTs));
+    } elseif ($payopt === 2 && $baseTs) {
+        $ddate = date('d/m/Y', strtotime('+7 days', $baseTs));
     } else {
-        $ddate = $inv_date ? date('d/m/Y', strtotime($inv_date)) : '';
+        $ddate = $baseTs ? date('d/m/Y', $baseTs) : '';
     }
 
-    $diff = (int) floor((time() - strtotime($ddate)) / 86400);
+    $diff = $ddate ? (int) floor((time() - strtotime($ddate)) / 86400) : -999;
     if ($diff < 0) {
         $status_label = 'Current';
     } elseif ($diff < 7) {
@@ -149,11 +162,11 @@ foreach ($rows as $row) {
         $status_label = '<strong>' . $diff . 'd OVERDUE</strong>';
     }
 
-    $inv_date_fmt = $inv_date ? date('d/m/Y', strtotime($inv_date)) : '';
+    $inv_date_fmt = $baseTs ? date('d/m/Y', $baseTs) : '';
 
     echo "<tr>";
     echo "<td width='78'>" . htmlspecialchars($inv_date_fmt) . "</td>";
-    echo "<td width='50'><a href='invoice.php?invoice_no=" . (int)$row['NUM'] . "'>" . (int)$row['NUM'] . "</a></td>";
+    echo "<td width='50'><a href='invoice.php?Invoice_No=" . (int)$row['NUM'] . "'>" . (int)$row['NUM'] . "</a></td>";
     echo "<td width='245'>";
     if (!empty($row['Order_No'])) echo htmlspecialchars($row['Order_No']) . " / ";
     echo htmlspecialchars($row['JobName'] ?? '') . "</td>";
@@ -164,9 +177,9 @@ foreach ($rows as $row) {
 
     $grand += $total;
 
-    $payment_amount = (float)($row['Amount'] ?? 0);
+    $payment_amount = (float)($row['PayAmount'] ?? 0);
     if ($payment_amount > 0) {
-        $dr_fmt = !empty($row['Date_received']) ? date('d/m/Y', strtotime($row['Date_received'])) : '';
+        $dr_fmt = !empty($row['PayDate']) ? date('d/m/Y', strtotime($row['PayDate'])) : '';
         echo "<tr>";
         echo "<td width='78'>" . htmlspecialchars($dr_fmt) . "</td>";
         echo "<td width='50'>PYMNT</td>";

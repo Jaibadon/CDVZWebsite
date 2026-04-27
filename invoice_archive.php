@@ -82,18 +82,32 @@ if ($_SESSION['UserID'] == 'jen') {
 <p></p>
 
 <?php
+try {
 $pdo = get_db();
 
-$sql = "SELECT * FROM Invoices LEFT OUTER JOIN Clients on Invoices.Client_ID = Clients.Client_ID LEFT OUTER JOIN Projects ON Invoices.Proj_ID = Projects.Proj_ID";
+$sql = "SELECT Invoices.Invoice_No  AS Invoice_No,
+               Invoices.Date         AS InvDate,
+               Invoices.Subtotal     AS Subtotal,
+               Invoices.Tax_Rate     AS Tax_Rate,
+               Invoices.Paid         AS Paid,
+               Clients.Client_Name   AS Client_Name,
+               Projects.JobName      AS JobName,
+               Projects.proj_id      AS Proj_ID
+          FROM Invoices
+          LEFT OUTER JOIN Clients  ON Invoices.Client_ID = Clients.Client_id
+          LEFT OUTER JOIN Projects ON Invoices.Proj_ID   = Projects.proj_id
+         ORDER BY Invoices.Invoice_No DESC";
 $stmt = $pdo->query($sql);
 
+$count = 0;
 while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
+    $count++;
     echo "<br>";
-    echo "<a href=\"invoice.php?invoice_no=" . htmlspecialchars($rs['invoice_no']) . "\">";
-    echo htmlspecialchars($rs['invoice_no']);
+    echo "<a href=\"invoice.php?Invoice_No=" . htmlspecialchars((string)$rs['Invoice_No']) . "\">";
+    echo "#" . htmlspecialchars((string)$rs['Invoice_No']);
     echo "</a>";
     echo "&nbsp;-&nbsp;";
-    echo htmlspecialchars(date('d/m/Y', strtotime($rs['Date'])));
+    echo htmlspecialchars($rs['InvDate'] ? date('d/m/Y', strtotime($rs['InvDate'])) : '');
     echo "&nbsp;-&nbsp;";
     if (is_null($rs['Subtotal'])) {
         echo "*unprocessed*";
@@ -101,9 +115,23 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         echo '$' . number_format((float)$rs['Subtotal'] + ((float)$rs['Subtotal'] * (float)$rs['Tax_Rate']), 2);
     }
     echo "&nbsp;-&nbsp;";
-    echo htmlspecialchars($rs['Client_name']);
+    echo htmlspecialchars((string)($rs['Client_Name'] ?? ''));
     echo "&nbsp;-&nbsp;";
-    echo htmlspecialchars($rs['JOBNAME']);
+    if (!empty($rs['Proj_ID'])) {
+        echo "<a href=\"updateform_admin1.php?proj_id=" . htmlspecialchars((string)$rs['Proj_ID']) . "\">";
+        echo htmlspecialchars((string)($rs['JobName'] ?? ''));
+        echo "</a>";
+    } else {
+        echo htmlspecialchars((string)($rs['JobName'] ?? ''));
+    }
+    echo "&nbsp;-&nbsp;";
+    echo (int)$rs['Paid'] === 0 ? "<strong>*UNPAID*</strong>" : "<span style='color:green'>Paid</span>";
+}
+if ($count === 0) {
+    echo '<p style="color:#888">No invoices in archive.</p>';
+}
+} catch (Exception $e) {
+    echo '<p style="color:red">DB Error: ' . htmlspecialchars($e->getMessage()) . '</p>';
 }
 ?>
 

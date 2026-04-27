@@ -22,8 +22,13 @@ $notes       = !empty($_POST['Notes'])       ? $_POST['Notes'] . " - " . $_SESSI
 $activeIn    = $_POST['ACTIVE'] ?? $_POST['Active'] ?? '';
 $Active      = (strtoupper($activeIn) === 'ON') ? 1 : 0;
 
-$stmt = $pdo->prepare("INSERT INTO Clients (Client_Name, Address1, Phone, Mobile, email, Billing_Email, Multiplier, notes, Active) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-$stmt->execute([$Client_Name, $Address1, $Phone, $Mobile, $Email, $Billing_Email, $Multiplier, $notes, $Active]);
+// Compute next Client_id (in case the column isn't auto_increment)
+$nextStmt = $pdo->query("SELECT COALESCE(MAX(Client_id), 0) + 1 AS nxt FROM Clients");
+$nextId   = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+
+$stmt = $pdo->prepare("INSERT INTO Clients (Client_id, Client_Name, Address1, Phone, Mobile, email, Billing_Email, Multiplier, Notes, Active)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+$stmt->execute([$nextId, $Client_Name, $Address1, $Phone, $Mobile, $Email, $Billing_Email, $Multiplier, $notes, $Active]);
 
 header('Location: project_new.php');
 exit;
