@@ -125,6 +125,36 @@ $pdo = get_db();
 
 <p>&nbsp;</p>
 <table border="0" cellpadding="0" cellspacing="0" style="border-collapse: collapse" bordercolor="#111111" width="652" id="table4">
+  <tr><td align="Left"><strong>QUOTING / PROJECT STAGES</strong></td></tr>
+  <tr><td align="Left"><a href="templates.php"><font color="#FFFFFF">Manage Project Templates</font></a></td></tr>
+  <tr>
+    <form method="GET" name="proj_stages_form" action="project_stages.php">
+      <td align="Left"><font color="#FFFFFF">Edit Stages / Tasks for project:&nbsp;
+          <?php print_dd_box($pdo, "Projects", "proj_id", "JobName", "", "proj_id", "Active<>0"); ?>
+          &nbsp;&nbsp;<input type="submit" value="Edit" name="Edit_Stages">
+      </font></td>
+    </form>
+  </tr>
+  <tr>
+    <form method="GET" name="quote_form" action="quote.php" target="_blank">
+      <td align="Left"><font color="#FFFFFF">Print Quote for project:&nbsp;
+          <?php print_dd_box($pdo, "Projects", "proj_id", "JobName", "", "proj_id", "Active<>0"); ?>
+          &nbsp;&nbsp;<input type="submit" value="Print Quote" name="Print_Quote">
+      </font></td>
+    </form>
+  </tr>
+  <tr>
+    <form method="GET" name="checklist_form" action="checklist.php" target="_blank">
+      <td align="Left"><font color="#FFFFFF">Print Checklist for project:&nbsp;
+          <?php print_dd_box($pdo, "Projects", "proj_id", "JobName", "", "proj_id", "Active<>0"); ?>
+          &nbsp;&nbsp;<input type="submit" value="Print Checklist" name="Print_Checklist">
+      </font></td>
+    </form>
+  </tr>
+</table>
+
+<p>&nbsp;</p>
+<table border="0" cellpadding="0" cellspacing="0" style="border-collapse: collapse" bordercolor="#111111" width="652" id="table4">
   <tr><td align="Left"><strong>TIMESHEET FUNCTIONS</strong></td></tr>
   <tr><td align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="timesheet_admin1.php"><font color="#FFFFFF">Timesheet Reporting</font></a></td></tr>
   <tr><td align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="staff_hours.php"><font color="#FFFFFF">Staff Hours - Unprocessed</font></a></td></tr>

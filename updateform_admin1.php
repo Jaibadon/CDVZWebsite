@@ -211,8 +211,15 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
 
   <table border="0" cellpadding="2" cellspacing="0" width="660" style="margin-top:6px">
     <tr>
-      <td><a href="PROJECT_INFO.php?proj_id=<?= (int)$projId ?>">Project Info</a></td>
-      <td>&nbsp;</td>
+      <td>
+        <a href="PROJECT_INFO.php?proj_id=<?= (int)$projId ?>">Project Info</a>
+        &nbsp;|&nbsp;
+        <a href="project_stages.php?proj_id=<?= (int)$projId ?>"><b>Stages / Tasks (Quote builder)</b></a>
+        &nbsp;|&nbsp;
+        <a href="quote.php?proj_id=<?= (int)$projId ?>" target="_blank">Print Quote</a>
+        &nbsp;|&nbsp;
+        <a href="checklist.php?proj_id=<?= (int)$projId ?>" target="_blank">Print Checklist</a>
+      </td>
     </tr>
   </table>
 
