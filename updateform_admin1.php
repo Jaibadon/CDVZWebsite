@@ -151,7 +151,20 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
     </tr>
     <tr>
       <td><font color="#9B9B1B" size="2"><b>Order No/Job Ref:</b></font>
-        <input type="text" name="Order_no" size="33" value="<?= htmlspecialchars($orderNo) ?>">
+        <input type="text" name="Order_no" size="22" value="<?= htmlspecialchars($orderNo) ?>">
+        &nbsp;&nbsp;<font color="#9B9B1B" size="2"><b>Project Type:</b></font>
+        <select name="Project_Type">
+          <option value="">-- select --</option>
+          <?php
+          $currentType = (int)ci_get($rs, ['Project_Type'], 0);
+          $ptStmt = $pdo->query("SELECT Project_Type_ID, Project_Type_Name FROM Project_Types ORDER BY Project_Type_Name");
+          while ($pt = $ptStmt->fetch(PDO::FETCH_ASSOC)) {
+              $sel = ((int)$pt['Project_Type_ID'] === $currentType) ? ' selected' : '';
+              echo '<option value="' . (int)$pt['Project_Type_ID'] . '"' . $sel . '>'
+                 . htmlspecialchars($pt['Project_Type_Name']) . '</option>';
+          }
+          ?>
+        </select>
       </td>
     </tr>
   </table>

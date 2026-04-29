@@ -55,6 +55,9 @@ $dp3 = (isset($_POST['DP3']) && $_POST['DP3'] !== '') ? (int) $_POST['DP3'] : nu
 $activeIn = $_POST['ACTIVE'] ?? $_POST['Active'] ?? '';
 $active   = (strtoupper($activeIn) === 'ON') ? 1 : 0;
 
+$projectType = (isset($_POST['Project_Type']) && $_POST['Project_Type'] !== '')
+    ? (int)$_POST['Project_Type'] : null;
+
 $sql = "UPDATE Projects SET
     Job_Notes          = ?,
     Status             = ?,
@@ -77,7 +80,8 @@ $sql = "UPDATE Projects SET
     DP1_Hours          = COALESCE(?, DP1_Hours),
     DP2_Hours          = COALESCE(?, DP2_Hours),
     DP3_Hours          = COALESCE(?, DP3_Hours),
-    Active             = ?
+    Active             = ?,
+    Project_Type       = ?
 WHERE proj_id = ?";
 
 $stmt = $pdo->prepare($sql);
@@ -104,6 +108,7 @@ $stmt->execute([
     $dp2_hours,
     $dp3_hours,
     $active,
+    $projectType,
     $proj_id,
 ]);
 

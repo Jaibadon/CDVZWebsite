@@ -147,7 +147,19 @@ if ($_SESSION['UserID'] == "jen") {
 	<tr>
 		<td class="style2">
 <font color=#9B9B1B size="2"><b> Order No/Job Ref:</b> </font>
-          <input type="text" name="Order_no" size="33"></td>
+          <input type="text" name="Order_no" size="33">
+          &nbsp;&nbsp;&nbsp;&nbsp;<font color=#9B9B1B size="2"><b>Project Type:</b></font>
+          <select name="Project_Type">
+            <option value="">-- select --</option>
+            <?php
+            $ptStmt = $pdo->query("SELECT Project_Type_ID, Project_Type_Name FROM Project_Types WHERE Active <> 0 ORDER BY Project_Type_Name");
+            while ($pt = $ptStmt->fetch(PDO::FETCH_ASSOC)) {
+                echo '<option value="' . (int)$pt['Project_Type_ID'] . '">'
+                   . htmlspecialchars($pt['Project_Type_Name']) . '</option>';
+            }
+            ?>
+          </select>
+        </td>
 	</tr>
 	</table>
   <table border="0" cellpadding="0" cellspacing="0" style="border-collapse: collapse" bordercolor="#111111" width="653" id="AutoNumber2">
