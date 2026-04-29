@@ -14,7 +14,7 @@ if ($tid <= 0) die('Missing template_id');
 $tpl = $pdo->prepare(
     "SELECT pt.Template_ID, pt.template_name, pt.Project_Type_ID, ptype.Project_Type_Name
        FROM Proj_Templates pt
-       LEFT JOIN Project_types ptype ON pt.Project_Type_ID = ptype.Project_Type_ID
+       LEFT JOIN Project_Types ptype ON pt.Project_Type_ID = ptype.Project_Type_ID
       WHERE pt.Template_ID = ?"
 );
 $tpl->execute([$tid]);

@@ -15,7 +15,7 @@ $h = $pdo->prepare(
             ptype.Project_Type_Name
        FROM Projects p
        LEFT JOIN Clients       c     ON p.Client_ID    = c.Client_id
-       LEFT JOIN Project_types ptype ON p.Project_Type = ptype.Project_Type_ID
+       LEFT JOIN Project_Types ptype ON p.Project_Type = ptype.Project_Type_ID
       WHERE p.proj_id = ?"
 );
 $h->execute([$proj_id]);

@@ -43,11 +43,11 @@ $templates = $pdo->query(
             (SELECT COUNT(*) FROM Template_Stages ts WHERE ts.Template_ID = pt.Template_ID) AS stage_count,
             (SELECT COUNT(*) FROM Template_Tasks  tt WHERE tt.Template_ID = pt.Template_ID) AS task_count
        FROM Proj_Templates pt
-       LEFT JOIN Project_types ptype ON pt.Project_Type_ID = ptype.Project_Type_ID
+       LEFT JOIN Project_Types ptype ON pt.Project_Type_ID = ptype.Project_Type_ID
       ORDER BY ptype.Project_Type_Name, pt.template_name"
 )->fetchAll();
 
-$projectTypes = $pdo->query("SELECT Project_Type_ID, Project_Type_Name FROM Project_types ORDER BY Project_Type_Name")->fetchAll();
+$projectTypes = $pdo->query("SELECT Project_Type_ID, Project_Type_Name FROM Project_Types ORDER BY Project_Type_Name")->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="en">
