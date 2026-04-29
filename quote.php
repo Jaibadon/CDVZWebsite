@@ -87,6 +87,18 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 @media print { .print-bar { display:none; } body { padding:0; } }
 .sig { margin-top:30px; padding:14px; border:1px solid #ccc; }
 .sig div { margin-bottom:14px; }
+.sig-row { display:flex; align-items:flex-end; gap:14px; }
+.sig-img { height:48px; max-width:240px; object-fit:contain; border-bottom:1px solid #888; padding-bottom:2px; }
+.sig-meta { display:flex; align-items:center; gap:10px; margin-top:6px; }
+.lbp-badge { width:42px; height:42px; object-fit:contain; }
+.tc-page { page-break-before:always; padding-top:6px; }
+.tc-page h2 { color:#333; font-size:14px; text-align:center; border-bottom:1px solid #999; padding-bottom:4px; margin-bottom:8px; }
+.tc-page ol.outer { padding-left:20px; }
+.tc-page ol.outer > li { font-weight:bold; text-transform:uppercase; margin-top:8px; font-size:10.5px; }
+.tc-page ol.outer > li > div { font-weight:normal; text-transform:none; margin:3px 0 0; }
+.tc-page ol.inner { list-style:none; padding-left:0; margin:3px 0 0; font-size:9.5px; line-height:1.35; }
+.tc-page ol.inner li { margin-bottom:3px; padding-left:32px; text-indent:-32px; }
+.tc-page .tc-num { display:inline-block; width:28px; font-weight:bold; }
 </style>
 </head>
 <body>
@@ -187,11 +199,147 @@ endforeach;
 </div>
 
 <div class="sig">
-  <div>Authorised Signature (CADViz Ltd): _____________________________ &nbsp;&nbsp; Dated: <?= date('d/m/Y') ?></div>
-  <div style="font-size:10px;color:#666">Director CADViz Limited, Licensed Building Practitioner (Design 2). Building Practitioner Number BP118489</div>
+  <div>
+    <div style="margin-bottom:4px">Authorised Signature (CADViz Ltd):</div>
+    <div class="sig-row">
+      <img class="sig-img" src="signature.png" alt="Erik Nielsen">
+      <div>Dated: <?= date('d/m/Y') ?></div>
+    </div>
+    <div class="sig-meta">
+      <img class="lbp-badge" src="lbp_logo.png" alt="LBP">
+      <span style="font-size:10px;color:#666">Director CADViz Limited, Licensed Building Practitioner (Design 2). Building Practitioner Number BP118489</span>
+    </div>
+  </div>
   <div style="margin-top:18px"><strong>Client Acknowledgement &amp; Acceptance</strong></div>
   <div style="font-size:10px;color:#444">You (the Client) hereby accept this Estimate and the attached Terms and Conditions of Trade.</div>
   <div style="margin-top:14px">Authorised Signature: _____________________________ &nbsp;&nbsp; Dated: ____________________</div>
+</div>
+
+<!-- ─── Terms & Conditions of Trade (NZ) ─────────────────────────────────── -->
+<div class="tc-page">
+<h2>Terms and Conditions of Trade</h2>
+
+<ol class="outer">
+  <li>DEFINITIONS
+    <ol class="inner">
+      <li><span class="tc-num">1.1</span> &ldquo;CADViz&rdquo; shall mean CADViz Limited, or any agents or employees thereof.</li>
+      <li><span class="tc-num">1.2</span> &ldquo;Client&rdquo; shall mean the Client, any person acting on behalf of and with the authority of the Client, or any person purchasing services and products from CADViz.</li>
+      <li><span class="tc-num">1.3</span> &ldquo;Services and products&rdquo; shall mean all drafting and architectural services and associated products, advice, graphics, training and onsite services and all charges for time and attendances, hire charges, insurance charges, or any fee or charge associated with the supply of services and products by CADViz to the Client.</li>
+      <li><span class="tc-num">1.4</span> &ldquo;Price&rdquo; shall mean the cost of the services and products as agreed between CADViz and the Client and includes all disbursements (e.g. charges CADViz pay to others on the Client&rsquo;s behalf) subject to clause 4 of this contract.</li>
+    </ol>
+  </li>
+
+  <li>ACCEPTANCE
+    <ol class="inner">
+      <li><span class="tc-num">2.1</span> Any instructions received by CADViz from the Client for the supply of services and products, including services and products that CADViz have ordered or are required to order from overseas, shall constitute a binding contract and acceptance of the terms and conditions contained herein.</li>
+    </ol>
+  </li>
+
+  <li>COLLECTION AND USE OF INFORMATION
+    <ol class="inner">
+      <li><span class="tc-num">3.1</span> The Client authorises CADViz to collect, retain and use any information about the Client for the purpose of assessing the Client&rsquo;s credit worthiness, enforcing any rights under this contract, or marketing any services and products provided by CADViz.</li>
+      <li><span class="tc-num">3.2</span> The Client authorises CADViz to disclose any information obtained to any person for the purposes set out in clause 3.1.</li>
+      <li><span class="tc-num">3.3</span> Where the Client is a natural person, the authorities under clauses 3.1 and 3.2 are authorisations for the purposes of the Privacy Act 2020. The Client has the right to request access to and correction of any personal information held by CADViz, subject to the Privacy Act 2020.</li>
+    </ol>
+  </li>
+
+  <li>PRICE
+    <ol class="inner">
+      <li><span class="tc-num">4.1</span> Where no price is stated in writing or agreed to orally, the services and products shall be deemed to be sold at the current amount such services and products are sold by CADViz at the time of the contract.</li>
+      <li><span class="tc-num">4.2</span> The price may be increased by the amount of any reasonable increase in the cost of supply of the services and products that is beyond the control of CADViz between the date of the contract and delivery of the services and products.</li>
+    </ol>
+  </li>
+
+  <li>PAYMENT
+    <ol class="inner">
+      <li><span class="tc-num">5.1</span> Payment for services and products shall be made as follows:
+        <ol class="inner" style="margin-top:3px">
+          <li><span class="tc-num">5.1.1</span> in full on or before the 20<sup>th</sup> day of the month following the date of the invoice (&ldquo;the due date&rdquo;); or</li>
+          <li><span class="tc-num">5.1.2</span> in full on or before the 7<sup>th</sup> day following the date of the invoice (&ldquo;the due date&rdquo;).</li>
+        </ol>
+      </li>
+      <li><span class="tc-num">5.2</span> Interest may be charged on any amount owing after the due date at the rate of 2.5% per month or part month.</li>
+      <li><span class="tc-num">5.3</span> Any expenses, disbursements and legal costs incurred by CADViz in the enforcement of any rights contained in this contract shall be paid by the Client, including any reasonable solicitor&rsquo;s fees or debt collection agency fees.</li>
+      <li><span class="tc-num">5.4</span> Receipt of a cheque, bill of exchange, or other negotiable instrument shall not constitute payment until such negotiable instrument is paid in full.</li>
+      <li><span class="tc-num">5.5</span> A deposit may be required.</li>
+    </ol>
+  </li>
+
+  <li>ESTIMATE
+    <ol class="inner">
+      <li><span class="tc-num">6.1</span> Where an estimate is given by CADViz for services and products:
+        <ol class="inner" style="margin-top:3px">
+          <li><span class="tc-num">6.1.1</span> The estimate may be withdrawn at any time; and</li>
+          <li><span class="tc-num">6.1.2</span> The estimate shall be exclusive of goods and services tax (GST) unless specifically stated to the contrary.</li>
+        </ol>
+      </li>
+      <li><span class="tc-num">6.2</span> The Client needs to be aware that the final price may vary from the estimate.</li>
+      <li><span class="tc-num">6.3</span> Where services and products are required in addition to the estimate, the estimate will be increased accordingly.</li>
+    </ol>
+  </li>
+
+  <li>AGENCY
+    <ol class="inner">
+      <li><span class="tc-num">7.1</span> The Client authorises CADViz to contract either as principal or agent for the provision of services and products that are the subject of this contract.</li>
+      <li><span class="tc-num">7.2</span> Where CADViz enters into a contract of the type referred to in clause 7.1, it shall be read with and form part of this agreement and the Client agrees to pay any amounts due under that contract.</li>
+    </ol>
+  </li>
+
+  <li>RETENTION OF TITLE
+    <ol class="inner">
+      <li><span class="tc-num">8.1</span> Title in any products supplied by CADViz passes to the Client only when the Client has made payment in full for all products provided by CADViz and of all other sums due to CADViz by the Client on any account whatsoever.</li>
+      <li><span class="tc-num">8.2</span> The Client gives irrevocable authority to CADViz to enter any premises occupied by the Client or on which products are situated at any reasonable time, to remove any products not paid for in full by the Client. CADViz shall not be liable for costs, damages, expenses or any other losses incurred by the Client or any third party as a result of this action, nor liable in contract or in tort or otherwise in any way whatsoever.</li>
+    </ol>
+  </li>
+
+  <li>LIABILITY
+    <ol class="inner">
+      <li><span class="tc-num">9.1</span> The Consumer Guarantees Act 1993, the Commerce Act 1986, the Fair Trading Act 1986 and other statutes may imply warranties or conditions or impose obligations upon CADViz which cannot by law (or which can only to a limited extent by law) be excluded or modified. In respect of any such implied warranties, conditions or terms imposed on CADViz, CADViz&rsquo;s liability shall, where it is allowed, be excluded or, if not able to be excluded, only apply to the minimum extent required by the relevant statute.</li>
+      <li><span class="tc-num">9.2</span> Except as otherwise provided by clause 9.1, CADViz shall not be liable for:
+        <ol class="inner" style="margin-top:3px">
+          <li><span class="tc-num">9.2.1</span> Any loss or damage of any kind whatsoever, including consequential loss, whether suffered or incurred by the Client or another person and whether in contract, tort (including negligence), or otherwise, and whether such loss or damage arises directly or indirectly from services and products provided by CADViz to the Client.</li>
+          <li><span class="tc-num">9.2.2</span> The Client shall indemnify CADViz against all claims and loss of any kind whatsoever however caused or arising, and without limiting the generality of the foregoing, whether caused or arising as a result of the negligence of CADViz or otherwise, brought by any person in connection with any matter, act, omission, or error by CADViz, its agents or employees, in connection with the services and products.</li>
+        </ol>
+      </li>
+    </ol>
+  </li>
+
+  <li>COPYRIGHT AND INTELLECTUAL PROPERTY
+    <ol class="inner">
+      <li><span class="tc-num">10.1</span> CADViz owns and has copyright in all work, art, film, tooling, drawings, specifications, models, photographs, documents, software and products produced by it in connection with the services and products that form the subject of this contract. The Client may use them only if paid for in full and only for the purpose for which they were intended and supplied by CADViz.</li>
+    </ol>
+  </li>
+
+  <li>CONSUMER GUARANTEES ACT
+    <ol class="inner">
+      <li><span class="tc-num">11.1</span> The guarantees contained in the Consumer Guarantees Act 1993 are excluded where the Client acquires services and products from CADViz for the purposes of a business in terms of sections 2 and 43 of that Act.</li>
+    </ol>
+  </li>
+
+  <li>PERSONAL GUARANTEE OF COMPANY DIRECTORS OR TRUSTEES
+    <ol class="inner">
+      <li><span class="tc-num">12.1</span> If the Client is a company or trust, the director(s) or trustee(s) signing this contract, in consideration for CADViz agreeing to supply services and products and grant credit to the Client at their request, also sign this contract in their personal capacity and jointly and severally personally undertake as principal debtors to CADViz the payment of any and all monies now or hereafter owed by the Client to CADViz, and indemnify CADViz against non-payment by the Client. Any personal liability of a signatory hereto shall not exclude the Client in any way whatsoever from the liabilities and obligations contained in this contract. The signatories and Client shall be jointly and severally liable under the terms and conditions of this contract and for payment of all sums due hereunder.</li>
+    </ol>
+  </li>
+
+  <li>CANCELLATION
+    <ol class="inner">
+      <li><span class="tc-num">13.1</span> CADViz shall, without any liability and without prejudice to any other right it has at law or in equity, have the right by notice to suspend or cancel in whole or in part any contract for the supply of services and products to the Client if the Client fails to pay any money owing after the due date or the Client commits an act of bankruptcy as defined in section 17 of the Insolvency Act 2006, or if the Client (being a company) becomes subject to liquidation, voluntary administration or receivership.</li>
+      <li><span class="tc-num">13.2</span> Any cancellation or suspension under clause 13.1 of this agreement shall not affect CADViz&rsquo;s claim for money due at the time of cancellation or suspension, or for damages for any breach of any terms of this contract or the Client&rsquo;s obligations to CADViz under this contract.</li>
+    </ol>
+  </li>
+
+  <li>MISCELLANEOUS
+    <ol class="inner">
+      <li><span class="tc-num">14.1</span> CADViz shall not be liable for delay or failure to perform its obligations if the cause of the delay or failure is beyond its control.</li>
+      <li><span class="tc-num">14.2</span> Failure by CADViz to enforce any of the terms and conditions contained in this contract shall not be deemed to be a waiver of any of the rights or obligations CADViz has under this contract.</li>
+      <li><span class="tc-num">14.3</span> If any provision of this contract shall be invalid, void, illegal or unenforceable, the validity, existence, legality and enforceability of the remaining provisions shall not be affected, prejudiced or impaired.</li>
+      <li><span class="tc-num">14.4</span> Where these terms and conditions of trade are at variance with any order or instructions from the Client, these terms and conditions of trade shall prevail.</li>
+      <li><span class="tc-num">14.5</span> The Client shall not assign all or any of its rights or obligations under this contract without the written consent of CADViz.</li>
+      <li><span class="tc-num">14.6</span> This contract shall be governed by and construed in accordance with the laws of New Zealand, and the parties submit to the exclusive jurisdiction of the New Zealand Courts.</li>
+    </ol>
+  </li>
+</ol>
 </div>
 <?php else: /* checklist mode */ ?>
 <table class="totals">
