@@ -11,6 +11,29 @@ $stmt->execute([$projId]);
 $rs = $stmt->fetch();
 if (!$rs) { echo '<p>Project not found.</p>'; exit; }
 
+// Resolve columns case-insensitively (MySQL casing varies, PHP keys do not)
+function ci_get(array $row, array $candidates, $default = '') {
+    foreach ($candidates as $c) {
+        foreach ($row as $k => $v) {
+            if (strcasecmp($k, $c) === 0) return $v;
+        }
+    }
+    return $default;
+}
+function fmtDate($d) {
+    if (empty($d)) return '';
+    $t = strtotime($d);
+    return $t ? date('d/m/Y', $t) : '';
+}
+$jobName     = (string)ci_get($rs, ['JobName', 'JOBNAME']);
+$draftDate   = fmtDate(ci_get($rs, ['Draft_Date', 'DRAFT_DATE']));
+$finalDate   = fmtDate(ci_get($rs, ['Final_Date', 'FINAL_DATE']));
+$orderNo     = (string)ci_get($rs, ['Order_No', 'Order_no']);
+$jobNotes    = (string)ci_get($rs, ['Job_Notes', 'Job_NOTES', 'JOB_NOTES']);
+$jobDesc     = (string)ci_get($rs, ['Job_Description']);
+$contactNotes= (string)ci_get($rs, ['Contact_Notes']);
+$status      = (string)ci_get($rs, ['Status']);
+
 // Load hours used
 $tsStmt = $pdo->prepare("SELECT SUM(HOURS) AS tot FROM Timesheets WHERE proj_id = ?");
 $tsStmt->execute([$projId]);
@@ -117,18 +140,18 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
       <td>
         <font color="#9B9B1B" size="2"><b>JOBNAME:</b></font>
         <input <?= $isAdmin ? '' : 'readonly' ?> type="text" name="JOBNAME" size="32"
-               value="<?= htmlspecialchars($rs['JOBNAME'] ?? '') ?>">
+               value="<?= htmlspecialchars($jobName) ?>">
         <input type="hidden" name="proj_id" value="<?= (int)$rs['proj_id'] ?>">
         &nbsp;<font color="#9B9B1B" size="2"><b>Draft:</b>
-        <input type="text" name="DRAFT_DATE" size="9" value="<?= htmlspecialchars($rs['DRAFT_DATE'] ?? '') ?>">
+        <input type="text" name="DRAFT_DATE" size="9" value="<?= htmlspecialchars($draftDate) ?>">
         &nbsp;<b>Final:</b>
-        <input type="text" name="FINAL_DATE" size="9" value="<?= htmlspecialchars($rs['FINAL_DATE'] ?? '') ?>">
+        <input type="text" name="FINAL_DATE" size="9" value="<?= htmlspecialchars($finalDate) ?>">
         </font>
       </td>
     </tr>
     <tr>
       <td><font color="#9B9B1B" size="2"><b>Order No/Job Ref:</b></font>
-        <input type="text" name="Order_no" size="33" value="<?= htmlspecialchars($rs['Order_no'] ?? '') ?>">
+        <input type="text" name="Order_no" size="33" value="<?= htmlspecialchars($orderNo) ?>">
       </td>
     </tr>
   </table>
@@ -153,7 +176,7 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
     </tr>
     <tr>
       <td colspan="4">
-        <textarea name="Job_Description" rows="4" cols="79"><?= htmlspecialchars($rs['Job_Description'] ?? '') ?></textarea>
+        <textarea name="Job_Description" rows="4" cols="79"><?= htmlspecialchars($jobDesc) ?></textarea>
       </td>
     </tr>
     <tr>
@@ -183,7 +206,7 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
 
   <table border="0" cellpadding="2" cellspacing="0" width="660">
     <tr><td><font color="#9B9B1B" size="2"><b>Status:</b></font></td></tr>
-    <tr><td><textarea name="Status" cols="79" style="height:50px"><?= htmlspecialchars($rs['Status'] ?? '') ?></textarea></td></tr>
+    <tr><td><textarea name="Status" cols="79" style="height:50px"><?= htmlspecialchars($status) ?></textarea></td></tr>
   </table>
 
   <table border="0" cellpadding="2" cellspacing="0" width="660" style="margin-top:6px">
@@ -195,12 +218,12 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
 
   <table border="0" cellpadding="2" cellspacing="0" width="660">
     <tr><td><font color="#9B9B1B" size="2"><b>Contact Notes:</b></font></td></tr>
-    <tr><td><textarea name="Contact_Notes" rows="5" cols="79"><?= htmlspecialchars($rs['Contact_Notes'] ?? '') ?></textarea></td></tr>
+    <tr><td><textarea name="Contact_Notes" rows="5" cols="79"><?= htmlspecialchars($contactNotes) ?></textarea></td></tr>
   </table>
 
   <table border="0" cellpadding="2" cellspacing="0" width="660">
     <tr><td><font color="#9B9B1B" size="2"><b>Job Notes:</b></font></td></tr>
-    <tr><td><textarea name="Job_NOTES" cols="79" style="height:123px"><?= htmlspecialchars($rs['Job_NOTES'] ?? '') ?></textarea></td></tr>
+    <tr><td><textarea name="Job_NOTES" cols="79" style="height:123px"><?= htmlspecialchars($jobNotes) ?></textarea></td></tr>
     <tr>
       <td>
         <input type="submit" value="Submit" name="B1">

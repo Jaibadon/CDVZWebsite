@@ -156,7 +156,7 @@ function print_dd_box($pdo, $table_name, $index_name, $display_name, $default_va
     </tr>
     <tr>
       <td height="38" valign="top">Address:<br>Email:</td>
-      <td valign="top"><?= htmlspecialchars($rs['ADDRESS1']) ?><br>
+      <td valign="top"><?= htmlspecialchars((string)($rs['Address1'] ?? $rs['ADDRESS1'] ?? '')) ?><br>
        <a href="mailto:<?= htmlspecialchars($Billto) ?>"><?= htmlspecialchars($Billto) ?></a></td>
       <td>&nbsp;</td>
       <td valign="top">Date:&nbsp;</td>

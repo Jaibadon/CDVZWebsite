@@ -19,9 +19,28 @@ if (!$rs) {
     exit;
 }
 
+// Resolve fields case-insensitively then format dates for display
+function ci_get(array $row, array $candidates, $default = '') {
+    foreach ($candidates as $c) {
+        foreach ($row as $k => $v) {
+            if (strcasecmp($k, $c) === 0) return $v;
+        }
+    }
+    return $default;
+}
+function fmtDate($d) {
+    if (empty($d)) return '';
+    $t = strtotime($d);
+    return $t ? date('d/m/Y', $t) : '';
+}
+$jobName    = (string)ci_get($rs, ['JobName', 'JOBNAME']);
+$draftDate  = fmtDate(ci_get($rs, ['Draft_Date', 'DRAFT_DATE']));
+$finalDate  = fmtDate(ci_get($rs, ['Final_Date', 'FINAL_DATE']));
+$jobNotes   = (string)ci_get($rs, ['Job_Notes', 'Job_NOTES', 'JOB_NOTES']);
+
 // Priority / overdue logic
-$priority  = $rs['Initial_Priority'] ?? '';
-$final_date = $rs['FINAL_DATE'] ?? null;
+$priority  = ci_get($rs, ['Initial_Priority']);
+$final_date = ci_get($rs, ['Final_Date', 'FINAL_DATE']);
 $od = 0;
 if (!empty($final_date)) {
     $dd = (int) floor((time() - strtotime($final_date)) / 86400);
@@ -117,14 +136,14 @@ $archiveUsers = ['erik', 'jen', 'Craig', 'Dylan', 'Leilani'];
 <form method="POST" name="project" action="update1.php">
   <p>
     <font color="#9B9B1B" size="2"><b>JOBNAME:</b> </font>
-    <input type="text" name="JOBNAME" READONLY style="color: #996633" size="33" value="<?php echo htmlspecialchars($rs['JOBNAME'] ?? ''); ?>">
+    <input type="text" name="JOBNAME" READONLY style="color: #996633" size="33" value="<?php echo htmlspecialchars($jobName); ?>">
     &nbsp;&nbsp;
     <input type="text" name="proj_id" READONLY style="color: #996633" size="2" value="<?php echo (int)$rs['proj_id']; ?>">
     &nbsp;&nbsp;&nbsp;<b>&nbsp;</b>
     <font color="#9B9B1B" size="2"><b>Draft:</b>
-    <input type="text" name="DRAFT" READONLY style="color: #996633" size="12" value="<?php echo htmlspecialchars($rs['DRAFT_DATE'] ?? ''); ?>">
+    <input type="text" name="DRAFT" READONLY style="color: #996633" size="12" value="<?php echo htmlspecialchars($draftDate); ?>">
     &nbsp;&nbsp;&nbsp;&nbsp;<b>Final:</b>
-    <input type="text" name="FINAL_DATE" READONLY style="color: #996633" size="12" value="<?php echo htmlspecialchars($rs['FINAL_DATE'] ?? ''); ?>">
+    <input type="text" name="FINAL_DATE" READONLY style="color: #996633" size="12" value="<?php echo htmlspecialchars($finalDate); ?>">
     &nbsp;</font>
   </p>
 
@@ -203,7 +222,7 @@ $archiveUsers = ['erik', 'jen', 'Craig', 'Dylan', 'Leilani'];
     </tr>
     <tr>
       <td align="right" width="651" colspan="2">
-        <textarea name="Job_NOTES" cols="79" style="height: 126px"><?php echo htmlspecialchars($rs['Job_NOTES'] ?? ''); ?></textarea>
+        <textarea name="Job_NOTES" cols="79" style="height: 126px"><?php echo htmlspecialchars($jobNotes); ?></textarea>
       </td>
     </tr>
     <tr>

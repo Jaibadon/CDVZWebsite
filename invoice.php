@@ -144,7 +144,7 @@ foreach ($timesheets as $ts) {
       <td width="293">
 <?php
 echo '<a href="client_updateform.php?client_id=' . htmlspecialchars($rs['Client_ID']) . '">';
-echo htmlspecialchars($rs['CLIENT_NAME']);
+echo htmlspecialchars((string)($rs['Client_Name'] ?? $rs['CLIENT_NAME'] ?? ''));
 echo '</a>';
 ?>
       </td>

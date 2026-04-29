@@ -122,7 +122,7 @@ foreach ($timesheets as $ts) {
   <table width="651" border="0">
     <tr>
       <td width="100">Client:</td>
-      <td width="293"><?= htmlspecialchars($rs['CLIENT_NAME']) ?></td>
+      <td width="293"><?= htmlspecialchars((string)($rs['Client_Name'] ?? $rs['CLIENT_NAME'] ?? '')) ?></td>
       <td width="71">&nbsp;</td>
       <td width="69">Credit No:&nbsp;</td>
       <td width="96"><div align="right">
@@ -135,7 +135,7 @@ echo '</a>';
     </tr>
     <tr>
       <td height="38" valign="top">Address:<br>Email:</td>
-      <td valign="top"><?= htmlspecialchars($rs['ADDRESS1']) ?><br>
+      <td valign="top"><?= htmlspecialchars((string)($rs['Address1'] ?? $rs['ADDRESS1'] ?? '')) ?><br>
        <a href="mailto:<?= htmlspecialchars($Billto) ?>"><?= htmlspecialchars($Billto) ?></a></td>
       <td>&nbsp;</td>
       <td valign="top">Date:&nbsp;</td>

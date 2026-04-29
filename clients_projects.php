@@ -95,14 +95,15 @@ $stmt->execute([$client_id]);
 
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     echo "<br>";
-    echo "<a href=\"updateform1.php?proj_id=" . htmlspecialchars($row['proj_id']) . "\">";
-    echo htmlspecialchars($row['JOBNAME']);
+    echo "<a href=\"updateform1.php?proj_id=" . htmlspecialchars((string)($row['proj_id'] ?? '')) . "\">";
+    echo htmlspecialchars((string)($row['JobName'] ?? $row['JOBNAME'] ?? ''));
     echo "</a>";
     echo "&nbsp;&nbsp;";
 
+    $finalDate = $row['Final_Date'] ?? $row['FINAL_DATE'] ?? $row['final_date'] ?? null;
     $od = 0;
-    if (!empty($row['final_date'])) {
-        $dd = (int)((strtotime(date('Y-m-d')) - strtotime($row['final_date'])) / 86400);
+    if (!empty($finalDate)) {
+        $dd = (int)((strtotime(date('Y-m-d')) - strtotime($finalDate)) / 86400);
         if ($dd > 7) {
             $od = 3;
         } elseif ($dd > 0) {

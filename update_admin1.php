@@ -18,7 +18,8 @@ $cnotes = $row['Contact_Notes'] ?? '';
 $jnotes = $row['Job_Notes']     ?? '';
 
 // Append user/date stamp only when value has changed
-$new_job_notes = $_POST['JOB_NOTES'] ?? '';
+// (form posts 'Job_NOTES'; older code read 'JOB_NOTES')
+$new_job_notes = $_POST['Job_NOTES'] ?? $_POST['JOB_NOTES'] ?? '';
 if ($new_job_notes !== $jnotes) {
     $new_job_notes = $new_job_notes . ' - ' . $_SESSION['UserID'] . ' - ' . $curdate;
 }
@@ -50,7 +51,9 @@ $dp1 = (isset($_POST['DP1']) && $_POST['DP1'] !== '') ? (int) $_POST['DP1'] : nu
 $dp2 = (isset($_POST['DP2']) && $_POST['DP2'] !== '') ? (int) $_POST['DP2'] : null;
 $dp3 = (isset($_POST['DP3']) && $_POST['DP3'] !== '') ? (int) $_POST['DP3'] : null;
 
-$active = (isset($_POST['Active']) && strtoupper($_POST['Active']) === 'ON') ? 1 : 0;
+// Form posts 'ACTIVE' (uppercase from updateform_admin1.php checkbox)
+$activeIn = $_POST['ACTIVE'] ?? $_POST['Active'] ?? '';
+$active   = (strtoupper($activeIn) === 'ON') ? 1 : 0;
 
 $sql = "UPDATE Projects SET
     Job_Notes          = ?,
@@ -86,10 +89,10 @@ $stmt->execute([
     $contact_date_next,
     $draft_date,
     $final_date,
-    $_POST['JOBNAME']           ?? '',
+    $_POST['JOBNAME']           ?? $_POST['JobName'] ?? '',
     $_POST['Job_Description']   ?? '',
     $_POST['initial_priority']  ?? '',
-    $_POST['Order_No']          ?? '',
+    $_POST['Order_No']          ?? $_POST['Order_no'] ?? '',
     (int) ($_POST['Client_box'] ?? 0),
     (int) ($_POST['Manager']    ?? 0),
     $dp1,
