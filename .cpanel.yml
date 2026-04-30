@@ -2,4 +2,4 @@
 deployment:
   tasks:
     - export DEPLOYPATH=/home3/sys_5e4089532_6/public_html/remote.cadviz.co.nz/
-    - /bin/cp -R . $DEPLOYPATH
+    - find . -mindepth 1 -maxdepth 1 ! -name '.*' -exec cp -R {} "$DEPLOYPATH" \;
