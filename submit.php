@@ -66,26 +66,43 @@ if ($locked === "true") {
         $nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
         $nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
 
-        // INSERT now persists Task_Type_ID alongside the legacy Task text.
-        // If the column doesn't exist yet (migration not run), fall back to
-        // the old INSERT shape automatically.
+        // Detect new schema columns. Each falls back gracefully if missing.
         $hasTaskTypeId = false;
+        $hasProjTaskId = false;
+        $hasVariation  = false;
         try {
-            $col = $pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Task_Type_ID'")->fetch();
-            $hasTaskTypeId = !empty($col);
+            $hasTaskTypeId = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Task_Type_ID'")->fetch();
+            $hasProjTaskId = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Proj_Task_ID'")->fetch();
+            $hasVariation  = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Variation_ID'")->fetch();
         } catch (Exception $e) { /* ignore */ }
 
-        if ($hasTaskTypeId) {
-            $insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_ID, TS_DATE, Employee_id, proj_id, Task, Task_Type_ID, Hours, Invoice_No) VALUES (?, ?, ?, ?, ?, ?, ?, 0)");
-        } else {
-            $insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_ID, TS_DATE, Employee_id, proj_id, Task, Hours, Invoice_No) VALUES (?, ?, ?, ?, ?, ?, 0)");
-        }
+        // Build INSERT shape based on which columns exist
+        $cols = ['TS_ID','TS_DATE','Employee_id','proj_id','Task'];
+        if ($hasTaskTypeId) $cols[] = 'Task_Type_ID';
+        if ($hasVariation)  $cols[] = 'Variation_ID';
+        if ($hasProjTaskId) $cols[] = 'Proj_Task_ID';
+        $cols[] = 'Hours';
+        $cols[] = 'Invoice_No';
+        $placeholders = array_fill(0, count($cols) - 1, '?');
+        $placeholders[] = '0'; // Invoice_No always 0 on submit
+        $insStmt = $pdo->prepare("INSERT INTO Timesheets (" . implode(',', $cols) . ") VALUES (" . implode(',', $placeholders) . ")");
 
-        // Build a Task_ID → Task_Name lookup so we can derive a description
-        // from the picked task type when the user didn't type a custom one.
-        $taskNameLookup = [];
-        foreach ($pdo->query("SELECT Task_ID, Task_Name FROM Tasks_Types")->fetchAll() as $tt) {
-            $taskNameLookup[(int)$tt['Task_ID']] = $tt['Task_Name'];
+        // Build Proj_Task_ID → {tid, vid, name} lookup so we can derive
+        // Task_Type_ID + Variation_ID from the picker's posted ptid.
+        $ptidLookup = [];
+        $hasPTVariationCol = false;
+        try {
+            $hasPTVariationCol = (bool)$pdo->query("SHOW COLUMNS FROM Project_Tasks LIKE 'Variation_ID'")->fetch();
+        } catch (Exception $e) { /* ignore */ }
+        $vCol = $hasPTVariationCol ? 'pt.Variation_ID' : 'NULL AS Variation_ID';
+        foreach ($pdo->query("SELECT pt.Proj_Task_ID, pt.Task_Type_ID, $vCol, tt.Task_Name
+                                FROM Project_Tasks pt
+                                JOIN Tasks_Types tt ON pt.Task_Type_ID = tt.Task_ID")->fetchAll() as $r) {
+            $ptidLookup[(int)$r['Proj_Task_ID']] = [
+                'tid'  => (int)$r['Task_Type_ID'],
+                'vid'  => $r['Variation_ID'] !== null ? (int)$r['Variation_ID'] : null,
+                'name' => $r['Task_Name'],
+            ];
         }
 
         for ($a = 1; $a <= 40; $a++) {
@@ -95,10 +112,18 @@ if ($locked === "true") {
                 continue;
             }
 
-            // New: per-row Task_Type_ID (from the grouped task dropdown in main.php)
-            $taskTypeId = isset($_POST['Task' . $a]) && $_POST['Task' . $a] !== ''
+            // Picker now posts Proj_Task_ID. Resolve to Task_Type_ID + Variation_ID.
+            $projTaskId = isset($_POST['Task' . $a]) && $_POST['Task' . $a] !== ''
                 ? (int)$_POST['Task' . $a]
                 : null;
+            $taskTypeId = null;
+            $variationId = null;
+            $resolvedName = null;
+            if ($projTaskId !== null && isset($ptidLookup[$projTaskId])) {
+                $taskTypeId   = $ptidLookup[$projTaskId]['tid'];
+                $variationId  = $ptidLookup[$projTaskId]['vid'];
+                $resolvedName = $ptidLookup[$projTaskId]['name'];
+            }
 
             for ($b = 1; $b <= 7; $b++) {
                 $dayKey = "D" . $b . "_" . $a;
@@ -107,17 +132,12 @@ if ($locked === "true") {
                 $hours = (float)$_POST[$dayKey];
                 $totaltime += $hours;
 
-                // Description: optional notes override, else fall back to the
-                // task name from Task_Type_ID, else the legacy Desc field.
-                $descKey = "Desc" . $a;
-                if (!isset($_POST[$descKey]) || $_POST[$descKey] === "") {
-                    $descKey = "desc" . $a;
-                }
-                $desc = (isset($_POST[$descKey]) && $_POST[$descKey] !== '')
-                    ? $_POST[$descKey]
-                    : ($taskTypeId !== null && isset($taskNameLookup[$taskTypeId]) ? $taskNameLookup[$taskTypeId] : '');
+                // Description: explicit Notes input wins; else fall back to task name.
+                $descKey = isset($_POST['Desc' . $a]) ? 'Desc' . $a : 'desc' . $a;
+                $userDesc = trim($_POST[$descKey] ?? '');
+                $desc = $userDesc !== '' ? $userDesc : ($resolvedName ?? '');
 
-                if ($desc === '' && $taskTypeId === null) {
+                if ($desc === '' && $projTaskId === null) {
                     if (!$errorShown) {
                         echo "<font face=tahoma size=2 color=red><br><hr>There was an error in your submission.  Hit the back button and correct your data.<br>Remember you MUST pick a Task or fill in a description.<br><hr></font>";
                         $errorShown = true;
@@ -130,11 +150,12 @@ if ($locked === "true") {
                 $projId = (int)$_POST['Project' . $a];
                 $empId  = (int)$_SESSION['Employee_id'];
 
-                if ($hasTaskTypeId) {
-                    $insStmt->execute([$nextTsId, $tsDate, $empId, $projId, $desc, $taskTypeId, $hours]);
-                } else {
-                    $insStmt->execute([$nextTsId, $tsDate, $empId, $projId, $desc, $hours]);
-                }
+                $params = [$nextTsId, $tsDate, $empId, $projId, $desc];
+                if ($hasTaskTypeId) $params[] = $taskTypeId;
+                if ($hasVariation)  $params[] = $variationId;
+                if ($hasProjTaskId) $params[] = $projTaskId;
+                $params[] = $hours;
+                $insStmt->execute($params);
                 $nextTsId++;
             }
         }

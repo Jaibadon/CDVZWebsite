@@ -127,7 +127,9 @@ ob_start();
            style="background:#555;color:#fff;border:none;padding:5px 10px;border-radius:3px;cursor:pointer">
   </form>
   <a href="quote.php?proj_id=<?= $proj_id ?>" target="_blank"
-     style="background:#246;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Quote</a>
+     style="background:#246;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Quote (+ variations)</a>
+  <a href="quote_variations.php?proj_id=<?= $proj_id ?>" target="_blank"
+     style="background:#c33;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Variations only</a>
   <a href="checklist.php?proj_id=<?= $proj_id ?>" target="_blank"
      style="background:#246;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Checklist</a>
   <a href="templates.php"

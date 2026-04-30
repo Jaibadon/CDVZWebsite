@@ -28,21 +28,29 @@ if ($multiplier <= 0) $multiplier = 1;
 // CADViz base hourly rate (from quote sample)
 $baseRate = 90.00;
 
-// ── Load stages + tasks ────────────────────────────────────────────────────
+// Detect variation columns
+$hasVariations = false;
+try {
+    $hasVariations = (bool)$pdo->query("SHOW TABLES LIKE 'Project_Variations'")->fetch();
+} catch (Exception $e) { /* ignore */ }
+
+// ── Load stages + tasks (ORIGINAL quote only — variations appear after) ───
+$stagesWhere = "s.Proj_ID = ?" . ($hasVariations ? " AND s.Variation_ID IS NULL" : "");
 $stages = $pdo->prepare(
-    "SELECT s.Project_Stage_ID, s.Stage_Type_ID, s.Description AS StageDesc, s.Weight AS StageWeight, st.Stage_Type_Name, st.Stage_Order
+    "SELECT s.Project_Stage_ID, s.Stage_Type_ID, s.Description AS StageDesc, COALESCE(s.Weight,1) AS StageWeight, st.Stage_Type_Name, st.Stage_Order
        FROM Project_Stages s
        LEFT JOIN Stage_Types st ON s.Stage_Type_ID = st.Stage_Type_ID
-      WHERE s.Proj_ID = ?
+      WHERE $stagesWhere
       ORDER BY st.Stage_Order, s.Project_Stage_ID"
 );
 $stages->execute([$proj_id]);
 $stages = $stages->fetchAll();
 
+$tasksFilter = $hasVariations ? " AND COALESCE(t.Is_Removed, 0) = 0 AND t.Variation_ID IS NULL" : '';
 $tasksStmt = $pdo->prepare(
     "SELECT t.Project_Stage_ID,
             t.Description       AS TaskDesc,
-            t.Weight             AS TaskWeight,
+            COALESCE(t.Weight,1) AS TaskWeight,
             t.Proj_Task_Order,
             t.Assigned_To        AS Assigned_To,
             tt.Task_Name,
@@ -54,12 +62,53 @@ $tasksStmt = $pdo->prepare(
        LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
        LEFT JOIN Staff       s  ON t.Assigned_To  = s.Employee_ID
       WHERE t.Project_Stage_ID IN (SELECT Project_Stage_ID FROM Project_Stages WHERE Proj_ID = ?)
+        $tasksFilter
       ORDER BY t.Proj_Task_Order, t.Proj_Task_ID"
 );
 $tasksStmt->execute([$proj_id]);
 $tasksByStage = [];
 foreach ($tasksStmt->fetchAll() as $t) {
     $tasksByStage[$t['Project_Stage_ID']][] = $t;
+}
+
+// ── Load APPROVED variations + their stages + tasks (for inclusion in quote)
+$variations = [];
+$variationStages = [];
+$variationTasksByStage = [];
+if ($hasVariations) {
+    $vs = $pdo->prepare("SELECT * FROM Project_Variations WHERE Proj_ID = ? AND Status IN ('approved','in_progress','complete') ORDER BY Variation_Number");
+    $vs->execute([$proj_id]);
+    $variations = $vs->fetchAll();
+    if (!empty($variations)) {
+        $vIds = array_column($variations, 'Variation_ID');
+        $in = implode(',', array_fill(0, count($vIds), '?'));
+        $vsStmt = $pdo->prepare(
+            "SELECT s.Project_Stage_ID, s.Variation_ID, s.Stage_Type_ID, s.Description AS StageDesc,
+                    COALESCE(s.Weight,1) AS StageWeight, st.Stage_Type_Name, st.Stage_Order
+               FROM Project_Stages s
+               LEFT JOIN Stage_Types st ON s.Stage_Type_ID = st.Stage_Type_ID
+              WHERE s.Proj_ID = ? AND s.Variation_ID IN ($in)
+              ORDER BY s.Variation_ID, st.Stage_Order"
+        );
+        $vsStmt->execute(array_merge([$proj_id], $vIds));
+        foreach ($vsStmt->fetchAll() as $row) {
+            $variationStages[(int)$row['Variation_ID']][] = $row;
+        }
+        $vtStmt = $pdo->prepare(
+            "SELECT t.Project_Stage_ID, t.Description AS TaskDesc, COALESCE(t.Weight,1) AS TaskWeight,
+                    t.Assigned_To, tt.Task_Name, tt.Estimated_Time, tt.Fixed_Cost,
+                    s.Login AS AssignedLogin, s.`BILLING RATE` AS StaffRate
+               FROM Project_Tasks t
+               LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
+               LEFT JOIN Staff s ON t.Assigned_To = s.Employee_ID
+              WHERE t.Variation_ID IN ($in) AND COALESCE(t.Is_Removed,0) = 0
+              ORDER BY t.Proj_Task_Order, t.Proj_Task_ID"
+        );
+        $vtStmt->execute($vIds);
+        foreach ($vtStmt->fetchAll() as $t) {
+            $variationTasksByStage[(int)$t['Project_Stage_ID']][] = $t;
+        }
+    }
 }
 
 $grandHours = 0.0;
@@ -201,6 +250,72 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 endforeach;
 ?>
 </table>
+
+<?php
+// ── Variations section: only approved/in_progress/complete are billable ───
+if (!empty($variations)):
+    $variationGrandHours = 0.0;
+    $variationGrandSub   = 0.0;
+?>
+<h2 style="margin-top:18px;color:#9B9B1B;border-bottom:2px solid #9B9B1B;padding-bottom:3px">Variations</h2>
+<?php foreach ($variations as $v):
+    $vId = (int)$v['Variation_ID'];
+    $vstages = $variationStages[$vId] ?? [];
+    $vHours = 0.0; $vSub = 0.0;
+?>
+<div style="margin-top:12px">
+  <div style="background:#fff8e0;padding:6px 10px;border-left:4px solid #c33">
+    <strong>Variation #<?= (int)$v['Variation_Number'] ?>: <?= htmlspecialchars($v['Title']) ?></strong>
+    <span style="float:right;font-size:10px;color:#666">Status: <?= htmlspecialchars($v['Status']) ?>
+    <?= !empty($v['Date_Approved']) ? '· Approved ' . date('d/m/Y', strtotime($v['Date_Approved'])) : '' ?></span>
+    <?php if ($v['Description']): ?><div style="font-size:11px;margin-top:4px;color:#333"><?= nl2br(htmlspecialchars($v['Description'])) ?></div><?php endif; ?>
+  </div>
+  <table class="quote-table" style="margin-top:6px">
+  <?php foreach ($vstages as $vstage):
+      $vsid = (int)$vstage['Project_Stage_ID'];
+      $vsHours = 0.0; $vsSub = 0.0;
+      $vtasks = $variationTasksByStage[$vsid] ?? [];
+      $vsw = (float)$vstage['StageWeight'];
+  ?>
+    <tr class="stage-row"><td colspan="<?= $showMoney ? 4 : 2 ?>"><?= htmlspecialchars($vstage['Stage_Type_Name'] ?? '') ?> — <?= htmlspecialchars($vstage['StageDesc'] ?? '') ?></td></tr>
+    <?php foreach ($vtasks as $t):
+        $h = (float)($t['Estimated_Time'] ?? 0) * (float)$t['TaskWeight'] * $vsw;
+        $sr = (float)($t['StaffRate'] ?? 0);
+        $rate = ($sr > 0 ? $sr : $baseRate) * $multiplier;
+        $sub = $h * $rate + (float)($t['Fixed_Cost'] ?? 0);
+        $vsHours += $h; $vsSub += $sub;
+    ?>
+    <tr>
+      <td><?= htmlspecialchars($t['TaskDesc'] ?: $t['Task_Name']) ?></td>
+      <td class="right"><?= number_format($h, 2) ?></td>
+      <?php if ($showMoney): ?>
+        <td class="right">$<?= number_format($rate, 2) ?></td>
+        <td class="right">$<?= number_format($sub, 2) ?></td>
+      <?php endif; ?>
+    </tr>
+    <?php endforeach; ?>
+    <tr class="subtot"><td class="right">Subtotal:</td><td class="right"><?= number_format($vsHours, 2) ?></td>
+      <?php if ($showMoney): ?><td></td><td class="right">$<?= number_format($vsSub, 2) ?></td><?php endif; ?>
+    </tr>
+    <?php $vHours += $vsHours; $vSub += $vsSub; endforeach; ?>
+  </table>
+  <?php if ($showMoney): ?>
+  <div style="text-align:right;font-weight:bold;margin-top:4px">Variation total: <?= number_format($vHours, 2) ?> hrs &nbsp; $<?= number_format($vSub, 2) ?></div>
+  <?php endif; ?>
+</div>
+<?php $variationGrandHours += $vHours; $variationGrandSub += $vSub; endforeach; ?>
+
+<?php if ($showMoney): ?>
+<table class="totals" style="margin-top:10px">
+  <tr><td class="label">Variations subtotal:</td><td class="right">$<?= number_format($variationGrandSub, 2) ?></td></tr>
+  <tr><td class="label">Variations GST (15%):</td><td class="right">$<?= number_format($variationGrandSub * 0.15, 2) ?></td></tr>
+  <tr class="grand"><td class="label">Variations Grand Total (Inc GST):</td><td class="right">$<?= number_format($variationGrandSub * 1.15, 2) ?></td></tr>
+</table>
+<?php endif; ?>
+<?php
+$grandHours += $variationGrandHours;
+$grandSub   += $variationGrandSub;
+endif; /* variations */ ?>
 
 <?php if ($showMoney):
     $gst   = $grandSub * 0.15;

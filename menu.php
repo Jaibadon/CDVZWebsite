@@ -41,6 +41,7 @@ body  { background:#515559; font-family:-apple-system,BlinkMacSystemFont,"Segoe 
     <h3>Timesheet</h3>
     <div class="grid">
       <a class="btn" href="main.php">My Timesheet</a>
+      <a class="btn" href="my_checklist.php">My Project Checklist</a>
       <?php if ($isAdmin): ?>
         <a class="btn" href="unprocessed.php">Unprocessed Entries</a>
       <?php endif; ?>

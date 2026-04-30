@@ -22,13 +22,26 @@ if (!in_array($_SESSION['UserID'], ['erik', 'jen'], true)) {
 
 $pdo = get_db();
 
+// Detect variation support (only for project mode)
+$hasVariations = false;
+if ($mode === 'project') {
+    try {
+        $hasVariations = (bool)$pdo->query("SHOW TABLES LIKE 'Project_Variations'")->fetch();
+    } catch (Exception $e) { /* ignore */ }
+}
+
 // ── POST actions ──────────────────────────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
     try {
         if ($action === 'add_stage') {
-            $cols = "$stage_owner_col, Stage_Type_ID, Description, Weight, Notes";
-            $vals = "?, ?, ?, ?, ?";
+            $variationId = ($hasVariations && isset($_POST['Variation_ID']) && $_POST['Variation_ID'] !== '')
+                ? (int)$_POST['Variation_ID'] : null;
+            $variationCol = $hasVariations ? ', Variation_ID' : '';
+            $variationPlaceholder = $hasVariations ? ', ?' : '';
+
+            $cols = "$stage_owner_col, Stage_Type_ID, Description, Weight, Notes$variationCol";
+            $vals = "?, ?, ?, ?, ?$variationPlaceholder";
             $params = [
                 $owner_id,
                 (int)($_POST['Stage_Type_ID'] ?? 0),
@@ -36,6 +49,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 (float)($_POST['Weight'] ?? 1),
                 $_POST['Notes'] ?? '',
             ];
+            if ($hasVariations) $params[] = $variationId;
             $next = (int)$pdo->query("SELECT COALESCE(MAX(Project_Stage_ID),0)+1 FROM `$stages_table`")->fetchColumn();
             $cols = "Project_Stage_ID, $cols";
             $vals = "?, $vals";
@@ -113,28 +127,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $sid = (int)$_POST['Project_Stage_ID'];
             $assignedTo = (isset($_POST['Assigned_To']) && $_POST['Assigned_To'] !== '') ? (int)$_POST['Assigned_To'] : null;
             $next = (int)$pdo->query("SELECT COALESCE(MAX(Proj_Task_ID),0)+1 FROM `$tasks_table`")->fetchColumn();
+            // Inherit Variation_ID from parent stage so tasks stay aligned
+            $taskVariationId = null;
+            if ($hasVariations) {
+                $taskVariationId = $pdo->prepare("SELECT Variation_ID FROM `$stages_table` WHERE Project_Stage_ID = ?");
+                $taskVariationId->execute([$sid]);
+                $taskVariationId = $taskVariationId->fetchColumn() ?: null;
+            }
+            $vCol = $hasVariations ? ', Variation_ID' : '';
+            $vPh  = $hasVariations ? ', ?' : '';
             if ($mode === 'template') {
-                $stmt = $pdo->prepare("INSERT INTO `$tasks_table` (Proj_Task_ID, Template_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)");
-                $stmt->execute([
-                    $next, $owner_id, $sid,
+                $stmt = $pdo->prepare("INSERT INTO `$tasks_table` (Proj_Task_ID, Template_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To$vCol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?$vPh)");
+                $params = [$next, $owner_id, $sid,
                     (int)($_POST['Task_Type_ID'] ?? 0),
                     $_POST['Description'] ?? '',
                     (float)($_POST['Weight'] ?? 1),
                     $_POST['Proj_Task_Notes'] ?? '',
                     (int)($_POST['Proj_Task_Order'] ?? 0),
-                    $assignedTo,
-                ]);
+                    $assignedTo];
+                if ($hasVariations) $params[] = $taskVariationId;
+                $stmt->execute($params);
             } else {
-                $stmt = $pdo->prepare("INSERT INTO `$tasks_table` (Proj_Task_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To) VALUES (?, ?, ?, ?, ?, ?, ?, ?)");
-                $stmt->execute([
-                    $next, $sid,
+                $stmt = $pdo->prepare("INSERT INTO `$tasks_table` (Proj_Task_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To$vCol) VALUES (?, ?, ?, ?, ?, ?, ?, ?$vPh)");
+                $params = [$next, $sid,
                     (int)($_POST['Task_Type_ID'] ?? 0),
                     $_POST['Description'] ?? '',
                     (float)($_POST['Weight'] ?? 1),
                     $_POST['Proj_Task_Notes'] ?? '',
                     (int)($_POST['Proj_Task_Order'] ?? 0),
-                    $assignedTo,
-                ]);
+                    $assignedTo];
+                if ($hasVariations) $params[] = $taskVariationId;
+                $stmt->execute($params);
             }
 
         } elseif ($action === 'update_task') {
@@ -154,6 +177,55 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'drop_task') {
             $tid = (int)$_POST['Proj_Task_ID'];
             $pdo->prepare("DELETE FROM `$tasks_table` WHERE Proj_Task_ID = ?")->execute([$tid]);
+
+        } elseif ($action === 'mark_task_removed' && $hasVariations) {
+            // Soft-delete an original-quote task: scope-down via variation.
+            $tid = (int)$_POST['Proj_Task_ID'];
+            $vid = isset($_POST['Removed_In_Variation_ID']) && $_POST['Removed_In_Variation_ID'] !== ''
+                ? (int)$_POST['Removed_In_Variation_ID'] : null;
+            $isRemoved = ($_POST['Is_Removed'] ?? '1') === '0' ? 0 : 1;
+            $pdo->prepare("UPDATE Project_Tasks SET Is_Removed = ?, Removed_In_Variation_ID = ? WHERE Proj_Task_ID = ?")
+                ->execute([$isRemoved, $vid, $tid]);
+
+        } elseif ($action === 'add_variation' && $hasVariations) {
+            $title = trim($_POST['Title'] ?? '');
+            $desc  = trim($_POST['Description'] ?? '');
+            $status = in_array($_POST['Status'] ?? '', ['unapproved','draft','quoted','approved','in_progress','complete','rejected'], true)
+                ? $_POST['Status'] : 'draft';
+            if ($title === '') throw new Exception('Variation title required.');
+            $vnum = (int)$pdo->prepare("SELECT COALESCE(MAX(Variation_Number),0)+1 FROM Project_Variations WHERE Proj_ID = ?")
+                ->execute([$owner_id]) ?: 1;
+            $st = $pdo->prepare("SELECT COALESCE(MAX(Variation_Number),0)+1 AS n FROM Project_Variations WHERE Proj_ID = ?");
+            $st->execute([$owner_id]);
+            $vnum = (int)$st->fetchColumn();
+            $pdo->prepare("INSERT INTO Project_Variations (Proj_ID, Variation_Number, Title, Description, Status, Date_Created, Created_By)
+                           VALUES (?, ?, ?, ?, ?, CURDATE(), ?)")
+                ->execute([$owner_id, $vnum, $title, $desc, $status, (int)($_SESSION['Employee_id'] ?? 0)]);
+
+        } elseif ($action === 'update_variation' && $hasVariations) {
+            $vid = (int)$_POST['Variation_ID'];
+            $status = in_array($_POST['Status'] ?? '', ['unapproved','draft','quoted','approved','in_progress','complete','rejected'], true)
+                ? $_POST['Status'] : 'draft';
+            $approved = ($status === 'approved') ? 'CURDATE()' : 'Date_Approved';
+            $pdo->prepare("UPDATE Project_Variations SET Title = ?, Description = ?, Status = ?, Quote_Amount = ?, Approved_By = ?,
+                           Date_Approved = CASE WHEN ? = 'approved' AND Date_Approved IS NULL THEN CURDATE() ELSE Date_Approved END
+                           WHERE Variation_ID = ? AND Proj_ID = ?")
+                ->execute([
+                    $_POST['Title'] ?? '',
+                    $_POST['Description'] ?? '',
+                    $status,
+                    ($_POST['Quote_Amount'] ?? '') !== '' ? (float)$_POST['Quote_Amount'] : null,
+                    $_POST['Approved_By'] ?? '',
+                    $status,
+                    $vid, $owner_id,
+                ]);
+
+        } elseif ($action === 'drop_variation' && $hasVariations) {
+            $vid = (int)$_POST['Variation_ID'];
+            $pdo->prepare("DELETE FROM Project_Tasks WHERE Variation_ID = ?")->execute([$vid]);
+            $pdo->prepare("DELETE FROM Project_Stages WHERE Variation_ID = ? AND Proj_ID = ?")->execute([$vid, $owner_id]);
+            $pdo->prepare("UPDATE Project_Tasks SET Is_Removed = 0, Removed_In_Variation_ID = NULL WHERE Removed_In_Variation_ID = ?")->execute([$vid]);
+            $pdo->prepare("DELETE FROM Project_Variations WHERE Variation_ID = ? AND Proj_ID = ?")->execute([$vid, $owner_id]);
         }
     } catch (Exception $e) {
         $errMsg = 'DB Error: ' . htmlspecialchars($e->getMessage());
@@ -166,11 +238,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 }
 
 // ── Load stages + tasks ───────────────────────────────────────────────────
+// In project mode with variations enabled, only show ORIGINAL stages here
+// (Variation_ID IS NULL). Variation stages are rendered separately below.
+$stagesWhere = "s.$stage_owner_col = ?";
+if ($hasVariations && $mode === 'project') {
+    $stagesWhere .= " AND s.Variation_ID IS NULL";
+}
 $stages = $pdo->prepare(
     "SELECT s.*, st.Stage_Type_Name, st.Stage_Order
        FROM `$stages_table` s
        LEFT JOIN Stage_Types st ON s.Stage_Type_ID = st.Stage_Type_ID
-      WHERE s.$stage_owner_col = ?
+      WHERE $stagesWhere
       ORDER BY st.Stage_Order, s.Project_Stage_ID"
 );
 $stages->execute([$owner_id]);
@@ -186,11 +264,13 @@ if ($mode === 'template') {
     );
     $tasksStmt->execute([$owner_id]);
 } else {
+    $taskFilter = $hasVariations ? " AND COALESCE(t.Is_Removed, 0) = 0 AND t.Variation_ID IS NULL" : '';
     $tasksStmt = $pdo->prepare(
         "SELECT t.*, tt.Task_Name, tt.Estimated_Time
            FROM Project_Tasks t
            LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
           WHERE t.Project_Stage_ID IN (SELECT Project_Stage_ID FROM Project_Stages WHERE Proj_ID = ?)
+            $taskFilter
           ORDER BY t.Proj_Task_Order, t.Proj_Task_ID"
     );
     $tasksStmt->execute([$owner_id]);
@@ -200,6 +280,58 @@ $allTasks = $tasksStmt->fetchAll();
 $tasksByStage = [];
 foreach ($allTasks as $t) {
     $tasksByStage[$t['Project_Stage_ID']][] = $t;
+}
+
+// ── Load variations + their stages + tasks (project mode only) ────────────
+$variations = [];
+$variationStages = [];   // variation_id => [stages]
+$variationTasksByStage = []; // stage_id => [tasks]
+$removedTasks = [];      // [task_rows] flagged Is_Removed
+if ($hasVariations && $mode === 'project') {
+    $vs = $pdo->prepare("SELECT * FROM Project_Variations WHERE Proj_ID = ? ORDER BY Variation_Number");
+    $vs->execute([$owner_id]);
+    $variations = $vs->fetchAll();
+
+    if (!empty($variations)) {
+        $vIds = array_column($variations, 'Variation_ID');
+        $in = implode(',', array_fill(0, count($vIds), '?'));
+        $vsStmt = $pdo->prepare(
+            "SELECT s.*, st.Stage_Type_Name, st.Stage_Order
+               FROM Project_Stages s
+               LEFT JOIN Stage_Types st ON s.Stage_Type_ID = st.Stage_Type_ID
+              WHERE s.Proj_ID = ? AND s.Variation_ID IN ($in)
+              ORDER BY s.Variation_ID, st.Stage_Order, s.Project_Stage_ID"
+        );
+        $vsStmt->execute(array_merge([$owner_id], $vIds));
+        foreach ($vsStmt->fetchAll() as $vs) {
+            $variationStages[(int)$vs['Variation_ID']][] = $vs;
+        }
+        $vtStmt = $pdo->prepare(
+            "SELECT t.*, tt.Task_Name, tt.Estimated_Time
+               FROM Project_Tasks t
+               LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
+              WHERE t.Variation_ID IN ($in) AND COALESCE(t.Is_Removed, 0) = 0
+              ORDER BY t.Proj_Task_Order, t.Proj_Task_ID"
+        );
+        $vtStmt->execute($vIds);
+        foreach ($vtStmt->fetchAll() as $t) {
+            $variationTasksByStage[(int)$t['Project_Stage_ID']][] = $t;
+        }
+    }
+
+    // Removed-from-quote tasks (flagged but kept for audit trail)
+    $rmStmt = $pdo->prepare(
+        "SELECT t.*, tt.Task_Name, tt.Estimated_Time, st.Stage_Type_Name, v.Variation_Number, v.Title AS RemovalVariationTitle
+           FROM Project_Tasks t
+           LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
+           LEFT JOIN Project_Stages s ON t.Project_Stage_ID = s.Project_Stage_ID
+           LEFT JOIN Stage_Types st ON s.Stage_Type_ID = st.Stage_Type_ID
+           LEFT JOIN Project_Variations v ON t.Removed_In_Variation_ID = v.Variation_ID
+          WHERE s.Proj_ID = ? AND t.Is_Removed = 1
+          ORDER BY t.Proj_Task_ID"
+    );
+    $rmStmt->execute([$owner_id]);
+    $removedTasks = $rmStmt->fetchAll();
 }
 
 // ── Pricing setup (quote.php style) ────────────────────────────────────
@@ -399,6 +531,20 @@ foreach ($stages as $stage):
         <input type="hidden" name="Proj_Task_ID" value="<?= (int)$t['Proj_Task_ID'] ?>">
         <input type="submit" class="danger" value="X">
       </form>
+      <?php if ($hasVariations && !empty($variations)): ?>
+      <form method="post" class="inline" onsubmit="return confirm('Mark this task as removed from the original quote? It will be hidden from analytics + quote, but kept for audit.');">
+        <input type="hidden" name="action" value="mark_task_removed">
+        <input type="hidden" name="Proj_Task_ID" value="<?= (int)$t['Proj_Task_ID'] ?>">
+        <input type="hidden" name="Is_Removed" value="1">
+        <select name="Removed_In_Variation_ID" style="font-size:10px;width:60px">
+          <option value="">in:</option>
+          <?php foreach ($variations as $v): ?>
+            <option value="<?= (int)$v['Variation_ID'] ?>">#<?= (int)$v['Variation_Number'] ?></option>
+          <?php endforeach; ?>
+        </select>
+        <input type="submit" value="−" title="Remove from original quote" style="background:#a60;color:#fff;border:none;border-radius:3px;cursor:pointer;font-size:11px;padding:2px 6px">
+      </form>
+      <?php endif; ?>
     </td>
 </tr>
 <?php endforeach; ?>
@@ -472,8 +618,204 @@ endforeach;
     </td>
   </form>
 </tr>
-<tr class="totals"><td colspan="3" align="right">Grand total:</td><td><?= number_format($grandHrs, 2) ?> hrs</td><td></td><td style="text-align:right">$<?= number_format($grandPrice ?? 0, 2) ?></td><td colspan="2"></td></tr>
+<tr class="totals"><td colspan="3" align="right">Grand total (original quote):</td><td><?= number_format($grandHrs, 2) ?> hrs</td><td></td><td style="text-align:right">$<?= number_format($grandPrice ?? 0, 2) ?></td><td colspan="2"></td></tr>
 </table>
+
+<?php if ($hasVariations && $mode === 'project'): ?>
+<!-- ── Variations section ─────────────────────────────────────────────── -->
+<style>
+.var-card { background:#fff; border:2px solid #c33; border-radius:6px; padding:10px 14px; margin:14px 0; }
+.var-card.approved { border-color:#1a6b1a; }
+.var-card.rejected { border-color:#999; opacity:.6; }
+.var-card.complete { border-color:#5577aa; }
+.var-card h3 { margin:0 0 6px; color:#c33; font-size:14px; }
+.var-card.approved h3 { color:#1a6b1a; }
+.var-status { display:inline-block; padding:2px 8px; border-radius:8px; font-size:11px; font-weight:bold; margin-left:6px; }
+.s-unapproved, .s-rejected { background:#ffd6d6; color:#a00; }
+.s-draft { background:#eee; color:#555; }
+.s-quoted, .s-in_progress { background:#fff3cd; color:#7a5a00; }
+.s-approved, .s-complete { background:#d6f5d6; color:#1a6b1a; }
+.var-meta input, .var-meta select, .var-meta textarea { font-size:11px; padding:2px 4px; }
+.removed-row td { background:#fff0f0; color:#999; text-decoration:line-through; }
+</style>
+
+<h2 style="color:#c33">Variations</h2>
+<p class="subtle">Variations track scope changes after the original quote. Status flow: <em>unapproved → quoted → approved → in_progress → complete</em>. Hours booked here are excluded from original-quote analytics.</p>
+
+<?php foreach ($variations as $v):
+    $vid = (int)$v['Variation_ID'];
+    $vstages = $variationStages[$vid] ?? [];
+    $vEstHrs = 0;
+?>
+<div class="var-card <?= htmlspecialchars($v['Status']) ?>">
+  <h3>
+    Variation #<?= (int)$v['Variation_Number'] ?>: <?= htmlspecialchars($v['Title']) ?>
+    <span class="var-status s-<?= htmlspecialchars($v['Status']) ?>"><?= htmlspecialchars(strtoupper($v['Status'])) ?></span>
+  </h3>
+
+  <form method="post" class="var-meta" style="margin-bottom:6px">
+    <input type="hidden" name="action" value="update_variation">
+    <input type="hidden" name="Variation_ID" value="<?= $vid ?>">
+    Title: <input type="text" name="Title" value="<?= htmlspecialchars($v['Title']) ?>" style="width:200px">
+    Status:
+    <select name="Status">
+      <?php foreach (['unapproved','draft','quoted','approved','in_progress','complete','rejected'] as $st): ?>
+        <option value="<?= $st ?>" <?= $v['Status'] === $st ? 'selected' : '' ?>><?= $st ?></option>
+      <?php endforeach; ?>
+    </select>
+    Quote $: <input type="number" step="0.01" name="Quote_Amount" value="<?= htmlspecialchars((string)($v['Quote_Amount'] ?? '')) ?>" style="width:80px">
+    Approved by: <input type="text" name="Approved_By" value="<?= htmlspecialchars($v['Approved_By'] ?? '') ?>" style="width:120px">
+    <br>Description: <textarea name="Description" rows="2" style="width:96%"><?= htmlspecialchars($v['Description'] ?? '') ?></textarea>
+    <br><span class="actions"><input type="submit" value="Save Variation"></span>
+    <span style="float:right">
+      <form method="post" class="inline" onsubmit="return confirm('Delete variation #<?= (int)$v['Variation_Number'] ?> and ALL its stages, tasks, and removal flags?');">
+        <input type="hidden" name="action" value="drop_variation">
+        <input type="hidden" name="Variation_ID" value="<?= $vid ?>">
+        <input type="submit" class="danger" value="Drop Variation">
+      </form>
+    </span>
+  </form>
+
+  <?php foreach ($vstages as $vstage):
+      $vsid = (int)$vstage['Project_Stage_ID'];
+      $vtasks = $variationTasksByStage[$vsid] ?? [];
+      $vstageWeight = (float)($vstage['Weight'] ?? 1);
+      $vstageHrs = 0;
+  ?>
+  <table>
+    <tr class="stage-row">
+      <td colspan="6">
+        <strong>Stage:</strong> <?= htmlspecialchars($vstage['Stage_Type_Name'] ?? '?') ?>
+        — <?= htmlspecialchars($vstage['Description'] ?? '') ?>
+        <span style="float:right">
+          <form method="post" class="inline" onsubmit="return confirm('Drop this variation stage and its tasks?');">
+            <input type="hidden" name="action" value="drop_stage">
+            <input type="hidden" name="Project_Stage_ID" value="<?= $vsid ?>">
+            <input type="submit" class="danger" value="Drop">
+          </form>
+        </span>
+      </td>
+    </tr>
+    <tr><th>Task</th><th>Description</th><th style="width:55px">Weight</th><th style="width:60px">Hours</th><th style="width:130px">Assigned</th><th style="width:90px">Actions</th></tr>
+    <?php foreach ($vtasks as $t):
+        $hrs = (float)($t['Estimated_Time'] ?? 0) * (float)($t['Weight'] ?? 1) * $vstageWeight;
+        $vstageHrs += $hrs;
+    ?>
+    <tr>
+      <form method="post" class="inline">
+        <input type="hidden" name="action" value="update_task">
+        <input type="hidden" name="Proj_Task_ID" value="<?= (int)$t['Proj_Task_ID'] ?>">
+        <td>
+          <select name="Task_Type_ID">
+            <?php foreach ($taskTypes as $tt): ?>
+              <option value="<?= (int)$tt['Task_ID'] ?>" <?= ((int)$tt['Task_ID'] === (int)$t['Task_Type_ID']) ? 'selected' : '' ?>><?= htmlspecialchars($tt['Task_Name']) ?> (<?= (float)$tt['Estimated_Time'] ?>h)</option>
+            <?php endforeach; ?>
+          </select>
+        </td>
+        <td><input type="text" name="Description" value="<?= htmlspecialchars($t['Description'] ?? '') ?>" style="width:99%"></td>
+        <td><input type="number" step="0.05" name="Weight" value="<?= htmlspecialchars((string)($t['Weight'] ?? 1)) ?>" style="width:55px"></td>
+        <td><?= number_format($hrs, 2) ?></td>
+        <td>
+          <select name="Assigned_To">
+            <?= staffOptions($staff, (int)($t['Assigned_To'] ?? 0)) ?>
+          </select>
+        </td>
+        <td class="actions">
+          <input type="hidden" name="Proj_Task_Order" value="<?= (int)($t['Proj_Task_Order'] ?? 0) ?>">
+          <input type="submit" value="Save">
+      </form>
+          <form method="post" class="inline" onsubmit="return confirm('Delete this task?');">
+            <input type="hidden" name="action" value="drop_task">
+            <input type="hidden" name="Proj_Task_ID" value="<?= (int)$t['Proj_Task_ID'] ?>">
+            <input type="submit" class="danger" value="X">
+          </form>
+        </td>
+    </tr>
+    <?php endforeach; ?>
+    <tr class="add-row">
+      <form method="post" class="inline">
+        <input type="hidden" name="action" value="add_task">
+        <input type="hidden" name="Project_Stage_ID" value="<?= $vsid ?>">
+        <td>
+          <select name="Task_Type_ID" required>
+            <option value="">-- pick a task --</option>
+            <?php foreach ($taskTypes as $tt): ?>
+              <option value="<?= (int)$tt['Task_ID'] ?>"><?= htmlspecialchars($tt['Task_Name']) ?> (<?= (float)$tt['Estimated_Time'] ?>h)</option>
+            <?php endforeach; ?>
+          </select>
+        </td>
+        <td><input type="text" name="Description" placeholder="(optional)" style="width:99%"></td>
+        <td><input type="number" step="0.05" name="Weight" value="1" style="width:55px"></td>
+        <td>—</td>
+        <td><select name="Assigned_To"><?= staffOptions($staff) ?></select></td>
+        <td class="actions"><input type="hidden" name="Proj_Task_Order" value="0"><input type="submit" value="+ Add"></td>
+      </form>
+    </tr>
+    <tr class="totals"><td colspan="3" align="right">Stage subtotal:</td><td><?= number_format($vstageHrs, 2) ?> hrs</td><td colspan="2"></td></tr>
+  </table>
+  <?php $vEstHrs += $vstageHrs; endforeach; ?>
+
+  <!-- Add stage to this variation -->
+  <form method="post" style="margin-top:6px">
+    <input type="hidden" name="action" value="add_stage">
+    <input type="hidden" name="Variation_ID" value="<?= $vid ?>">
+    <strong>Add stage to this variation:</strong>
+    <select name="Stage_Type_ID" required>
+      <option value="">--</option>
+      <?php foreach ($stageTypes as $st): ?>
+        <option value="<?= (int)$st['Stage_Type_ID'] ?>"><?= htmlspecialchars($st['Stage_Type_Name']) ?></option>
+      <?php endforeach; ?>
+    </select>
+    Description: <input type="text" name="Description" style="width:200px">
+    <input type="hidden" name="Weight" value="1">
+    <span class="actions"><input type="submit" value="+ Add Stage"></span>
+  </form>
+
+  <p style="margin-top:8px"><strong>Variation total: <?= number_format($vEstHrs, 2) ?> hrs</strong></p>
+</div>
+<?php endforeach; ?>
+
+<!-- Add new variation form -->
+<div class="card" style="border-left:4px solid #c33">
+  <form method="post">
+    <input type="hidden" name="action" value="add_variation">
+    <strong>+ Add new variation:</strong>
+    Title: <input type="text" name="Title" required style="width:240px" placeholder="e.g. Extra bedroom">
+    Status:
+    <select name="Status">
+      <option value="draft">draft</option>
+      <option value="unapproved">unapproved</option>
+      <option value="approved">approved</option>
+    </select>
+    <br>Description: <textarea name="Description" rows="2" style="width:90%"></textarea>
+    <br><span class="actions"><input type="submit" value="Create Variation"></span>
+  </form>
+</div>
+
+<?php if (!empty($removedTasks)): ?>
+<h2 style="color:#888">Removed-from-quote tasks (audit trail)</h2>
+<table>
+  <tr><th>Task</th><th>Stage</th><th>Hrs (was)</th><th>Removed in</th><th>Restore</th></tr>
+  <?php foreach ($removedTasks as $rt): ?>
+  <tr class="removed-row">
+    <td><?= htmlspecialchars($rt['Task_Name'] ?? '?') ?></td>
+    <td><?= htmlspecialchars($rt['Stage_Type_Name'] ?? '?') ?></td>
+    <td><?= number_format((float)($rt['Estimated_Time'] ?? 0) * (float)($rt['Weight'] ?? 1), 2) ?></td>
+    <td><?= $rt['Variation_Number'] ? '#' . (int)$rt['Variation_Number'] . ': ' . htmlspecialchars($rt['RemovalVariationTitle'] ?? '') : '—' ?></td>
+    <td>
+      <form method="post" class="inline" onsubmit="return confirm('Restore this task to the original quote?');">
+        <input type="hidden" name="action" value="mark_task_removed">
+        <input type="hidden" name="Proj_Task_ID" value="<?= (int)$rt['Proj_Task_ID'] ?>">
+        <input type="hidden" name="Is_Removed" value="0">
+        <input type="submit" value="Restore">
+      </form>
+    </td>
+  </tr>
+  <?php endforeach; ?>
+</table>
+<?php endif; ?>
+
+<?php endif; /* hasVariations */ ?>
 
 </body>
 </html>

@@ -21,32 +21,50 @@ $weekEnd   = date('Y-m-d', strtotime('+6 days', strtotime($weekStart)));
 $projStmt = $pdo->query("SELECT proj_id, JobName, active FROM Projects ORDER BY JobName");
 $PROJECTS = $projStmt->fetchAll();
 
-// ── Detect whether the new Task_Type_ID column exists ──────────────────────
-$hasTaskTypeId = false;
+// ── Feature detection (graceful if migrations not yet run) ─────────────────
+$hasTaskTypeId  = false;
+$hasProjTaskId  = false;
+$hasVariations  = false;
 try {
     $hasTaskTypeId = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Task_Type_ID'")->fetch();
+    $hasProjTaskId = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Proj_Task_ID'")->fetch();
+    $hasVariations = (bool)$pdo->query("SHOW TABLES LIKE 'Project_Variations'")->fetch();
 } catch (Exception $e) { /* ignore */ }
 
-// ── Build per-project task list with estimated/logged/remaining hours ──────
-// JSON-encoded for the JS dropdown populator.
-$projectTasks = [];  // proj_id => [ {tid, name, stage, est, logged, remaining}, ... ]
-$taskNameById = [];  // task_id => task_name (for legacy backfill)
+// ── Per-project_task data: each Proj_Task_ID is its own option ─────────────
+// COALESCE on weights handles NULLs (legacy data) — they default to 1.
+$projectTasks = [];
+$variationCols = $hasVariations
+    ? ", pt.Variation_ID, pv.Variation_Number, pv.Title AS Variation_Title, pv.Status AS Variation_Status"
+    : ", NULL AS Variation_ID, NULL AS Variation_Number, NULL AS Variation_Title, NULL AS Variation_Status";
+$variationJoin = $hasVariations
+    ? "LEFT JOIN Project_Variations pv ON pt.Variation_ID = pv.Variation_ID"
+    : "";
+$removedFilter = $hasVariations ? "AND COALESCE(pt.Is_Removed, 0) = 0" : "";
 
 $ptStmt = $pdo->query(
-    "SELECT ps.Proj_ID, pt.Task_Type_ID, tt.Task_Name, st.Stage_Type_Name,
-            SUM(tt.Estimated_Time * pt.Weight * ps.Weight) AS estimated
+    "SELECT pt.Proj_Task_ID AS ptid, ps.Proj_ID, pt.Task_Type_ID, tt.Task_Name,
+            st.Stage_Type_Name,
+            (tt.Estimated_Time * COALESCE(pt.Weight,1) * COALESCE(ps.Weight,1)) AS estimated
+            $variationCols
        FROM Project_Tasks pt
        JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
        JOIN Tasks_Types tt   ON pt.Task_Type_ID = tt.Task_ID
        LEFT JOIN Stage_Types st ON tt.Stage_ID = st.Stage_Type_ID
-      GROUP BY ps.Proj_ID, pt.Task_Type_ID"
+       $variationJoin
+      WHERE 1=1 $removedFilter"
 );
 foreach ($ptStmt->fetchAll() as $r) {
-    $pid = (int)$r['Proj_ID'];
-    $tid = (int)$r['Task_Type_ID'];
-    $taskNameById[$tid] = $r['Task_Name'];
-    $projectTasks[$pid][$tid] = [
-        'tid'       => $tid,
+    $pid  = (int)$r['Proj_ID'];
+    $ptid = (int)$r['ptid'];
+    $vid  = $r['Variation_ID'] !== null ? (int)$r['Variation_ID'] : 0;
+    $projectTasks[$pid][$ptid] = [
+        'ptid'      => $ptid,
+        'tid'       => (int)$r['Task_Type_ID'],
+        'vid'       => $vid,
+        'vnumber'   => $r['Variation_Number'] !== null ? (int)$r['Variation_Number'] : 0,
+        'vtitle'    => $r['Variation_Title'] ?? '',
+        'vstatus'   => $r['Variation_Status'] ?? '',
         'name'      => $r['Task_Name'],
         'stage'     => $r['Stage_Type_Name'] ?: 'Other',
         'est'       => (float)$r['estimated'],
@@ -55,47 +73,44 @@ foreach ($ptStmt->fetchAll() as $r) {
     ];
 }
 
-// Sum already-logged hours per (proj, task) — prefer Task_Type_ID, fall back
-// to text match for legacy rows.
-if ($hasTaskTypeId) {
-    $loggedStmt = $pdo->query(
-        "SELECT proj_id, Task_Type_ID, LOWER(TRIM(Task)) AS task_key, SUM(Hours) AS hrs
+// Sum already-logged hours per Proj_Task_ID
+if ($hasProjTaskId) {
+    $loggedRows = $pdo->query(
+        "SELECT Proj_Task_ID, SUM(Hours) AS hrs
            FROM Timesheets
-          WHERE Hours > 0
-          GROUP BY proj_id, Task_Type_ID, LOWER(TRIM(Task))"
-    );
-} else {
-    $loggedStmt = $pdo->query(
-        "SELECT proj_id, NULL AS Task_Type_ID, LOWER(TRIM(Task)) AS task_key, SUM(Hours) AS hrs
-           FROM Timesheets
-          WHERE Hours > 0
-          GROUP BY proj_id, LOWER(TRIM(Task))"
-    );
-}
-$nameKeyToId = [];
-foreach ($taskNameById as $tid => $nm) $nameKeyToId[strtolower(trim($nm))] = $tid;
-
-foreach ($loggedStmt->fetchAll() as $r) {
-    $pid = (int)$r['proj_id'];
-    $tid = $r['Task_Type_ID'] !== null ? (int)$r['Task_Type_ID'] : ($nameKeyToId[$r['task_key']] ?? null);
-    if (!$tid || !isset($projectTasks[$pid][$tid])) continue;
-    $projectTasks[$pid][$tid]['logged']    += (float)$r['hrs'];
-    $projectTasks[$pid][$tid]['remaining'] = $projectTasks[$pid][$tid]['est'] - $projectTasks[$pid][$tid]['logged'];
+          WHERE Hours > 0 AND Proj_Task_ID IS NOT NULL
+          GROUP BY Proj_Task_ID"
+    )->fetchAll();
+    foreach ($loggedRows as $r) {
+        $ptid = (int)$r['Proj_Task_ID'];
+        foreach ($projectTasks as $pid => $_) {
+            if (isset($projectTasks[$pid][$ptid])) {
+                $projectTasks[$pid][$ptid]['logged']    += (float)$r['hrs'];
+                $projectTasks[$pid][$ptid]['remaining'] -= (float)$r['hrs'];
+                break;
+            }
+        }
+    }
 }
 
-// Reshape to indexed arrays for clean JSON, sorted by stage then name
+// Reshape: original stages first, variations after
 $projectTasksJs = [];
 foreach ($projectTasks as $pid => $tasks) {
     $arr = array_values($tasks);
-    usort($arr, fn($a,$b) => [$a['stage'],$a['name']] <=> [$b['stage'],$b['name']]);
+    usort($arr, function($a, $b) {
+        if ($a['vid'] !== $b['vid']) return $a['vid'] <=> $b['vid'];
+        if ($a['stage'] !== $b['stage']) return strcmp($a['stage'], $b['stage']);
+        return strcmp($a['name'], $b['name']);
+    });
     $projectTasksJs[(string)$pid] = $arr;
 }
 
 // ── Load timesheet rows for this employee & week ───────────────────────────
 $empId = $_SESSION['Employee_id'] ?? 0;
-$ttCol = $hasTaskTypeId ? 'Task_Type_ID' : 'NULL AS Task_Type_ID';
+$ttCol  = $hasTaskTypeId ? 'Task_Type_ID' : 'NULL AS Task_Type_ID';
+$ptCol  = $hasProjTaskId ? 'Proj_Task_ID' : 'NULL AS Proj_Task_ID';
 $tsStmt = $pdo->prepare(
-    "SELECT proj_id, TS_ID, TS_DATE, Task, $ttCol, Hours, Invoice_No
+    "SELECT proj_id, TS_ID, TS_DATE, Task, $ttCol, $ptCol, Hours, Invoice_No
        FROM Timesheets
       WHERE Employee_id = ?
         AND TS_DATE BETWEEN ? AND ?
@@ -109,16 +124,18 @@ $tsRows = $tsStmt->fetchAll();
     exit;
 }
 
-// ── Build keyed structure: group by (proj_id, task_type_id OR task text)
+// ── Build keyed structure: group by (proj_id, ptid|task_type_id|task text)
 $taskMap = [];
 foreach ($tsRows as $r) {
-    $tid = $r['Task_Type_ID'] !== null ? (int)$r['Task_Type_ID'] : null;
-    $key = $r['proj_id'] . '|' . ($tid !== null ? "T$tid" : 'X' . strtolower(trim($r['Task'])));
+    $ptid = $r['Proj_Task_ID'] !== null ? (int)$r['Proj_Task_ID'] : null;
+    $tid  = $r['Task_Type_ID'] !== null ? (int)$r['Task_Type_ID'] : null;
+    $key  = $r['proj_id'] . '|' . ($ptid !== null ? "P$ptid" : ($tid !== null ? "T$tid" : 'X' . strtolower(trim($r['Task']))));
     if (!isset($taskMap[$key])) {
         $taskMap[$key] = [
             'proj_id'      => $r['proj_id'],
             'task'         => $r['Task'],
             'task_type_id' => $tid,
+            'proj_task_id' => $ptid,
             'invoice_no'   => $r['Invoice_No'],
             'ts_id'        => $r['TS_ID'],
             'days'         => array_fill(1, 7, ''),
@@ -220,42 +237,64 @@ function OnLostFocusTest(el) {
 // Per-project task list keyed by proj_id → list of {tid, name, stage, est, logged, remaining}
 window.PROJECT_TASKS = <?= json_encode($projectTasksJs, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
 
-function populateTaskSelect(rowIdx, projId, currentTid) {
+function populateTaskSelect(rowIdx, projId, currentPtid) {
     var sel = document.querySelector('select[name="Task' + rowIdx + '"]');
     if (!sel || sel.disabled) return;
     sel.innerHTML = '<option value="">-- pick task --</option>';
     var tasks = (window.PROJECT_TASKS && window.PROJECT_TASKS[projId]) || [];
     if (tasks.length === 0) return;
+    // Group keys: stage name for original (vid==0); "v<vid>" for variations
     var groups = {};
+    var groupOrder = [];
+    var vMeta = {};
     tasks.forEach(function(t) {
-        if (!groups[t.stage]) groups[t.stage] = [];
-        groups[t.stage].push(t);
+        var key;
+        if (t.vid && t.vid > 0) {
+            key = 'v' + t.vid;
+            if (!vMeta[key]) vMeta[key] = { vnumber: t.vnumber, vtitle: t.vtitle, vstatus: t.vstatus };
+        } else {
+            key = 's:' + t.stage;
+        }
+        if (!groups[key]) { groups[key] = []; groupOrder.push(key); }
+        groups[key].push(t);
     });
-    Object.keys(groups).forEach(function(stageName) {
+    groupOrder.forEach(function(key) {
         var og = document.createElement('optgroup');
-        og.label = stageName;
-        groups[stageName].forEach(function(t) {
+        if (key.indexOf('s:') === 0) {
+            og.label = key.substring(2);
+        } else {
+            var m = vMeta[key];
+            var unapproved = (m.vstatus || '') !== 'approved';
+            og.label = '⚠ Variation #' + m.vnumber + ': ' + (m.vtitle || '') + ' [' + (m.vstatus || '?') + ']';
+            if (unapproved) og.style.color = '#c33';
+        }
+        groups[key].forEach(function(t) {
             var opt = document.createElement('option');
-            opt.value = t.tid;
+            opt.value = t.ptid;
             var rem = (typeof t.remaining === 'number') ? t.remaining : (t.est - t.logged);
             var label = t.name + ' (' + rem.toFixed(1) + 'h left of ' + t.est.toFixed(1) + 'h)';
+            if (t.vid && t.vid > 0 && (t.vstatus || '') !== 'approved') {
+                label = '⚠ ' + label;
+                opt.style.color = '#c33';
+            } else if (rem < 0) {
+                opt.style.color = '#a00';
+            } else if (rem < 1) {
+                opt.style.color = '#a60';
+            }
             opt.textContent = label;
-            if (rem < 0) opt.style.color = '#a00';
-            else if (rem < 1) opt.style.color = '#a60';
             og.appendChild(opt);
         });
         sel.appendChild(og);
     });
-    if (currentTid) sel.value = String(currentTid);
+    if (currentPtid) sel.value = String(currentPtid);
 }
 
 function initTaskSelects() {
     document.querySelectorAll('select.proj-sel').forEach(function(projSel) {
         var rowIdx = projSel.name.replace('Project','');
-        // Initial populate for rows with project pre-selected
         if (projSel.value) {
             var sel = document.querySelector('select[name="Task' + rowIdx + '"]');
-            var pre = sel ? (sel.dataset.currentTid || '') : '';
+            var pre = sel ? (sel.dataset.currentPtid || '') : '';
             populateTaskSelect(rowIdx, projSel.value, pre);
         }
         projSel.addEventListener('change', function() {
@@ -360,15 +399,18 @@ window.onload = function () {
 for ($a = 1; $a <= 30; $a++):
     $tr        = $taskRows[$a - 1] ?? null;
     $projVal   = $tr ? $tr['proj_id']      : '';
+    $taskPtid  = $tr ? (int)($tr['proj_task_id'] ?? 0) : 0;
     $taskTid   = $tr ? (int)($tr['task_type_id'] ?? 0) : 0;
     $taskTxt   = $tr ? $tr['task']         : '';
     $invNo     = $tr ? $tr['invoice_no']   : 0;
     $tot       = $tr ? $tr['tot']          : 0;
     $days      = $tr ? $tr['days']         : array_fill(1, 7, '');
     $locked    = ($invNo != 0);
-    // If row has legacy text but no task_type_id, try to resolve via name lookup
-    if (!$taskTid && $taskTxt !== '' && isset($nameKeyToId[strtolower(trim($taskTxt))])) {
-        $taskTid = $nameKeyToId[strtolower(trim($taskTxt))];
+    // Resolve ptid from task_type_id when only the older FK is set
+    if (!$taskPtid && $taskTid && $projVal !== '' && !empty($projectTasks[(int)$projVal])) {
+        foreach ($projectTasks[(int)$projVal] as $pt) {
+            if ($pt['tid'] === $taskTid && $pt['vid'] === 0) { $taskPtid = $pt['ptid']; break; }
+        }
     }
 ?>
 <tr>
@@ -388,16 +430,16 @@ for ($a = 1; $a <= 30; $a++):
   <td><input type="hidden" name="Invoice_No<?= $a ?>" value="<?= (int)$invNo ?>"></td>
   <td>
     <select <?= $locked ? 'disabled' : '' ?> name="Task<?= $a ?>" class="task-sel"
-            data-current-tid="<?= (int)$taskTid ?>"
+            data-current-ptid="<?= (int)$taskPtid ?>"
             data-row="<?= $a ?>">
       <option value="">-- pick task --</option>
       <?php if ($locked && $taskTxt !== ''): ?>
-        <option value="<?= (int)$taskTid ?>" selected><?= htmlspecialchars($taskTxt) ?></option>
+        <option value="<?= (int)$taskPtid ?>" selected><?= htmlspecialchars($taskTxt) ?></option>
       <?php endif; ?>
     </select>
   </td>
   <td><input <?= $locked ? 'disabled' : '' ?> type="text" name="Desc<?= $a ?>"
-       value="<?= htmlspecialchars(($taskTid && isset($taskNameById[$taskTid]) && $taskNameById[$taskTid] === $taskTxt) ? '' : $taskTxt) ?>"
+       value="<?= htmlspecialchars($taskTxt) ?>"
        class="desc-inp" placeholder="(notes)"
        style="width:140px;font-size:11px"></td>
   <?php for ($d = 1; $d <= 7; $d++): ?>
@@ -415,6 +457,17 @@ for ($a = 1; $a <= 30; $a++):
 </table>
 </div>
 </form>
+
+<!-- ── Variation request button ─────────────────────────────────────────── -->
+<div style="width:680px;margin:18px auto;text-align:center">
+  <a href="variation_add.php"
+     style="display:inline-block;background:#c33;color:#fff;padding:9px 18px;border-radius:4px;text-decoration:none;font-weight:bold;font-size:13px;box-shadow:0 1px 3px rgba(0,0,0,0.2)">
+    + Add unapproved variation
+  </a>
+  <div style="color:#aaa;font-size:11px;margin-top:6px">
+    Use this when a client has asked for extra work beyond the original quote.
+  </div>
+</div>
 
 </body>
 </html>

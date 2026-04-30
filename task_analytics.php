@@ -19,6 +19,29 @@ if (!in_array($_SESSION['UserID'], ['erik', 'jen'], true)) {
 
 $pdo = get_db();
 
+// ── Filter: which scope of work to analyze ────────────────────────────────
+$filter = $_GET['filter'] ?? 'original';  // original | variations | all
+if (!in_array($filter, ['original','variations','all'], true)) $filter = 'original';
+
+// Detect variation columns once
+$hasVariations = false;
+try {
+    $hasVariations = (bool)$pdo->query("SHOW COLUMNS FROM Project_Tasks LIKE 'Variation_ID'")->fetch();
+} catch (Exception $e) { /* ignore */ }
+
+// SQL fragments for filtering Project_Tasks and Timesheets by scope
+$ptFilter = '';
+$tsFilter = '';
+if ($hasVariations) {
+    if ($filter === 'original') {
+        $ptFilter = " AND pt.Variation_ID IS NULL AND COALESCE(pt.Is_Removed,0) = 0";
+        $tsFilter = " AND ts.Variation_ID IS NULL";
+    } elseif ($filter === 'variations') {
+        $ptFilter = " AND pt.Variation_ID IS NOT NULL";
+        $tsFilter = " AND ts.Variation_ID IS NOT NULL";
+    }
+}
+
 // ── POST: instant-apply template hour change ───────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_task_estimate') {
     $tid = (int)($_POST['Task_ID'] ?? 0);
@@ -68,10 +91,11 @@ $projStmt = $pdo->query(
        LEFT JOIN Project_Types pt_name ON p.Project_Type = pt_name.Project_Type_ID
        LEFT JOIN Staff mgr ON p.Manager = mgr.Employee_ID
        LEFT JOIN (
-            SELECT ps.Proj_ID, SUM(tt.Estimated_Time * pt.Weight * ps.Weight) AS estimated
+            SELECT ps.Proj_ID, SUM(tt.Estimated_Time * COALESCE(pt.Weight,1) * COALESCE(ps.Weight,1)) AS estimated
               FROM Project_Tasks pt
               JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
               JOIN Tasks_Types tt   ON pt.Task_Type_ID = tt.Task_ID
+             WHERE 1=1 $ptFilter
              GROUP BY ps.Proj_ID
        ) est ON est.Proj_ID = p.proj_id"
 );
@@ -87,8 +111,13 @@ foreach ($projStmt->fetchAll() as $r) {
     ];
 }
 
-// ── Sum actual timesheet hours per project ─────────────────────────────────
-$tsAgg = $pdo->query("SELECT proj_id, SUM(Hours) AS actual FROM Timesheets GROUP BY proj_id")->fetchAll();
+// ── Sum actual timesheet hours per project (scope-filtered) ───────────────
+$actualWhere = '1=1';
+if ($hasVariations) {
+    if ($filter === 'original') $actualWhere .= ' AND ts.Variation_ID IS NULL';
+    elseif ($filter === 'variations') $actualWhere .= ' AND ts.Variation_ID IS NOT NULL';
+}
+$tsAgg = $pdo->query("SELECT ts.proj_id, SUM(ts.Hours) AS actual FROM Timesheets ts WHERE $actualWhere GROUP BY ts.proj_id")->fetchAll();
 foreach ($tsAgg as $r) {
     $pid = (int)$r['proj_id'];
     if (isset($projects[$pid])) $projects[$pid]['actual'] = (float)$r['actual'];
@@ -109,11 +138,12 @@ foreach ($projects as $p) {
 $pttStmt = $pdo->query(
     "SELECT ps.Proj_ID, pt.Task_Type_ID, tt.Task_Name, tt.Stage_ID,
             stg.Stage_Type_Name,
-            SUM(tt.Estimated_Time * pt.Weight * ps.Weight) AS est_hrs
+            SUM(tt.Estimated_Time * COALESCE(pt.Weight,1) * COALESCE(ps.Weight,1)) AS est_hrs
        FROM Project_Tasks pt
        JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
        JOIN Tasks_Types tt   ON pt.Task_Type_ID = tt.Task_ID
        LEFT JOIN Stage_Types stg ON tt.Stage_ID = stg.Stage_Type_ID
+      WHERE 1=1 $ptFilter
       GROUP BY ps.Proj_ID, pt.Task_Type_ID"
 );
 $taskEst = []; // [proj_id][task_id] => ['name'=>, 'stage'=>, 'est'=>]
@@ -141,7 +171,7 @@ if ($hasTaskTypeId) {
                 ts.Employee_id,
                 SUM(ts.Hours) AS actual_hrs
            FROM Timesheets ts
-          WHERE ts.Hours > 0
+          WHERE ts.Hours > 0 $tsFilter
           GROUP BY ts.proj_id, ts.Task_Type_ID, LOWER(TRIM(ts.Task)), ts.Employee_id"
     );
 } else {
@@ -153,7 +183,7 @@ if ($hasTaskTypeId) {
                 ts.Employee_id,
                 SUM(ts.Hours) AS actual_hrs
            FROM Timesheets ts
-          WHERE ts.Hours > 0
+          WHERE ts.Hours > 0 $tsFilter
           GROUP BY ts.proj_id, LOWER(TRIM(ts.Task)), ts.Employee_id"
     );
 }
@@ -222,16 +252,16 @@ foreach ($projTaskActual as $pid => $tasks) {
 $thisMonthStart = date('Y-m-01');
 $twelveMonthStart = date('Y-m-01', strtotime('-11 months'));
 
-function buildTopOverrun(PDO $pdo, string $since, array $taskByName, array $taskEst, bool $hasFK): array {
+function buildTopOverrun(PDO $pdo, string $since, array $taskByName, array $taskEst, bool $hasFK, string $tsFilter = ''): array {
     if ($hasFK) {
         $sql = "SELECT ts.proj_id, ts.Task_Type_ID AS tid, LOWER(TRIM(ts.Task)) AS k, SUM(ts.Hours) AS hrs
                   FROM Timesheets ts
-                 WHERE ts.TS_DATE >= ? AND ts.Hours > 0
+                 WHERE ts.TS_DATE >= ? AND ts.Hours > 0 $tsFilter
                  GROUP BY ts.proj_id, ts.Task_Type_ID, LOWER(TRIM(ts.Task))";
     } else {
         $sql = "SELECT ts.proj_id, NULL AS tid, LOWER(TRIM(ts.Task)) AS k, SUM(ts.Hours) AS hrs
                   FROM Timesheets ts
-                 WHERE ts.TS_DATE >= ? AND ts.Hours > 0
+                 WHERE ts.TS_DATE >= ? AND ts.Hours > 0 $tsFilter
                  GROUP BY ts.proj_id, LOWER(TRIM(ts.Task))";
     }
     $rows = $pdo->prepare($sql);
@@ -257,16 +287,16 @@ function buildTopOverrun(PDO $pdo, string $since, array $taskByName, array $task
     return array_slice($agg, 0, 5, true);
 }
 
-function buildTopStaffOverrun(PDO $pdo, string $since, array $taskByName, array $taskEst, array $staffMap, bool $hasFK): array {
+function buildTopStaffOverrun(PDO $pdo, string $since, array $taskByName, array $taskEst, array $staffMap, bool $hasFK, string $tsFilter = ''): array {
     if ($hasFK) {
         $sql = "SELECT ts.proj_id, ts.Employee_id, ts.Task_Type_ID AS tid, LOWER(TRIM(ts.Task)) AS k, SUM(ts.Hours) AS hrs
                   FROM Timesheets ts
-                 WHERE ts.TS_DATE >= ? AND ts.Hours > 0
+                 WHERE ts.TS_DATE >= ? AND ts.Hours > 0 $tsFilter
                  GROUP BY ts.proj_id, ts.Employee_id, ts.Task_Type_ID, LOWER(TRIM(ts.Task))";
     } else {
         $sql = "SELECT ts.proj_id, ts.Employee_id, NULL AS tid, LOWER(TRIM(ts.Task)) AS k, SUM(ts.Hours) AS hrs
                   FROM Timesheets ts
-                 WHERE ts.TS_DATE >= ? AND ts.Hours > 0
+                 WHERE ts.TS_DATE >= ? AND ts.Hours > 0 $tsFilter
                  GROUP BY ts.proj_id, ts.Employee_id, LOWER(TRIM(ts.Task))";
     }
     $rows = $pdo->prepare($sql);
@@ -298,10 +328,10 @@ function buildTopStaffOverrun(PDO $pdo, string $since, array $taskByName, array 
     return $out;
 }
 
-$topTasksMonth = buildTopOverrun($pdo, $thisMonthStart, $taskByName, $taskEst, $hasTaskTypeId);
-$topTasks12mo  = buildTopOverrun($pdo, $twelveMonthStart, $taskByName, $taskEst, $hasTaskTypeId);
-$topStaffMonth = buildTopStaffOverrun($pdo, $thisMonthStart, $taskByName, $taskEst, $staffMap, $hasTaskTypeId);
-$topStaff12mo  = buildTopStaffOverrun($pdo, $twelveMonthStart, $taskByName, $taskEst, $staffMap, $hasTaskTypeId);
+$topTasksMonth = buildTopOverrun($pdo, $thisMonthStart, $taskByName, $taskEst, $hasTaskTypeId, $tsFilter);
+$topTasks12mo  = buildTopOverrun($pdo, $twelveMonthStart, $taskByName, $taskEst, $hasTaskTypeId, $tsFilter);
+$topStaffMonth = buildTopStaffOverrun($pdo, $thisMonthStart, $taskByName, $taskEst, $staffMap, $hasTaskTypeId, $tsFilter);
+$topStaff12mo  = buildTopStaffOverrun($pdo, $twelveMonthStart, $taskByName, $taskEst, $staffMap, $hasTaskTypeId, $tsFilter);
 
 // ── Template-needs-adjustment: recommended new estimates ───────────────────
 $tpAdj = [];
@@ -396,6 +426,14 @@ table.analytics tr:nth-child(even) td { background:#fafafa; }
 <div class="topnav">
   <a href="menu.php">&larr; Main Menu</a>
   <h1>Task Analytics — Actual vs Estimated</h1>
+  <?php if ($hasVariations): ?>
+  <div style="margin-left:auto">
+    <strong>Scope:</strong>
+    <a href="?filter=original" style="<?= $filter==='original'?'background:#9B9B1B;color:#fff;':'' ?>padding:3px 8px;border-radius:3px;text-decoration:none">Original quote</a>
+    <a href="?filter=variations" style="<?= $filter==='variations'?'background:#c33;color:#fff;':'' ?>padding:3px 8px;border-radius:3px;text-decoration:none">Variations only</a>
+    <a href="?filter=all" style="<?= $filter==='all'?'background:#555;color:#fff;':'' ?>padding:3px 8px;border-radius:3px;text-decoration:none">All work</a>
+  </div>
+  <?php endif; ?>
 </div>
 
 <?php
