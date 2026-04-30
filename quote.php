@@ -40,10 +40,19 @@ $stages->execute([$proj_id]);
 $stages = $stages->fetchAll();
 
 $tasksStmt = $pdo->prepare(
-    "SELECT t.Project_Stage_ID, t.Description AS TaskDesc, t.Weight AS TaskWeight, t.Proj_Task_Order,
-            tt.Task_Name, tt.Estimated_Time, tt.Fixed_Cost
+    "SELECT t.Project_Stage_ID,
+            t.Description       AS TaskDesc,
+            t.Weight             AS TaskWeight,
+            t.Proj_Task_Order,
+            t.Assigned_To        AS Assigned_To,
+            tt.Task_Name,
+            tt.Estimated_Time,
+            tt.Fixed_Cost,
+            s.Login              AS AssignedLogin,
+            s.`BILLING RATE`     AS StaffRate
        FROM Project_Tasks t
        LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
+       LEFT JOIN Staff       s  ON t.Assigned_To  = s.Employee_ID
       WHERE t.Project_Stage_ID IN (SELECT Project_Stage_ID FROM Project_Stages WHERE Proj_ID = ?)
       ORDER BY t.Proj_Task_Order, t.Proj_Task_ID"
 );
@@ -97,7 +106,7 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 .tc-page ol.outer > li { font-weight:bold; text-transform:uppercase; margin-top:8px; font-size:10.5px; }
 .tc-page ol.outer > li > div { font-weight:normal; text-transform:none; margin:3px 0 0; }
 .tc-page ol.inner { list-style:none; padding-left:0; margin:3px 0 0; font-size:9.5px; line-height:1.35; }
-.tc-page ol.inner li { margin-bottom:3px; padding-left:32px; text-indent:-32px; }
+.tc-page ol.inner li { margin-bottom:3px; padding-left:32px;  }
 .tc-page .tc-num { display:inline-block; width:28px; font-weight:bold; }
 </style>
 </head>
@@ -152,14 +161,23 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 </tr>
 <?php foreach ($tasks as $t):
     $hrs = (float)($t['Estimated_Time'] ?? 0) * (float)($t['Weight'] ?? $t['TaskWeight'] ?? 1) * $stageWeight;
-    $rate = $baseRate * $multiplier;
+    // If a staff member is assigned and has a billing rate, use it.
+    // Otherwise fall back to the project base rate. Either way, multiply
+    // by the client's negotiated Multiplier.
+    $staffRate = (float)($t['StaffRate'] ?? 0);
+    $rateBase  = ($staffRate > 0) ? $staffRate : $baseRate;
+    $rate = $rateBase * $multiplier;
     $sub  = $hrs * $rate + (float)($t['Fixed_Cost'] ?? 0);
     $stageHours += $hrs;
     $stageSub   += $sub;
-    $name = $t['TaskDesc'] ? $t['TaskDesc'] : $t['Task_Name'];
+    $rawName = (string)($t['TaskDesc'] ? $t['TaskDesc'] : $t['Task_Name']);
+    $nameHtml = htmlspecialchars($rawName);
+    if (!empty($t['AssignedLogin'])) {
+        $nameHtml .= ' <span style="color:#888;font-size:9px">(' . htmlspecialchars($t['AssignedLogin']) . ')</span>';
+    }
 ?>
 <tr>
-  <td><?= htmlspecialchars((string)$name) ?></td>
+  <td><?= $nameHtml ?></td>
   <td class="right"><?= number_format($hrs, 2) ?></td>
   <?php if ($showMoney): ?>
     <td class="right">$<?= number_format($rate, 2) ?></td>
