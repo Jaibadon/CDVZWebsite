@@ -232,7 +232,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if (empty($errMsg)) {
-        header('Location: ' . $_SERVER['REQUEST_URI']);
+        // Preserve scroll position. Anchor wins (jumps to that section);
+        // else fall back to a saved Y pixel offset via query string.
+        $redir = $_SERVER['REQUEST_URI'];
+        $anchor = trim($_POST['scroll_anchor'] ?? '');
+        $scrollY = (int)($_POST['scroll_y'] ?? 0);
+        if ($anchor !== '') {
+            $redir = preg_replace('/#.*$/', '', $redir) . '#' . $anchor;
+        } elseif ($scrollY > 0) {
+            $sep = (strpos($redir, '?') === false) ? '?' : '&';
+            $redir = preg_replace('/[?&]_y=\d+/', '', $redir) . $sep . '_y=' . $scrollY;
+        }
+        header('Location: ' . $redir);
         exit;
     }
 }
@@ -422,6 +433,32 @@ function saveStageWithTasks(form, sid) {
     });
     return true;
 }
+
+// ── Scroll-position preservation across form posts ─────────────────────
+// On submit: stamp current Y pixel into a hidden scroll_y input on the form.
+// On load: if URL has ?_y=NNN scroll there; OR if URL has #anchor browser auto-jumps.
+document.addEventListener('submit', function(ev) {
+    var f = ev.target;
+    if (!f || f.tagName !== 'FORM') return;
+    if (f.querySelector('[name="scroll_anchor"]')) return; // anchor mode wins
+    var existing = f.querySelector('input[name="scroll_y"][data-auto]');
+    if (!existing) {
+        existing = document.createElement('input');
+        existing.type = 'hidden';
+        existing.name = 'scroll_y';
+        existing.setAttribute('data-auto', '1');
+        f.appendChild(existing);
+    }
+    existing.value = String(window.scrollY || window.pageYOffset || 0);
+}, true);
+
+window.addEventListener('DOMContentLoaded', function() {
+    var m = window.location.search.match(/[?&]_y=(\d+)/);
+    if (m) {
+        // Defer slightly so browser layout settles (variation cards, tables, etc.)
+        setTimeout(function() { window.scrollTo(0, parseInt(m[1], 10)); }, 0);
+    }
+});
 </script>
 </head>
 <body>
@@ -656,6 +693,7 @@ endforeach;
   <form method="post" class="var-meta" style="margin-bottom:6px">
     <input type="hidden" name="action" value="update_variation">
     <input type="hidden" name="Variation_ID" value="<?= $vid ?>">
+    <input type="hidden" name="scroll_anchor" value="variation-<?= $vid ?>">
     Title: <input type="text" name="Title" value="<?= htmlspecialchars($v['Title']) ?>" style="width:200px">
     Status:
     <select name="Status">
@@ -667,14 +705,15 @@ endforeach;
     Approved by: <input type="text" name="Approved_By" value="<?= htmlspecialchars($v['Approved_By'] ?? '') ?>" style="width:120px">
     <br>Description: <textarea name="Description" rows="2" style="width:96%"><?= htmlspecialchars($v['Description'] ?? '') ?></textarea>
     <br><span class="actions"><input type="submit" value="Save Variation"></span>
-    <span style="float:right">
-      <form method="post" class="inline" onsubmit="return confirm('Delete variation #<?= (int)$v['Variation_Number'] ?> and ALL its stages, tasks, and removal flags?');">
-        <input type="hidden" name="action" value="drop_variation">
-        <input type="hidden" name="Variation_ID" value="<?= $vid ?>">
-        <input type="submit" class="danger" value="Drop Variation">
-      </form>
-    </span>
   </form>
+  <!-- Drop must be a SEPARATE form (siblings, not nested) -->
+  <form method="post" class="inline" style="float:right;margin-top:-30px"
+        onsubmit="return confirm('Delete variation #<?= (int)$v['Variation_Number'] ?> and ALL its stages, tasks, and removal flags?');">
+    <input type="hidden" name="action" value="drop_variation">
+    <input type="hidden" name="Variation_ID" value="<?= $vid ?>">
+    <input type="submit" class="danger" value="Drop Variation">
+  </form>
+  <div id="variation-<?= $vid ?>"></div>
 
   <?php foreach ($vstages as $vstage):
       $vsid = (int)$vstage['Project_Stage_ID'];
