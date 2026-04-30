@@ -345,7 +345,7 @@ window.onload = function () {
   <th style="width:130px">Project</th>
   <th style="width:0"></th><!-- hidden Invoice_No col -->
   <th style="width:245px">Task <span style="font-weight:normal;font-size:10px">(remaining hrs)</span></th>
-  <th style="width:80px">Notes</th>
+  <th style="width:150px">Notes</th>
   <?php for ($d = 0; $d < 7; $d++): ?>
     <th class="day-input">
       <?= $dayNames[$d] ?><br><?= $dayDates[$d] ?><br>
@@ -399,7 +399,7 @@ for ($a = 1; $a <= 30; $a++):
   <td><input <?= $locked ? 'disabled' : '' ?> type="text" name="Desc<?= $a ?>"
        value="<?= htmlspecialchars(($taskTid && isset($taskNameById[$taskTid]) && $taskNameById[$taskTid] === $taskTxt) ? '' : $taskTxt) ?>"
        class="desc-inp" placeholder="(notes)"
-       style="width:78px;font-size:11px"></td>
+       style="width:140px;font-size:11px"></td>
   <?php for ($d = 1; $d <= 7; $d++): ?>
     <td><input <?= $locked ? 'disabled' : '' ?> type="text" size="3"
          id="D<?= $d ?>_<?= $a ?>" name="D<?= $d ?>_<?= $a ?>"

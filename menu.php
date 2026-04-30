@@ -33,7 +33,7 @@ body  { background:#515559; font-family:-apple-system,BlinkMacSystemFont,"Segoe 
 <body>
 <div class="wrap">
   <div class="hdr">
-    <h1>CADViz – Main Menu Bloop</h1>
+    <h1>CADViz – Main Menu</h1>
     <span>Logged in as <strong><?= $user ?></strong> &nbsp;|&nbsp; <a href="logout.php">Logout</a></span>
   </div>
   <div class="body">
