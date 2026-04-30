@@ -1,0 +1,40 @@
+a:hover, a:focus {
+    color: #c4c70d;
+      
+}
+
+.navbar-default .navbar-nav > li > a:hover, .navbar-default .navbar-nav > li > a:focus {
+    color: #c4c70d;
+}
+
+.btn-success {
+
+    background: #c4c70d; 
+
+}
+
+ 
+.btn-primary {
+    color: #fff;
+    background: #8B8D09;
+    border-color: #c4c70d; /*set the color you want here*/
+}
+.btn-primary:hover, .btn-primary:focus, .btn-primary:active, .btn-primary.active, .open>.dropdown-toggle.btn-primary {
+    color: #fff;
+    background: #c4c70d;
+    border-color: #c4c70d; /*set the color you want here*/
+}
+ 
+
+.btn-warning {
+
+    background: #c4c70d; 
+
+}
+
+
+.panel-primary>.panel-heading {
+
+    background: #8B8D09; 
+
+}

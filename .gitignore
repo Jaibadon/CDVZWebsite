@@ -8,11 +8,8 @@ include/
 templates/
 templates_c/
 tmp/
-pagestyles/
-styles/
 jsPDF/
-fonts/
-images/
+
 
 # Stray ASP files
 *.asp
