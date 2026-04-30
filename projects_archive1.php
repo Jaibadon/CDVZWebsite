@@ -11,8 +11,10 @@ if (empty($_SESSION['UserID'])) {
 
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Language" content="en-nz">
 <title>Project Archive - Full List </title>
+<link href="site.css" rel="stylesheet">
 <link href="global2.css" rel="stylesheet" type="text/css" />
 <basefont face="arial">
 <style type="text/css">

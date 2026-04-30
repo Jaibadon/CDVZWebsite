@@ -69,7 +69,9 @@ $grandSub   = 0.0;
 <html>
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title><?= $showMoney ? 'Fee Proposal — ' : 'Project Checklist — ' ?><?= htmlspecialchars($head['JobName'] ?? '') ?></title>
+<link href="site.css" rel="stylesheet">
 <style>
 @page { size: A4; margin: 18mm 16mm; }
 body  { font-family:Arial,sans-serif; font-size:11px; color:#000; margin:0; padding:18px; }

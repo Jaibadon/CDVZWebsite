@@ -12,7 +12,9 @@ $pdo = get_db();
 <html>
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=windows-1252">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Language" content="en-nz">
+<link href="site.css" rel="stylesheet">
 <link href="global.css" rel="stylesheet" type="text/css" />
 <title>More functions for <?= htmlspecialchars($_SESSION['UserID']) ?></title>
 <style type="text/css">

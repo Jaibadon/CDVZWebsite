@@ -21,7 +21,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
     exit;
 }
 
-$proj = $pdo->prepare("SELECT proj_id, JobName, Project_Type FROM Projects WHERE proj_id = ?");
+// ── Inline Project Description update
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_description') {
+    $description = $_POST['Job_Description'] ?? '';
+    $upd = $pdo->prepare("UPDATE Projects SET Job_Description = ? WHERE proj_id = ?");
+    $upd->execute([$description, $proj_id]);
+    header('Location: project_stages.php?proj_id=' . $proj_id);
+    exit;
+}
+
+$proj = $pdo->prepare("SELECT proj_id, JobName, Project_Type, Job_Description FROM Projects WHERE proj_id = ?");
 $proj->execute([$proj_id]);
 $proj = $proj->fetch();
 if (!$proj) die('Project not found');
@@ -74,6 +83,18 @@ ob_start();
       <?php endforeach; ?>
     </select>
     <noscript><input type="submit" value="Save"></noscript>
+  </form>
+
+  <!-- Project Description -->
+  <form method="post" style="display:block;margin:10px 0;">
+    <input type="hidden" name="action" value="update_description">
+    <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
+    <strong>Project Description:</strong>
+    <textarea name="Job_Description" 
+              style="display:block;width:100%;min-height:80px;margin:5px 0;padding:8px;font-family:Arial,sans-serif;font-size:13px;border:1px solid #ccc;border-radius:3px;"
+              placeholder="Enter project description..."><?= htmlspecialchars($proj['Job_Description'] ?? '') ?></textarea>
+    <input type="submit" value="Save Description" 
+           style="background:#555;color:#fff;border:none;padding:5px 10px;border-radius:3px;cursor:pointer">
   </form>
 
   <!-- Templates for this project type -->

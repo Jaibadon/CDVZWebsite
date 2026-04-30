@@ -53,7 +53,9 @@ $projectTypes = $pdo->query("SELECT Project_Type_ID, Project_Type_Name FROM Proj
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Project Templates</title>
+<link href="site.css" rel="stylesheet">
 <link href="global.css" rel="stylesheet">
 <style>
 body { background:#EBEBEB; font-family:Arial,sans-serif; padding:20px; }

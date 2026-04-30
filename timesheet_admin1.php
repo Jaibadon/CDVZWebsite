@@ -38,7 +38,9 @@ function populateUserBox($pdo) {
 <head>
 <meta http-equiv="Window-target" content="_top">
 <meta http-equiv="Content-Type" content="text/html; charset=iso-8859-1">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Timesheet Reporting</title>
+<link href="site.css" rel="stylesheet">
 <link rel="stylesheet" href="global.css" type="text/css">
 </head>
 <body bgcolor="#515559">

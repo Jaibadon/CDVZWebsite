@@ -75,7 +75,9 @@ $staff = $pdo->query("SELECT Employee_ID, Login, `First Name` FROM Staff ORDER B
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Set Staff Password</title>
+<link href="site.css" rel="stylesheet">
 <style>
 body { font-family:Arial,sans-serif; padding:30px; background:#eee; }
 form { background:#fff; padding:20px; border-radius:4px; max-width:400px; }

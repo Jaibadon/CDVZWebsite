@@ -9,11 +9,13 @@ $isAdmin = in_array($_SESSION['UserID'], ['erik', 'jen'], true)
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>CADViz – Main Menu</title>
+<link href="site.css" rel="stylesheet">
 <link href="global.css" rel="stylesheet" type="text/css">
 <link href="global2.css" rel="stylesheet" type="text/css">
 <style>
-body  { background:#515559; font-family:Arial,sans-serif; margin:0; padding:20px; }
+body  { background:#515559; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; margin:0; padding:20px; }
 .wrap { max-width:700px; margin:30px auto; background:#EBEBEB; border-radius:4px; overflow:hidden; }
 .hdr  { background:#9B9B1B; color:#fff; padding:14px 20px; display:flex; justify-content:space-between; align-items:center; }
 .hdr h1 { margin:0; font-size:18px; }
@@ -71,6 +73,7 @@ body  { background:#515559; font-family:Arial,sans-serif; margin:0; padding:20px
       <a class="btn secondary" href="more.php">More&hellip;</a>
       <a class="btn secondary" href="staff_hours.php">Staff Hours</a>
       <a class="btn secondary" href="monthly_invoicing.php">Monthly Invoicing</a>
+      <a class="btn secondary" href="task_analytics.php">Task Analytics</a>
     </div>
     <?php endif; ?>
 

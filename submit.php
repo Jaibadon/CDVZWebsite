@@ -66,7 +66,27 @@ if ($locked === "true") {
         $nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
         $nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
 
-        $insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_ID, TS_DATE, Employee_id, proj_id, Task, Hours, Invoice_No) VALUES (?, ?, ?, ?, ?, ?, 0)");
+        // INSERT now persists Task_Type_ID alongside the legacy Task text.
+        // If the column doesn't exist yet (migration not run), fall back to
+        // the old INSERT shape automatically.
+        $hasTaskTypeId = false;
+        try {
+            $col = $pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Task_Type_ID'")->fetch();
+            $hasTaskTypeId = !empty($col);
+        } catch (Exception $e) { /* ignore */ }
+
+        if ($hasTaskTypeId) {
+            $insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_ID, TS_DATE, Employee_id, proj_id, Task, Task_Type_ID, Hours, Invoice_No) VALUES (?, ?, ?, ?, ?, ?, ?, 0)");
+        } else {
+            $insStmt = $pdo->prepare("INSERT INTO Timesheets (TS_ID, TS_DATE, Employee_id, proj_id, Task, Hours, Invoice_No) VALUES (?, ?, ?, ?, ?, ?, 0)");
+        }
+
+        // Build a Task_ID → Task_Name lookup so we can derive a description
+        // from the picked task type when the user didn't type a custom one.
+        $taskNameLookup = [];
+        foreach ($pdo->query("SELECT Task_ID, Task_Name FROM Tasks_Types")->fetchAll() as $tt) {
+            $taskNameLookup[(int)$tt['Task_ID']] = $tt['Task_Name'];
+        }
 
         for ($a = 1; $a <= 40; $a++) {
             if (!isset($_POST['Project' . $a])
@@ -74,6 +94,12 @@ if ($locked === "true") {
                 || ($_POST['Invoice_No' . $a] ?? '') !== "0") {
                 continue;
             }
+
+            // New: per-row Task_Type_ID (from the grouped task dropdown in main.php)
+            $taskTypeId = isset($_POST['Task' . $a]) && $_POST['Task' . $a] !== ''
+                ? (int)$_POST['Task' . $a]
+                : null;
+
             for ($b = 1; $b <= 7; $b++) {
                 $dayKey = "D" . $b . "_" . $a;
                 if (!isset($_POST[$dayKey]) || $_POST[$dayKey] === "") continue;
@@ -81,13 +107,19 @@ if ($locked === "true") {
                 $hours = (float)$_POST[$dayKey];
                 $totaltime += $hours;
 
+                // Description: optional notes override, else fall back to the
+                // task name from Task_Type_ID, else the legacy Desc field.
                 $descKey = "Desc" . $a;
                 if (!isset($_POST[$descKey]) || $_POST[$descKey] === "") {
                     $descKey = "desc" . $a;
                 }
-                if (!isset($_POST[$descKey]) || $_POST[$descKey] === "") {
+                $desc = (isset($_POST[$descKey]) && $_POST[$descKey] !== '')
+                    ? $_POST[$descKey]
+                    : ($taskTypeId !== null && isset($taskNameLookup[$taskTypeId]) ? $taskNameLookup[$taskTypeId] : '');
+
+                if ($desc === '' && $taskTypeId === null) {
                     if (!$errorShown) {
-                        echo "<font face=tahoma size=2 color=red><br><hr>There was an error in your submission.  Hit the back button and correct your data.<br>Remember you MUST fill in a description.<br><hr></font>";
+                        echo "<font face=tahoma size=2 color=red><br><hr>There was an error in your submission.  Hit the back button and correct your data.<br>Remember you MUST pick a Task or fill in a description.<br><hr></font>";
                         $errorShown = true;
                     }
                     $error = "not cool";
@@ -96,10 +128,13 @@ if ($locked === "true") {
 
                 $tsDate = date('Y-m-d', strtotime("+" . ($b - 1) . " days", strtotime($weekStart)));
                 $projId = (int)$_POST['Project' . $a];
-                $desc   = $_POST[$descKey];
                 $empId  = (int)$_SESSION['Employee_id'];
 
-                $insStmt->execute([$nextTsId, $tsDate, $empId, $projId, $desc, $hours]);
+                if ($hasTaskTypeId) {
+                    $insStmt->execute([$nextTsId, $tsDate, $empId, $projId, $desc, $taskTypeId, $hours]);
+                } else {
+                    $insStmt->execute([$nextTsId, $tsDate, $empId, $projId, $desc, $hours]);
+                }
                 $nextTsId++;
             }
         }

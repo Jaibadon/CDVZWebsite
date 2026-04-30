@@ -21,10 +21,81 @@ $weekEnd   = date('Y-m-d', strtotime('+6 days', strtotime($weekStart)));
 $projStmt = $pdo->query("SELECT proj_id, JobName, active FROM Projects ORDER BY JobName");
 $PROJECTS = $projStmt->fetchAll();
 
+// ── Detect whether the new Task_Type_ID column exists ──────────────────────
+$hasTaskTypeId = false;
+try {
+    $hasTaskTypeId = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Task_Type_ID'")->fetch();
+} catch (Exception $e) { /* ignore */ }
+
+// ── Build per-project task list with estimated/logged/remaining hours ──────
+// JSON-encoded for the JS dropdown populator.
+$projectTasks = [];  // proj_id => [ {tid, name, stage, est, logged, remaining}, ... ]
+$taskNameById = [];  // task_id => task_name (for legacy backfill)
+
+$ptStmt = $pdo->query(
+    "SELECT ps.Proj_ID, pt.Task_Type_ID, tt.Task_Name, st.Stage_Type_Name,
+            SUM(tt.Estimated_Time * pt.Weight * ps.Weight) AS estimated
+       FROM Project_Tasks pt
+       JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
+       JOIN Tasks_Types tt   ON pt.Task_Type_ID = tt.Task_ID
+       LEFT JOIN Stage_Types st ON tt.Stage_ID = st.Stage_Type_ID
+      GROUP BY ps.Proj_ID, pt.Task_Type_ID"
+);
+foreach ($ptStmt->fetchAll() as $r) {
+    $pid = (int)$r['Proj_ID'];
+    $tid = (int)$r['Task_Type_ID'];
+    $taskNameById[$tid] = $r['Task_Name'];
+    $projectTasks[$pid][$tid] = [
+        'tid'       => $tid,
+        'name'      => $r['Task_Name'],
+        'stage'     => $r['Stage_Type_Name'] ?: 'Other',
+        'est'       => (float)$r['estimated'],
+        'logged'    => 0.0,
+        'remaining' => (float)$r['estimated'],
+    ];
+}
+
+// Sum already-logged hours per (proj, task) — prefer Task_Type_ID, fall back
+// to text match for legacy rows.
+if ($hasTaskTypeId) {
+    $loggedStmt = $pdo->query(
+        "SELECT proj_id, Task_Type_ID, LOWER(TRIM(Task)) AS task_key, SUM(Hours) AS hrs
+           FROM Timesheets
+          WHERE Hours > 0
+          GROUP BY proj_id, Task_Type_ID, LOWER(TRIM(Task))"
+    );
+} else {
+    $loggedStmt = $pdo->query(
+        "SELECT proj_id, NULL AS Task_Type_ID, LOWER(TRIM(Task)) AS task_key, SUM(Hours) AS hrs
+           FROM Timesheets
+          WHERE Hours > 0
+          GROUP BY proj_id, LOWER(TRIM(Task))"
+    );
+}
+$nameKeyToId = [];
+foreach ($taskNameById as $tid => $nm) $nameKeyToId[strtolower(trim($nm))] = $tid;
+
+foreach ($loggedStmt->fetchAll() as $r) {
+    $pid = (int)$r['proj_id'];
+    $tid = $r['Task_Type_ID'] !== null ? (int)$r['Task_Type_ID'] : ($nameKeyToId[$r['task_key']] ?? null);
+    if (!$tid || !isset($projectTasks[$pid][$tid])) continue;
+    $projectTasks[$pid][$tid]['logged']    += (float)$r['hrs'];
+    $projectTasks[$pid][$tid]['remaining'] = $projectTasks[$pid][$tid]['est'] - $projectTasks[$pid][$tid]['logged'];
+}
+
+// Reshape to indexed arrays for clean JSON, sorted by stage then name
+$projectTasksJs = [];
+foreach ($projectTasks as $pid => $tasks) {
+    $arr = array_values($tasks);
+    usort($arr, fn($a,$b) => [$a['stage'],$a['name']] <=> [$b['stage'],$b['name']]);
+    $projectTasksJs[(string)$pid] = $arr;
+}
+
 // ── Load timesheet rows for this employee & week ───────────────────────────
 $empId = $_SESSION['Employee_id'] ?? 0;
+$ttCol = $hasTaskTypeId ? 'Task_Type_ID' : 'NULL AS Task_Type_ID';
 $tsStmt = $pdo->prepare(
-    "SELECT proj_id, TS_ID, TS_DATE, Task, Hours, Invoice_No
+    "SELECT proj_id, TS_ID, TS_DATE, Task, $ttCol, Hours, Invoice_No
        FROM Timesheets
       WHERE Employee_id = ?
         AND TS_DATE BETWEEN ? AND ?
@@ -38,22 +109,22 @@ $tsRows = $tsStmt->fetchAll();
     exit;
 }
 
-// ── Build a keyed structure: TS_ID → [proj, task, invoice, days[1..7], tot]
-// Group by (proj_id, task) so multiple days roll up per task row
-$taskMap = [];       // key = "proj_id|task"
+// ── Build keyed structure: group by (proj_id, task_type_id OR task text)
+$taskMap = [];
 foreach ($tsRows as $r) {
-    $key = $r['proj_id'] . '|' . $r['Task'];
+    $tid = $r['Task_Type_ID'] !== null ? (int)$r['Task_Type_ID'] : null;
+    $key = $r['proj_id'] . '|' . ($tid !== null ? "T$tid" : 'X' . strtolower(trim($r['Task'])));
     if (!isset($taskMap[$key])) {
         $taskMap[$key] = [
-            'proj_id'    => $r['proj_id'],
-            'task'       => $r['Task'],
-            'invoice_no' => $r['Invoice_No'],
-            'ts_id'      => $r['TS_ID'],
-            'days'       => array_fill(1, 7, ''),
-            'tot'        => 0,
+            'proj_id'      => $r['proj_id'],
+            'task'         => $r['Task'],
+            'task_type_id' => $tid,
+            'invoice_no'   => $r['Invoice_No'],
+            'ts_id'        => $r['TS_ID'],
+            'days'         => array_fill(1, 7, ''),
+            'tot'          => 0,
         ];
     }
-    // day-of-week 1=Mon … 7=Sun
     $dow = (int) date('N', strtotime($r['TS_DATE']));
     $taskMap[$key]['days'][$dow] = ($taskMap[$key]['days'][$dow] !== '')
         ? $taskMap[$key]['days'][$dow] + $r['Hours']
@@ -84,7 +155,9 @@ $isAdmin = in_array($_SESSION['UserID'], ['erik','jen'], true);
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Timesheet – <?= htmlspecialchars($_SESSION['UserID']) ?></title>
+<link href="site.css" rel="stylesheet">
 <link href="global.css" rel="stylesheet">
 <style>
 body  { background:#515559; font-family:Arial,sans-serif; font-size:12px; margin:0; padding:10px; }
@@ -94,10 +167,11 @@ table { border-collapse:collapse; }
 input[type=text] { font-size:11px; box-sizing:border-box; }
 input[type=text].day-input,
 input[type=text].tot-inp { padding:1px; }
-.tbl-main { width:660px; margin:0 auto; table-layout:fixed; }
+.tbl-main { width:780px; margin:0 auto; table-layout:fixed; }
 .tbl-main td, .tbl-main th { padding:2px 2px; overflow:hidden; }
 .day-input { width:34px; text-align:center; }
 .proj-sel  { width:128px; box-sizing:border-box; }
+.task-sel  { width:240px; box-sizing:border-box; font-size:11px; }
 .desc-inp  { width:198px; box-sizing:border-box; }
 .tot-inp   { width:34px; background:#ddd; }
 th { background:#9B9B1B; color:#fff; font-size:11px; }
@@ -143,6 +217,56 @@ function OnLostFocusTest(el) {
     }
     document.submit_form.elements['VTotal_8'].value = tot.toFixed(2);
 }
+// Per-project task list keyed by proj_id → list of {tid, name, stage, est, logged, remaining}
+window.PROJECT_TASKS = <?= json_encode($projectTasksJs, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
+
+function populateTaskSelect(rowIdx, projId, currentTid) {
+    var sel = document.querySelector('select[name="Task' + rowIdx + '"]');
+    if (!sel || sel.disabled) return;
+    sel.innerHTML = '<option value="">-- pick task --</option>';
+    var tasks = (window.PROJECT_TASKS && window.PROJECT_TASKS[projId]) || [];
+    if (tasks.length === 0) return;
+    var groups = {};
+    tasks.forEach(function(t) {
+        if (!groups[t.stage]) groups[t.stage] = [];
+        groups[t.stage].push(t);
+    });
+    Object.keys(groups).forEach(function(stageName) {
+        var og = document.createElement('optgroup');
+        og.label = stageName;
+        groups[stageName].forEach(function(t) {
+            var opt = document.createElement('option');
+            opt.value = t.tid;
+            var rem = (typeof t.remaining === 'number') ? t.remaining : (t.est - t.logged);
+            var label = t.name + ' (' + rem.toFixed(1) + 'h left of ' + t.est.toFixed(1) + 'h)';
+            opt.textContent = label;
+            if (rem < 0) opt.style.color = '#a00';
+            else if (rem < 1) opt.style.color = '#a60';
+            og.appendChild(opt);
+        });
+        sel.appendChild(og);
+    });
+    if (currentTid) sel.value = String(currentTid);
+}
+
+function initTaskSelects() {
+    document.querySelectorAll('select.proj-sel').forEach(function(projSel) {
+        var rowIdx = projSel.name.replace('Project','');
+        // Initial populate for rows with project pre-selected
+        if (projSel.value) {
+            var sel = document.querySelector('select[name="Task' + rowIdx + '"]');
+            var pre = sel ? (sel.dataset.currentTid || '') : '';
+            populateTaskSelect(rowIdx, projSel.value, pre);
+        }
+        projSel.addEventListener('change', function() {
+            populateTaskSelect(rowIdx, projSel.value, '');
+        });
+    });
+}
+
+window.addEventListener('DOMContentLoaded', initTaskSelects);
+
+var _origOnload = window.onload;
 window.onload = function () {
     // Recalculate column totals on load
     for (var c = 1; c <= 7; c++) {
@@ -220,7 +344,8 @@ window.onload = function () {
 <tr>
   <th style="width:130px">Project</th>
   <th style="width:0"></th><!-- hidden Invoice_No col -->
-  <th style="width:200px">Description</th>
+  <th style="width:245px">Task <span style="font-weight:normal;font-size:10px">(remaining hrs)</span></th>
+  <th style="width:80px">Notes</th>
   <?php for ($d = 0; $d < 7; $d++): ?>
     <th class="day-input">
       <?= $dayNames[$d] ?><br><?= $dayDates[$d] ?><br>
@@ -233,13 +358,18 @@ window.onload = function () {
 <?php
 // Build up to 30 rows
 for ($a = 1; $a <= 30; $a++):
-    $tr      = $taskRows[$a - 1] ?? null;
-    $projVal = $tr ? $tr['proj_id']    : '';
-    $descVal = $tr ? $tr['task']       : '';
-    $invNo   = $tr ? $tr['invoice_no'] : 0;
-    $tot     = $tr ? $tr['tot']        : 0;
-    $days    = $tr ? $tr['days']       : array_fill(1, 7, '');
-    $locked  = ($invNo != 0);
+    $tr        = $taskRows[$a - 1] ?? null;
+    $projVal   = $tr ? $tr['proj_id']      : '';
+    $taskTid   = $tr ? (int)($tr['task_type_id'] ?? 0) : 0;
+    $taskTxt   = $tr ? $tr['task']         : '';
+    $invNo     = $tr ? $tr['invoice_no']   : 0;
+    $tot       = $tr ? $tr['tot']          : 0;
+    $days      = $tr ? $tr['days']         : array_fill(1, 7, '');
+    $locked    = ($invNo != 0);
+    // If row has legacy text but no task_type_id, try to resolve via name lookup
+    if (!$taskTid && $taskTxt !== '' && isset($nameKeyToId[strtolower(trim($taskTxt))])) {
+        $taskTid = $nameKeyToId[strtolower(trim($taskTxt))];
+    }
 ?>
 <tr>
   <td>
@@ -256,9 +386,20 @@ for ($a = 1; $a <= 30; $a++):
     </select>
   </td>
   <td><input type="hidden" name="Invoice_No<?= $a ?>" value="<?= (int)$invNo ?>"></td>
-  <td><input <?= $locked ? 'disabled' : '' ?> type="text" size="30" name="Desc<?= $a ?>"
-       value="<?= htmlspecialchars($descVal) ?>" class="desc-inp"
-       onkeypress="if(event.keyCode===39)event.returnValue=false;"></td>
+  <td>
+    <select <?= $locked ? 'disabled' : '' ?> name="Task<?= $a ?>" class="task-sel"
+            data-current-tid="<?= (int)$taskTid ?>"
+            data-row="<?= $a ?>">
+      <option value="">-- pick task --</option>
+      <?php if ($locked && $taskTxt !== ''): ?>
+        <option value="<?= (int)$taskTid ?>" selected><?= htmlspecialchars($taskTxt) ?></option>
+      <?php endif; ?>
+    </select>
+  </td>
+  <td><input <?= $locked ? 'disabled' : '' ?> type="text" name="Desc<?= $a ?>"
+       value="<?= htmlspecialchars(($taskTid && isset($taskNameById[$taskTid]) && $taskNameById[$taskTid] === $taskTxt) ? '' : $taskTxt) ?>"
+       class="desc-inp" placeholder="(notes)"
+       style="width:78px;font-size:11px"></td>
   <?php for ($d = 1; $d <= 7; $d++): ?>
     <td><input <?= $locked ? 'disabled' : '' ?> type="text" size="3"
          id="D<?= $d ?>_<?= $a ?>" name="D<?= $d ?>_<?= $a ?>"

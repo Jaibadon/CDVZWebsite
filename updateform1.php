@@ -87,8 +87,10 @@ $archiveUsers = ['erik', 'jen', 'Craig', 'Dylan', 'Leilani'];
 <html>
 <head>
 <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Language" content="en-nz">
 <title>Active Projects for <?php echo htmlspecialchars($userID); ?></title>
+<link href="site.css" rel="stylesheet">
 <basefont face="arial">
 <style type="text/css">
 .style1 { text-align: left; }

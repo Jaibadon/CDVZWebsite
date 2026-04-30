@@ -8,7 +8,9 @@ $pdo = get_db();
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Timesheet Reports</title>
+<link href="site.css" rel="stylesheet">
 <link rel="stylesheet" href="global.css">
 <style>
 body { background:#515559; font-family:Arial,sans-serif; margin:0; padding:20px; }
