@@ -90,7 +90,56 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         }
 
         $pdo->commit();
-        $success = "Variation #$vnum submitted. Erik/Jen will review.";
+        $success = "Variation #$vnum submitted. Erik/Jen will review (email sent).";
+
+        // ── Email notification to Erik ──────────────────────────────────
+        // Best-effort: failure is logged but doesn't break the variation.
+        try {
+            $jobName = (string)$pdo->prepare("SELECT JobName FROM Projects WHERE proj_id = ?")
+                ->execute([$projId]);
+            $st = $pdo->prepare("SELECT JobName FROM Projects WHERE proj_id = ?");
+            $st->execute([$projId]);
+            $jobName = (string)$st->fetchColumn();
+
+            $totalHrs = 0;
+            foreach ($rowsToInsert as $r) $totalHrs += (float)$r['hours'];
+
+            $host = $_SERVER['HTTP_HOST'] ?? 'cadviz.co.nz';
+            $scheme = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') ? 'https' : 'http';
+            $reviewUrl = "{$scheme}://{$host}/project_stages.php?proj_id={$projId}#variation-{$variationId}";
+
+            $to = 'erik@cadviz.co.nz';
+            $subject = "[CADViz] Unapproved variation #{$vnum} \xE2\x80\x94 " . $jobName;
+            $bodyLines = [
+                "An unapproved variation was just submitted by {$user}.",
+                "",
+                "Project:       {$jobName} (#{$projId})",
+                "Variation #:   {$vnum}",
+                "Title:         {$title}",
+                "Tasks:         " . count($rowsToInsert) . " task(s), " . number_format($totalHrs, 2) . "h estimated",
+                "Submitted by:  {$user} (Employee #{$empId})",
+                "Submitted at:  " . date('Y-m-d H:i'),
+                "",
+                "Description:",
+                ($desc !== '' ? $desc : '(none)'),
+                "",
+                "Review and approve / reject in the project stages editor:",
+                $reviewUrl,
+                "",
+                "-- CADViz timesheet system",
+            ];
+            $body = implode("\r\n", $bodyLines);
+
+            $headers = [
+                'From: noreply@' . preg_replace('/[^a-z0-9\.\-]/i', '', $host),
+                'Reply-To: ' . $user . '@cadviz.co.nz',
+                'X-Mailer: CADViz/PHP',
+                'Content-Type: text/plain; charset=utf-8',
+            ];
+            @mail($to, $subject, $body, implode("\r\n", $headers));
+        } catch (Exception $mailErr) {
+            error_log('Variation email failed: ' . $mailErr->getMessage());
+        }
     } catch (Exception $e) {
         if ($pdo->inTransaction()) $pdo->rollBack();
         $err = $e->getMessage();

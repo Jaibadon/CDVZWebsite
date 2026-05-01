@@ -1,9 +1,28 @@
 <?php
 require_once 'auth_check.php';
+require_once 'db_connect.php';
 
 $user    = htmlspecialchars($_SESSION['UserID']);
 $isAdmin = in_array($_SESSION['UserID'], ['erik', 'jen'], true)
            || (!empty($_SESSION['AccessLevel']) && $_SESSION['AccessLevel'] >= 9);
+
+// Pending unapproved variations (admin alert)
+$pendingVariations = [];
+if ($isAdmin) {
+    try {
+        $pdo = get_db();
+        $st = $pdo->query(
+            "SELECT v.Variation_ID, v.Proj_ID, v.Variation_Number, v.Title, v.Status, v.Date_Created,
+                    v.Created_By, p.JobName, s.Login AS CreatedByLogin
+               FROM Project_Variations v
+               LEFT JOIN Projects p ON v.Proj_ID = p.proj_id
+               LEFT JOIN Staff s ON v.Created_By = s.Employee_ID
+              WHERE v.Status IN ('unapproved','draft')
+              ORDER BY v.Date_Created DESC, v.Variation_ID DESC"
+        );
+        $pendingVariations = $st->fetchAll();
+    } catch (Exception $e) { /* table may not exist if migration not run */ }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -44,6 +63,30 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
     <span>Logged in as <strong><?= $user ?></strong> &nbsp;|&nbsp; <a href="logout.php">Logout</a></span>
   </div>
   <div class="body">
+
+    <?php if ($isAdmin && !empty($pendingVariations)): ?>
+    <div style="background:#fff3cd;border:2px solid #c33;border-radius:4px;padding:12px 16px;margin-bottom:16px">
+      <h3 style="margin:0 0 6px;color:#c33;border:none">
+        ⚠ <?= count($pendingVariations) ?> unapproved variation<?= count($pendingVariations) === 1 ? '' : 's' ?> waiting for review
+      </h3>
+      <ul style="margin:6px 0 0;padding-left:18px;font-size:13px">
+        <?php foreach ($pendingVariations as $pv): ?>
+          <li>
+            <a href="project_stages.php?proj_id=<?= (int)$pv['Proj_ID'] ?>#variation-<?= (int)$pv['Variation_ID'] ?>"
+               style="color:#c33;font-weight:bold">
+              <?= htmlspecialchars($pv['JobName'] ?? 'Project #' . (int)$pv['Proj_ID']) ?>
+              — Variation #<?= (int)$pv['Variation_Number'] ?>: <?= htmlspecialchars($pv['Title'] ?? '') ?>
+            </a>
+            <span style="color:#666;font-size:11px">
+              [<?= htmlspecialchars($pv['Status']) ?>]
+              <?php if ($pv['CreatedByLogin']): ?>by <?= htmlspecialchars($pv['CreatedByLogin']) ?><?php endif; ?>
+              <?php if ($pv['Date_Created']): ?>· <?= date('d/m/Y', strtotime($pv['Date_Created'])) ?><?php endif; ?>
+            </span>
+          </li>
+        <?php endforeach; ?>
+      </ul>
+    </div>
+    <?php endif; ?>
 
     <h3>Timesheet</h3>
     <div class="grid">
