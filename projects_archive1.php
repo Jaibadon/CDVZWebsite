@@ -94,7 +94,11 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $finalDt = $row['Final_Date'] ?? '';
 
     echo "<br>";
-    echo "<a href=\"updateform_admin1.php?proj_id=" . htmlspecialchars((string)$projId) . "\">";
+    $isAdminUser = in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true);
+    $linkHref = $isAdminUser
+        ? "updateform_admin1.php?proj_id=" . htmlspecialchars((string)$projId)
+        : "my_checklist.php?proj_id=" . htmlspecialchars((string)$projId);
+    echo "<a href=\"$linkHref\">";
     echo htmlspecialchars((string)$jobName);
     echo "</a>";
     echo "&nbsp;&nbsp;";

@@ -113,7 +113,11 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $status   = ci($row, 'Status');
 
     echo "<br>";
-    echo "<a href=\"updateform_admin1.php?proj_id=" . htmlspecialchars((string)$projId) . "\">";
+    $isAdminUser = in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true);
+    $linkHref = $isAdminUser
+        ? "updateform_admin1.php?proj_id=" . htmlspecialchars((string)$projId)
+        : "my_checklist.php?proj_id=" . htmlspecialchars((string)$projId);
+    echo "<a href=\"$linkHref\">";
     echo htmlspecialchars((string)$jobName);
     echo "</a>";
     echo "&nbsp;&nbsp;&nbsp;-&nbsp;&nbsp;&nbsp;Priority:&nbsp;";

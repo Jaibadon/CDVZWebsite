@@ -14,6 +14,11 @@ $pdo  = get_db();
 $empId = (int)($_SESSION['Employee_id'] ?? 0);
 $user  = $_SESSION['UserID'] ?? '';
 
+// ?proj_id=X filters to a single project (used by per-project print button
+// and by the link from projects.php for staff).
+$singleProjId = (int)($_GET['proj_id'] ?? 0);
+$autoPrint    = !empty($_GET['print']);
+
 // Detect variation columns
 $hasVariations = false;
 try {
@@ -22,18 +27,29 @@ try {
 
 $ptFilter = $hasVariations ? "AND COALESCE(pt.Is_Removed, 0) = 0" : '';
 
-// Projects this staff member is involved with
+// Projects this staff member is involved with.
+// When ?proj_id=X is set, narrow to just that project (still requires the
+// staff member to have a connection to it — admins bypass the connection check).
+$isAdminUser = in_array($user, ['erik','jen'], true);
+$projFilterSql = $singleProjId > 0 ? " AND p.proj_id = :pid" : '';
+$peopleFilter = $isAdminUser
+    ? ''  // admins see any project
+    : "AND (p.Manager = :e OR p.DP1 = :e OR p.DP2 = :e OR p.DP3 = :e
+           OR p.proj_id IN (SELECT proj_id FROM Timesheets WHERE Employee_id = :e))";
+$activeFilter = $singleProjId > 0 ? '' : 'AND p.Active <> 0';  // single-project view shows even inactive
+
 $projsStmt = $pdo->prepare(
     "SELECT DISTINCT p.proj_id, p.JobName, p.Job_Description,
             mgr.Login AS ManagerLogin
        FROM Projects p
        LEFT JOIN Staff mgr ON p.Manager = mgr.Employee_ID
-      WHERE p.Active <> 0
-        AND (p.Manager = :e OR p.DP1 = :e OR p.DP2 = :e OR p.DP3 = :e
-             OR p.proj_id IN (SELECT proj_id FROM Timesheets WHERE Employee_id = :e))
+      WHERE 1=1 $activeFilter $projFilterSql $peopleFilter
       ORDER BY p.JobName"
 );
-$projsStmt->execute([':e' => $empId]);
+$bind = [];
+if ($singleProjId > 0) $bind[':pid'] = $singleProjId;
+if (!$isAdminUser) $bind[':e'] = $empId;
+$projsStmt->execute($bind);
 $projects = $projsStmt->fetchAll();
 
 // All tasks for those projects with computed hours remaining
@@ -154,11 +170,15 @@ td { padding:3px 6px; border-bottom:1px solid #eee; vertical-align:top; }
 
 <div class="no-print">
   <a href="menu.php">&larr; Main Menu</a> &nbsp;|&nbsp;
-  <a href="main.php">Timesheet</a> &nbsp;|&nbsp;
+  <a href="main.php">Timesheet</a>
+  <?php if ($singleProjId > 0): ?>
+    &nbsp;|&nbsp; <a href="my_checklist.php">All my projects</a>
+  <?php endif; ?>
+  &nbsp;|&nbsp;
   <button onclick="window.print()" style="padding:5px 12px;background:#9B9B1B;color:#fff;border:none;border-radius:3px;cursor:pointer">🖨 Print / Save as PDF</button>
 </div>
 
-<h1>My Project Checklist — <?= htmlspecialchars($user) ?></h1>
+<h1><?= $singleProjId > 0 ? 'Project Checklist' : 'My Project Checklist' ?> — <?= htmlspecialchars($user) ?></h1>
 <p style="color:#555">Generated <?= date('d/m/Y H:i') ?>. Tasks <strong>highlighted</strong> are assigned to you.
 Variation tasks appear in italic; <span style="color:#c33">unapproved variations</span> show in red.
 Click a project heading to collapse/expand. Printing always shows everything.</p>
@@ -175,7 +195,7 @@ Click a project heading to collapse/expand. Printing always shows everything.</p
 
 <?php foreach ($projects as $p): $pid = (int)$p['proj_id']; $tasks = $tasksByProject[$pid] ?? []; $tot = $projTotals[$pid] ?? ['est'=>0,'logged'=>0,'remaining'=>0,'mine_remaining'=>0]; ?>
 <div class="proj-card" id="proj-<?= $pid ?>">
-  <h2 style="margin-top:0" onclick="this.parentElement.classList.toggle('collapsed')">
+  <h2 style="margin-top:0" onclick="if(event.target.tagName!=='A')this.parentElement.classList.toggle('collapsed')">
     <?= htmlspecialchars($p['JobName']) ?>
     <span class="proj-totals <?= $tot['remaining'] < 0 ? 'over' : '' ?>">
       <?= number_format($tot['logged'],1) ?>h / <?= number_format($tot['est'],1) ?>h
@@ -184,6 +204,12 @@ Click a project heading to collapse/expand. Printing always shows everything.</p
         (<strong><?= number_format($tot['mine_remaining'],1) ?>h yours</strong>)
       <?php endif; ?>
     </span>
+    <?php if ($singleProjId === 0): ?>
+      <a href="my_checklist.php?proj_id=<?= $pid ?>&print=1" target="_blank"
+         class="no-print"
+         style="font-size:11px;background:#246;color:#fff !important;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:8px"
+         onclick="event.stopPropagation()">🖨 Print this project</a>
+    <?php endif; ?>
     <span class="toggle">▾</span>
   </h2>
   <div class="proj-body">
@@ -250,6 +276,11 @@ Click a project heading to collapse/expand. Printing always shows everything.</p
         }
     }
 })();
+
+<?php if ($autoPrint): ?>
+// Single-project print mode: open the print dialog after the page renders
+window.addEventListener('load', function() { setTimeout(function(){ window.print(); }, 300); });
+<?php endif; ?>
 </script>
 </body>
 </html>

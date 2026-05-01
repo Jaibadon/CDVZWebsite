@@ -7,6 +7,11 @@
 require_once 'auth_check.php';
 require_once 'db_connect.php';
 
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403);
+    die('Variation printouts are admin-only. Use <a href="my_checklist.php">My Project Checklist</a> instead.');
+}
+
 $pdo = get_db();
 $proj_id = (int)($_GET['proj_id'] ?? 0);
 if ($proj_id <= 0) die('Missing proj_id');
