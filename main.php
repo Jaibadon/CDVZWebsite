@@ -1,9 +1,16 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 try {
 $pdo = get_db();
+
+// Employed-staff full-week check (only for users in EMPLOYED_STAFF list)
+$mustFillFullWeek = is_employed_staff($_SESSION['UserID'] ?? '');
+$missingWeekdays = $mustFillFullWeek
+    ? missing_weekdays($pdo, (int)($_SESSION['Employee_id'] ?? 0), 4)
+    : [];
 
 // ── Week selection ──────────────────────────────────────────────────────────
 // Accept either 'week' or 'Week' (form fields posted from various pages)
@@ -369,11 +376,41 @@ window.onload = function () {
 </form>
 </div>
 
+<?php if ($mustFillFullWeek && !empty($missingWeekdays)):
+    // Group missing dates by week-starting Monday for readability
+    $byWeek = [];
+    foreach ($missingWeekdays as $d) {
+        $mon = date('Y-m-d', strtotime('monday this week', strtotime($d)));
+        $byWeek[$mon][] = date('D j M', strtotime($d));
+    }
+?>
+<div style="width:680px;margin:6px auto;background:#ffd6d6;border:2px solid #c33;border-radius:4px;padding:10px 14px;color:#a00">
+  <strong style="font-size:14px">⚠ <?= count($missingWeekdays) ?> weekday(s) not filled in the past 4 weeks</strong>
+  <div style="font-size:11px;margin-top:4px">
+    As a full-time staff member you must log every weekday — either with project tasks or with a leave / sick entry.
+    <strong>You cannot submit until these are filled.</strong>
+  </div>
+  <ul style="margin:6px 0 0;padding-left:18px;font-size:11px">
+    <?php foreach ($byWeek as $weekMon => $days): ?>
+      <li>Week of <?= date('D j M', strtotime($weekMon)) ?>:
+        <strong><?= htmlspecialchars(implode(', ', $days)) ?></strong>
+        &nbsp;<a href="main.php?week=<?= urlencode($weekMon) ?>" style="color:#a00;text-decoration:underline">Open this week</a>
+      </li>
+    <?php endforeach; ?>
+  </ul>
+</div>
+<?php endif; ?>
+
 <!-- ── Submit form ───────────────────────────────────────────────────────── -->
 <form action="submit.php" id="submit_form" name="submit_form" method="post" style="width:680px;margin:0 auto">
 <input type="hidden" name="hidden_week" value="<?= htmlspecialchars($weekStart) ?>">
 <div style="padding:4px 0">
-  <input type="submit" name="Submit" value="Submit Timesheet" style="padding:4px 14px;background:#9B9B1B;color:#fff;border:none;cursor:pointer;border-radius:3px">
+  <input type="submit" name="Submit" value="Submit Timesheet"
+         <?= ($mustFillFullWeek && !empty($missingWeekdays)) ? 'disabled title="Fill in all weekdays first"' : '' ?>
+         style="padding:4px 14px;background:<?= ($mustFillFullWeek && !empty($missingWeekdays)) ? '#999' : '#9B9B1B' ?>;color:#fff;border:none;cursor:<?= ($mustFillFullWeek && !empty($missingWeekdays)) ? 'not-allowed' : 'pointer' ?>;border-radius:3px">
+  <?php if ($mustFillFullWeek && !empty($missingWeekdays)): ?>
+    <span style="color:#a00;font-size:11px;margin-left:8px">Submit blocked — fill all missing weekdays above first.</span>
+  <?php endif; ?>
 </div>
 
 <div>

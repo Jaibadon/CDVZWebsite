@@ -14,11 +14,17 @@ if ($proj_id <= 0) die('Missing proj_id');
 $showMoney = !isset($_GET['nomoney']);  // checklist.php sets this
 $originalOnly = !empty($_GET['original_only']);  // hide variations section
 
+// Detect fixed-price columns
+$hasFixedPrice = false;
+try { $hasFixedPrice = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Quote_Type'")->fetch(); } catch (Exception $e) {}
+$fpCols = $hasFixedPrice ? ', p.Quote_Type, p.Fixed_Price, p.Fixed_Margin_Pct' : ", NULL AS Quote_Type, NULL AS Fixed_Price, NULL AS Fixed_Margin_Pct";
+
 // ── Project + client header ───────────────────────────────────────────────
 $h = $pdo->prepare(
     "SELECT p.proj_id, p.JobName, p.Job_Address, p.Job_Description, p.Project_Type,
             c.Client_Name, c.Multiplier,
             ptype.Project_Type_Name
+            $fpCols
        FROM Projects p
        LEFT JOIN Clients       c     ON p.Client_ID    = c.Client_id
        LEFT JOIN Project_Types ptype ON p.Project_Type = ptype.Project_Type_ID
@@ -119,6 +125,10 @@ if ($hasVariations && !$originalOnly) {
 
 $grandHours = 0.0;
 $grandSub   = 0.0;
+
+$isFixedPrice = ($head['Quote_Type'] ?? '') === 'fixed';
+$fixedPrice   = (float)($head['Fixed_Price'] ?? 0);
+$fixedMargin  = (float)($head['Fixed_Margin_Pct'] ?? 12.5);
 ?>
 <!DOCTYPE html>
 <html>
@@ -186,13 +196,33 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
   </div>
 </div>
 
-<h1><?= $showMoney ? 'Fee Proposal / Estimate of Costs' : 'Project Checklist' ?></h1>
+<h1><?= $showMoney
+    ? ($isFixedPrice ? 'Fee Proposal / Fixed-Price Quote' : 'Fee Proposal / Estimate of Costs')
+    : 'Project Checklist' ?></h1>
 
 <div class="field"><label>Client Name</label><div class="v"><?= htmlspecialchars($head['Client_Name'] ?? '') ?></div></div>
 <div class="field"><label>Job Name</label><div class="v"><?= htmlspecialchars($head['JobName'] ?? '') ?></div></div>
 <div class="field"><label>Job Address</label><div class="v" style="min-height:32px"><?= nl2br(htmlspecialchars($head['Job_Address'] ?? '')) ?></div></div>
 <div class="field"><label>Project Type</label><div class="v"><?= htmlspecialchars($head['Project_Type_Name'] ?? '') ?></div></div>
 <div class="field"><label>Job Description / Scope of Works</label><div class="v" style="min-height:50px"><?= nl2br(htmlspecialchars($head['Job_Description'] ?? '')) ?></div></div>
+
+<?php if ($isFixedPrice && $showMoney): ?>
+<!-- ── Fixed-price (lump sum) quote line ─────────────────────────────── -->
+<p style="margin-top:14px">Based on the scope of works above, CADViz quotes the following <strong>fixed price</strong> for this project:</p>
+<?php
+    $fpMarked = $fixedPrice * (1 + $fixedMargin/100);
+    // Internally we add the safety margin; the client only sees the marked-up price.
+    // The "rate" column is hidden so they don't see hourly breakdowns.
+    $grandSub = $fpMarked;  // this becomes the project subtotal
+?>
+<table class="items">
+<tr><th>Item</th><th class="right" style="width:120px">Price</th></tr>
+<tr>
+  <td><?= htmlspecialchars($head['JobName'] ?? 'Project') ?> &mdash; lump-sum quote for the scope above</td>
+  <td class="right">$<?= number_format($fpMarked, 2) ?></td>
+</tr>
+</table>
+<?php else: ?>
 
 <p style="margin-top:14px"><?= $showMoney
     ? 'Based on the scope of works CADViz can itemise the stages and tasks required to complete your project as follows:'
@@ -256,6 +286,7 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 endforeach;
 ?>
 </table>
+<?php endif; /* end estimate-mode task table */ ?>
 
 <?php
 // ── Variations section: only approved/in_progress/complete are billable ───
@@ -268,6 +299,10 @@ if (!empty($variations)):
     $vId = (int)$v['Variation_ID'];
     $vstages = $variationStages[$vId] ?? [];
     $vHours = 0.0; $vSub = 0.0;
+    // Use Quote_Amount as a manual price override when set. For fixed-price
+    // projects this is the variation's lump-sum price (no margin applied).
+    $vOverride = ($v['Quote_Amount'] !== null && $v['Quote_Amount'] !== '') ? (float)$v['Quote_Amount'] : null;
+    $useFixedForVariation = ($isFixedPrice || $vOverride !== null);
 ?>
 <div style="margin-top:12px">
   <div style="background:#fff8e0;padding:6px 10px;border-left:4px solid #c33">
@@ -276,12 +311,19 @@ if (!empty($variations)):
     <?= !empty($v['Date_Approved']) ? '· Approved ' . date('d/m/Y', strtotime($v['Date_Approved'])) : '' ?></span>
     <?php if ($v['Description']): ?><div style="font-size:11px;margin-top:4px;color:#333"><?= nl2br(htmlspecialchars($v['Description'])) ?></div><?php endif; ?>
   </div>
+  <?php if ($useFixedForVariation && $showMoney && $vOverride !== null): ?>
+    <!-- Fixed-price variation: client just sees one line item -->
+    <table class="quote-table" style="margin-top:6px">
+      <tr><td>Variation #<?= (int)$v['Variation_Number'] ?> &mdash; <?= htmlspecialchars($v['Title']) ?></td>
+          <td class="right" style="width:120px">$<?= number_format($vOverride, 2) ?></td></tr>
+    </table>
+    <?php $vSub = $vOverride; $vHours = 0; ?>
+  <?php else: ?>
   <table class="quote-table" style="margin-top:6px">
   <?php foreach ($vstages as $vstage):
       $vsid = (int)$vstage['Project_Stage_ID'];
       $vsHours = 0.0; $vsSub = 0.0;
       $vtasks = $variationTasksByStage[$vsid] ?? [];
-      $vsw = (float)$vstage['StageWeight'];
   ?>
     <tr class="stage-row"><td colspan="<?= $showMoney ? 4 : 2 ?>"><?= htmlspecialchars($vstage['Stage_Type_Name'] ?? '') ?> — <?= htmlspecialchars($vstage['StageDesc'] ?? '') ?></td></tr>
     <?php foreach ($vtasks as $t):
@@ -305,8 +347,9 @@ if (!empty($variations)):
     </tr>
     <?php $vHours += $vsHours; $vSub += $vsSub; endforeach; ?>
   </table>
+  <?php endif; ?>
   <?php if ($showMoney): ?>
-  <div style="text-align:right;font-weight:bold;margin-top:4px">Variation total: <?= number_format($vHours, 2) ?> hrs &nbsp; $<?= number_format($vSub, 2) ?></div>
+  <div style="text-align:right;font-weight:bold;margin-top:4px">Variation total: <?= $vHours > 0 ? number_format($vHours, 2) . ' hrs &nbsp; ' : '' ?>$<?= number_format($vSub, 2) ?></div>
   <?php endif; ?>
 </div>
 <?php $variationGrandHours += $vHours; $variationGrandSub += $vSub; endforeach; ?>

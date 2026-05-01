@@ -38,6 +38,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'accep
     header('Location: project_stages.php?proj_id=' . $proj_id);
     exit;
 }
+// ── Quote type / fixed price update ────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_quote_type') {
+    $qt = ($_POST['Quote_Type'] ?? '') === 'fixed' ? 'fixed' : 'estimate';
+    $fp = ($_POST['Fixed_Price'] ?? '') !== '' ? (float)$_POST['Fixed_Price'] : null;
+    $fm = ($_POST['Fixed_Margin_Pct'] ?? '') !== '' ? (float)$_POST['Fixed_Margin_Pct'] : 12.5;
+    try {
+        $pdo->prepare("UPDATE Projects SET Quote_Type = ?, Fixed_Price = ?, Fixed_Margin_Pct = ? WHERE proj_id = ?")
+            ->execute([$qt, $fp, $fm, $proj_id]);
+    } catch (Exception $e) { /* migration may not be run */ }
+    header('Location: project_stages.php?proj_id=' . $proj_id);
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset_to_draft') {
     try {
         $pdo->beginTransaction();
@@ -56,15 +69,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset
 }
 
 $hasQuoteStatus = false;
+$hasQuoteType   = false;
 try { $hasQuoteStatus = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Quote_Status'")->fetch(); } catch (Exception $e) {}
+try { $hasQuoteType   = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Quote_Type'")->fetch(); } catch (Exception $e) {}
 $qsCol = $hasQuoteStatus ? ', Quote_Status' : ", NULL AS Quote_Status";
-$proj = $pdo->prepare("SELECT proj_id, JobName, Project_Type, Job_Description$qsCol FROM Projects WHERE proj_id = ?");
+$qtCol = $hasQuoteType   ? ', Quote_Type, Fixed_Price, Fixed_Margin_Pct' : ", NULL AS Quote_Type, NULL AS Fixed_Price, NULL AS Fixed_Margin_Pct";
+$proj = $pdo->prepare("SELECT proj_id, JobName, Project_Type, Job_Description$qsCol$qtCol FROM Projects WHERE proj_id = ?");
 $proj->execute([$proj_id]);
 $proj = $proj->fetch();
 if (!$proj) die('Project not found');
 
 // NULL or 'draft' means draft (free editing). 'accepted' means quote locked.
 $quoteStatus = ($proj['Quote_Status'] ?? null) === 'accepted' ? 'accepted' : 'draft';
+$quoteType   = ($proj['Quote_Type']   ?? null) === 'fixed'    ? 'fixed'    : 'estimate';
 
 // Editor settings (consumed by stages_editor.php)
 $mode             = 'project';
@@ -169,6 +186,48 @@ ob_start();
      style="background:#777;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Manage all templates</a>
 
   <hr style="border:none;border-top:1px solid #eee;margin:8px 0">
+
+  <!-- Quote type: Estimate (task-based) vs Fixed Price (lump sum) -->
+  <form method="post" style="display:block;margin-bottom:6px">
+    <input type="hidden" name="action" value="update_quote_type">
+    <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
+    <strong>Quote Type:</strong>
+    <label style="margin-left:10px"><input type="radio" name="Quote_Type" value="estimate" <?= $quoteType==='estimate'?'checked':'' ?> onchange="this.form.submit()"> <strong>Estimate</strong> <span style="font-size:11px;color:#666">(task breakdown × rates)</span></label>
+    <label style="margin-left:14px"><input type="radio" name="Quote_Type" value="fixed" <?= $quoteType==='fixed'?'checked':'' ?> onchange="this.form.submit()"> <strong>Fixed Price (lump sum)</strong> <span style="font-size:11px;color:#666">(small jobs ≤ ~$3k, set price + safety margin)</span></label>
+  </form>
+
+  <?php if ($quoteType === 'fixed'): ?>
+  <div style="background:#eef4ff;border:1px solid #c0d0ee;padding:8px 12px;border-radius:4px;margin-bottom:6px">
+    <form method="post">
+      <input type="hidden" name="action" value="update_quote_type">
+      <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
+      <input type="hidden" name="Quote_Type" value="fixed">
+      <strong>Fixed Price (excl. GST):</strong>
+      $<input type="number" step="0.01" min="0" name="Fixed_Price" value="<?= htmlspecialchars((string)($proj['Fixed_Price'] ?? '')) ?>" style="width:100px" placeholder="0.00">
+      &nbsp; <strong>Safety margin:</strong>
+      <input type="number" step="0.5" min="0" max="50" name="Fixed_Margin_Pct" value="<?= htmlspecialchars((string)($proj['Fixed_Margin_Pct'] ?? '12.5')) ?>" style="width:55px">%
+      <input type="submit" value="Save"
+             style="background:#246;color:#fff;border:none;padding:4px 10px;border-radius:3px;cursor:pointer;margin-left:6px">
+      <span style="font-size:11px;color:#666;margin-left:6px">
+        Final to client = price × (1 + margin) + GST.
+        <?php
+          $fp = (float)($proj['Fixed_Price'] ?? 0);
+          $fm = (float)($proj['Fixed_Margin_Pct'] ?? 12.5);
+          if ($fp > 0):
+            $marked = $fp * (1 + $fm/100);
+            $gst    = $marked * 0.15;
+        ?>
+        Preview: <strong>$<?= number_format($marked + $gst, 2) ?> incl GST</strong>
+        (margin $<?= number_format($marked - $fp, 2) ?>, GST $<?= number_format($gst, 2) ?>)
+        <?php endif; ?>
+      </span>
+    </form>
+    <div style="font-size:11px;color:#666;margin-top:4px">
+      📌 In Fixed-Price mode you don't need to break the project into tasks. The stage/task editor below stays available as optional internal notes
+      (timesheet hours can still be logged against tasks for analytics). Variations on this project use a manual price (no margin applied).
+    </div>
+  </div>
+  <?php endif; ?>
 
   <!-- Quote status badge + Accept / Reset -->
   <strong>Quote Status:</strong>

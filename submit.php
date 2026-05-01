@@ -24,6 +24,28 @@ if ($_SERVER['REQUEST_METHOD'] !== 'POST' || empty($_POST['hidden_week'])) {
 
 $pdo = get_db();
 
+// Hard block: full-time staff (dmitriyp, hannah) cannot submit until every
+// weekday in the past 4 weeks has at least one timesheet entry.
+if (is_employed_staff($_SESSION['UserID'] ?? '')) {
+    $missing = missing_weekdays($pdo, (int)($_SESSION['Employee_id'] ?? 0), 4);
+    if (!empty($missing)) {
+        echo '<!DOCTYPE html><html><head><meta charset="utf-8"><link href="site.css" rel="stylesheet"></head><body>';
+        echo '<div class="page"><div class="card" style="background:#ffd6d6;border:2px solid #c33;color:#a00">';
+        echo '<h2 style="margin-top:0;color:#a00">⚠ Submission blocked</h2>';
+        echo '<p>You have <strong>' . count($missing) . ' weekday(s)</strong> in the past 4 weeks with no time logged. ';
+        echo 'As a full-time staff member you must log every weekday (project work, leave, or sick) before you can submit.</p>';
+        echo '<p><strong>Missing dates:</strong></p><ul>';
+        foreach ($missing as $d) {
+            $mon = date('Y-m-d', strtotime('monday this week', strtotime($d)));
+            echo '<li>' . htmlspecialchars(date('D j M Y', strtotime($d))) . ' &nbsp; ';
+            echo '<a href="main.php?week=' . urlencode($mon) . '">Open week of ' . htmlspecialchars(date('D j M', strtotime($mon))) . '</a></li>';
+        }
+        echo '</ul><p><a href="main.php" class="btn-primary">&larr; Back to timesheet</a></p>';
+        echo '</div></div></body></html>';
+        exit;
+    }
+}
+
 $error = "successful";
 $locked = "false";
 

@@ -32,7 +32,9 @@ if ($mode === 'project') {
 
 // $quoteStatus may be set by the caller (project_stages.php). Default to draft.
 if (!isset($quoteStatus)) $quoteStatus = 'draft';
+if (!isset($quoteType))   $quoteType   = 'estimate';
 $isAccepted = ($mode === 'project' && $quoteStatus === 'accepted' && $hasVariations);
+$isFixedPrice = ($mode === 'project' && $quoteType === 'fixed');
 
 /**
  * Find the latest unapproved/draft variation for this project, creating
@@ -813,7 +815,13 @@ endforeach;
         <option value="<?= $st ?>" <?= $v['Status'] === $st ? 'selected' : '' ?>><?= $st ?></option>
       <?php endforeach; ?>
     </select>
-    Quote $: <input type="number" step="0.01" name="Quote_Amount" value="<?= htmlspecialchars((string)($v['Quote_Amount'] ?? '')) ?>" style="width:80px">
+    <?php if ($isFixedPrice): ?>
+      <strong style="color:#246">Variation Price (no margin)</strong>:
+      $<input type="number" step="0.01" name="Quote_Amount" value="<?= htmlspecialchars((string)($v['Quote_Amount'] ?? '')) ?>" style="width:90px" placeholder="0.00">
+      <span style="font-size:10px;color:#666">(this lump sum IS the variation price; tasks below are optional internal notes)</span>
+    <?php else: ?>
+      Quote $ override (optional): <input type="number" step="0.01" name="Quote_Amount" value="<?= htmlspecialchars((string)($v['Quote_Amount'] ?? '')) ?>" style="width:80px" placeholder="auto">
+    <?php endif; ?>
     Approved by: <input type="text" name="Approved_By" value="<?= htmlspecialchars($v['Approved_By'] ?? '') ?>" style="width:120px">
     <br>Description: <textarea name="Description" rows="2" style="width:96%"><?= htmlspecialchars($v['Description'] ?? '') ?></textarea>
     <br><span class="actions"><input type="submit" value="Save Variation"></span>

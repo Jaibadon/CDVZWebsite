@@ -189,24 +189,44 @@ table { width:100%; border-collapse:collapse; margin-bottom:6px; }
   <?php if ($head['Job_Address']): ?><strong>Address:</strong> <?= htmlspecialchars($head['Job_Address']) ?><br><?php endif; ?>
 </p>
 
+<?php
+// Detect fixed-price project (variations on fixed projects use Quote_Amount)
+$projIsFixed = false;
+try {
+    $st = $pdo->prepare("SELECT Quote_Type FROM Projects WHERE proj_id = ?");
+    $st->execute([$proj_id]);
+    $projIsFixed = $st->fetchColumn() === 'fixed';
+} catch (Exception $e) { /* column may not exist */ }
+?>
 <?php foreach ($variations as $v):
     $vId = (int)$v['Variation_ID'];
     $vstages = $variationStages[$vId] ?? [];
     $vHours = 0; $vSub = 0;
+    $vOverride = ($v['Quote_Amount'] !== null && $v['Quote_Amount'] !== '') ? (float)$v['Quote_Amount'] : null;
+    $useFixedForVariation = ($projIsFixed || $vOverride !== null);
 ?>
 <div class="var-card <?= htmlspecialchars($v['Status']) ?>">
   <strong>Variation #<?= (int)$v['Variation_Number'] ?>: <?= htmlspecialchars($v['Title']) ?></strong>
   <span style="float:right;font-size:10px;color:#666">Status: <?= htmlspecialchars($v['Status']) ?>
-  <?= !empty($v['Date_Approved']) ? '· Approved ' . date('d/m/Y', strtotime($v['Date_Approved'])) : '' ?></span>
+  <?= !empty($v['Date_Approved']) ? '· Approved ' . date('d/m/Y', strtotime($v['Date_Approved'])) : '' ?>
+  <?php if ($useFixedForVariation): ?> · <strong style="color:#246">Fixed price (no margin)</strong><?php endif; ?></span>
   <?php if ($v['Description']): ?><div style="margin-top:4px"><?= nl2br(htmlspecialchars($v['Description'])) ?></div><?php endif; ?>
 </div>
+<?php if ($useFixedForVariation && $vOverride !== null): ?>
+  <table class="quote-table">
+    <tr><td>Variation #<?= (int)$v['Variation_Number'] ?> &mdash; <?= htmlspecialchars($v['Title']) ?> (lump-sum price)</td>
+        <td class="right" style="width:120px">$<?= number_format($vOverride, 2) ?></td></tr>
+  </table>
+  <?php $vSub = $vOverride; $vHours = 0; ?>
+<?php elseif ($useFixedForVariation): ?>
+  <p style="color:#a00;font-style:italic">⚠ Fixed-price variation but no Quote_Amount has been set. Edit this variation in the stage editor and set the price.</p>
+<?php else: ?>
 <table class="quote-table">
   <tr><th>Task</th><th class="right">Hours</th><th class="right">Rate</th><th class="right">Subtotal</th></tr>
   <?php foreach ($vstages as $vstage):
       $vsid = (int)$vstage['Project_Stage_ID'];
       $vtasks = $variationTasksByStage[$vsid] ?? [];
       $vsHours = 0; $vsSub = 0;
-      $vsw = (float)$vstage['StageWeight'];
   ?>
   <tr class="stage-row"><td colspan="4"><?= htmlspecialchars($vstage['Stage_Type_Name'] ?? '') ?> — <?= htmlspecialchars($vstage['StageDesc'] ?? '') ?></td></tr>
   <?php foreach ($vtasks as $t):
@@ -231,7 +251,8 @@ table { width:100%; border-collapse:collapse; margin-bottom:6px; }
   </tr>
   <?php $vHours += $vsHours; $vSub += $vsSub; endforeach; ?>
 </table>
-<div style="text-align:right;margin-bottom:14px"><strong>Variation #<?= (int)$v['Variation_Number'] ?> total: <?= number_format($vHours, 2) ?> hrs &nbsp; $<?= number_format($vSub, 2) ?></strong></div>
+<?php endif; ?>
+<div style="text-align:right;margin-bottom:14px"><strong>Variation #<?= (int)$v['Variation_Number'] ?> total: <?= $vHours > 0 ? number_format($vHours, 2) . ' hrs &nbsp; ' : '' ?>$<?= number_format($vSub, 2) ?></strong></div>
 <?php $grandHours += $vHours; $grandSub += $vSub; endforeach; ?>
 
 <?php if (!empty($removed)): ?>
