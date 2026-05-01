@@ -229,7 +229,13 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
         &nbsp;|&nbsp;
         <a href="project_stages.php?proj_id=<?= (int)$projId ?>"><b>Stages / Tasks (Quote builder)</b></a>
         &nbsp;|&nbsp;
-        <a href="quote.php?proj_id=<?= (int)$projId ?>" target="_blank">Print Quote</a>
+        <a href="my_checklist.php#proj-<?= (int)$projId ?>" target="_blank"><b>Project Checklist</b></a>
+        &nbsp;|&nbsp;
+        <a href="quote.php?proj_id=<?= (int)$projId ?>&original_only=1" target="_blank">Print Original Quote</a>
+        &nbsp;|&nbsp;
+        <a href="quote.php?proj_id=<?= (int)$projId ?>" target="_blank">Print Quote (+ variations)</a>
+        &nbsp;|&nbsp;
+        <a href="quote_variations.php?proj_id=<?= (int)$projId ?>" target="_blank">Print Variations</a>
         &nbsp;|&nbsp;
         <a href="checklist.php?proj_id=<?= (int)$projId ?>" target="_blank">Print Checklist</a>
       </td>

@@ -30,10 +30,41 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'updat
     exit;
 }
 
-$proj = $pdo->prepare("SELECT proj_id, JobName, Project_Type, Job_Description FROM Projects WHERE proj_id = ?");
+// ── Quote status: Accept / Reset ───────────────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'accept_quote') {
+    try {
+        $pdo->prepare("UPDATE Projects SET Quote_Status = 'accepted' WHERE proj_id = ?")->execute([$proj_id]);
+    } catch (Exception $e) { /* column may not exist if migration not run */ }
+    header('Location: project_stages.php?proj_id=' . $proj_id);
+    exit;
+}
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset_to_draft') {
+    try {
+        $pdo->beginTransaction();
+        // Delete all variations on this project (and their stages, tasks, removal flags)
+        $pdo->prepare("DELETE pt FROM Project_Tasks pt JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID WHERE ps.Proj_ID = ? AND ps.Variation_ID IS NOT NULL")->execute([$proj_id]);
+        $pdo->prepare("DELETE FROM Project_Stages WHERE Proj_ID = ? AND Variation_ID IS NOT NULL")->execute([$proj_id]);
+        $pdo->prepare("UPDATE Project_Tasks pt JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID SET pt.Is_Removed = 0, pt.Removed_In_Variation_ID = NULL WHERE ps.Proj_ID = ?")->execute([$proj_id]);
+        $pdo->prepare("DELETE FROM Project_Variations WHERE Proj_ID = ?")->execute([$proj_id]);
+        $pdo->prepare("UPDATE Projects SET Quote_Status = 'draft' WHERE proj_id = ?")->execute([$proj_id]);
+        $pdo->commit();
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+    }
+    header('Location: project_stages.php?proj_id=' . $proj_id);
+    exit;
+}
+
+$hasQuoteStatus = false;
+try { $hasQuoteStatus = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Quote_Status'")->fetch(); } catch (Exception $e) {}
+$qsCol = $hasQuoteStatus ? ', Quote_Status' : ", NULL AS Quote_Status";
+$proj = $pdo->prepare("SELECT proj_id, JobName, Project_Type, Job_Description$qsCol FROM Projects WHERE proj_id = ?");
 $proj->execute([$proj_id]);
 $proj = $proj->fetch();
 if (!$proj) die('Project not found');
+
+// NULL or 'draft' means draft (free editing). 'accepted' means quote locked.
+$quoteStatus = ($proj['Quote_Status'] ?? null) === 'accepted' ? 'accepted' : 'draft';
 
 // Editor settings (consumed by stages_editor.php)
 $mode             = 'project';
@@ -126,14 +157,40 @@ ob_start();
     <input type="submit" value="Save current stages as Template"
            style="background:#555;color:#fff;border:none;padding:5px 10px;border-radius:3px;cursor:pointer">
   </form>
+  <a href="quote.php?proj_id=<?= $proj_id ?>&original_only=1" target="_blank"
+     style="background:#246;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Original Quote</a>
   <a href="quote.php?proj_id=<?= $proj_id ?>" target="_blank"
      style="background:#246;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Quote (+ variations)</a>
   <a href="quote_variations.php?proj_id=<?= $proj_id ?>" target="_blank"
-     style="background:#c33;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Variations only</a>
+     style="background:#c33;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Variations</a>
   <a href="checklist.php?proj_id=<?= $proj_id ?>" target="_blank"
      style="background:#246;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Checklist</a>
   <a href="templates.php"
      style="background:#777;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Manage all templates</a>
+
+  <hr style="border:none;border-top:1px solid #eee;margin:8px 0">
+
+  <!-- Quote status badge + Accept / Reset -->
+  <strong>Quote Status:</strong>
+  <?php if ($quoteStatus === 'accepted'): ?>
+    <span style="background:#1a6b1a;color:#fff;padding:3px 10px;border-radius:8px;font-weight:bold;font-size:11px;margin-right:8px">ACCEPTED (locked)</span>
+    <form method="post" style="display:inline" onsubmit="return confirm('Reset to DRAFT mode? This will DELETE all variations on this project (their stages, tasks, and removal flags) — variations cannot survive a reset because the original quote may be edited again. Are you sure?');">
+      <input type="hidden" name="action" value="reset_to_draft">
+      <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
+      <input type="submit" value="Reset to Draft"
+             style="background:#c33;color:#fff;border:none;padding:5px 10px;border-radius:3px;cursor:pointer">
+    </form>
+    <span style="font-size:11px;color:#666;margin-left:6px">In accepted mode the original quote is locked — edits/additions/removals route to the latest unapproved variation.</span>
+  <?php else: ?>
+    <span style="background:#9B9B1B;color:#fff;padding:3px 10px;border-radius:8px;font-weight:bold;font-size:11px;margin-right:8px">DRAFT (free editing)</span>
+    <form method="post" style="display:inline" onsubmit="return confirm('Accept this quote? After acceptance the original quote becomes read-only and all changes route through variations.');">
+      <input type="hidden" name="action" value="accept_quote">
+      <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
+      <input type="submit" value="Accept Quote (lock original)"
+             style="background:#1a6b1a;color:#fff;border:none;padding:5px 10px;border-radius:3px;cursor:pointer">
+    </form>
+    <span style="font-size:11px;color:#666;margin-left:6px">In draft mode you can freely add, edit, and remove tasks.</span>
+  <?php endif; ?>
 </div>
 <?php
 $quickActions = ob_get_clean();

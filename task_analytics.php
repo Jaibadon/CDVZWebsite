@@ -91,7 +91,7 @@ $projStmt = $pdo->query(
        LEFT JOIN Project_Types pt_name ON p.Project_Type = pt_name.Project_Type_ID
        LEFT JOIN Staff mgr ON p.Manager = mgr.Employee_ID
        LEFT JOIN (
-            SELECT ps.Proj_ID, SUM(tt.Estimated_Time * COALESCE(pt.Weight,1) * COALESCE(ps.Weight,1)) AS estimated
+            SELECT ps.Proj_ID, SUM(tt.Estimated_Time * COALESCE(pt.Weight,1)) AS estimated
               FROM Project_Tasks pt
               JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
               JOIN Tasks_Types tt   ON pt.Task_Type_ID = tt.Task_ID
@@ -138,7 +138,7 @@ foreach ($projects as $p) {
 $pttStmt = $pdo->query(
     "SELECT ps.Proj_ID, pt.Task_Type_ID, tt.Task_Name, tt.Stage_ID,
             stg.Stage_Type_Name,
-            SUM(tt.Estimated_Time * COALESCE(pt.Weight,1) * COALESCE(ps.Weight,1)) AS est_hrs
+            SUM(tt.Estimated_Time * COALESCE(pt.Weight,1)) AS est_hrs
        FROM Project_Tasks pt
        JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
        JOIN Tasks_Types tt   ON pt.Task_Type_ID = tt.Task_ID

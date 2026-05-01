@@ -7,6 +7,7 @@ $proj_id = (int)($_GET['proj_id'] ?? 0);
 if ($proj_id <= 0) die('Missing proj_id');
 
 $showMoney = !isset($_GET['nomoney']);  // checklist.php sets this
+$originalOnly = !empty($_GET['original_only']);  // hide variations section
 
 // ── Project + client header ───────────────────────────────────────────────
 $h = $pdo->prepare(
@@ -75,7 +76,7 @@ foreach ($tasksStmt->fetchAll() as $t) {
 $variations = [];
 $variationStages = [];
 $variationTasksByStage = [];
-if ($hasVariations) {
+if ($hasVariations && !$originalOnly) {
     $vs = $pdo->prepare("SELECT * FROM Project_Variations WHERE Proj_ID = ? AND Status IN ('approved','in_progress','complete') ORDER BY Variation_Number");
     $vs->execute([$proj_id]);
     $variations = $vs->fetchAll();
@@ -211,7 +212,7 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
   <?php endif; ?>
 </tr>
 <?php foreach ($tasks as $t):
-    $hrs = (float)($t['Estimated_Time'] ?? 0) * (float)($t['Weight'] ?? $t['TaskWeight'] ?? 1) * $stageWeight;
+    $hrs = (float)($t['Estimated_Time'] ?? 0) * (float)($t['Weight'] ?? $t['TaskWeight'] ?? 1);
     // If a staff member is assigned and has a billing rate, use it.
     // Otherwise fall back to the project base rate. Either way, multiply
     // by the client's negotiated Multiplier.
@@ -279,7 +280,7 @@ if (!empty($variations)):
   ?>
     <tr class="stage-row"><td colspan="<?= $showMoney ? 4 : 2 ?>"><?= htmlspecialchars($vstage['Stage_Type_Name'] ?? '') ?> — <?= htmlspecialchars($vstage['StageDesc'] ?? '') ?></td></tr>
     <?php foreach ($vtasks as $t):
-        $h = (float)($t['Estimated_Time'] ?? 0) * (float)$t['TaskWeight'] * $vsw;
+        $h = (float)($t['Estimated_Time'] ?? 0) * (float)$t['TaskWeight'];
         $sr = (float)($t['StaffRate'] ?? 0);
         $rate = ($sr > 0 ? $sr : $baseRate) * $multiplier;
         $sub = $h * $rate + (float)($t['Fixed_Cost'] ?? 0);

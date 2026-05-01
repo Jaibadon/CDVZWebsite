@@ -23,11 +23,18 @@ body  { background:#515559; font-family:-apple-system,BlinkMacSystemFont,"Segoe 
 .body { padding:20px 30px; }
 .body h3 { color:#9B9B1B; border-bottom:1px solid #ccc; padding-bottom:4px; margin-top:20px; }
 .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; margin-top:10px; }
-.btn  { display:block; background:#9B9B1B; color:#fff; text-align:center; padding:10px 6px;
+/* color set via !important because global.css/global2.css have generic
+   `a` selectors that override the button color and turn the text orange. */
+.btn,
+a.btn,
+a.btn:link,
+a.btn:visited,
+a.btn:hover,
+a.btn:active { display:block; background:#9B9B1B; color:#fff !important; text-align:center; padding:10px 6px;
         border-radius:3px; text-decoration:none; font-size:13px; }
-.btn:hover { background:#7a7a16; }
-.btn.secondary { background:#555; }
-.btn.secondary:hover { background:#333; }
+a.btn:hover { background:#7a7a16; color:#fff !important; }
+a.btn.secondary { background:#555; color:#fff !important; }
+a.btn.secondary:hover { background:#333; color:#fff !important; }
 </style>
 </head>
 <body>

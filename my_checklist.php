@@ -84,7 +84,7 @@ if (!empty($projIds)) {
 
     foreach ($allTasks as $t) {
         $pid = (int)$t['Proj_ID'];
-        $est = (float)$t['Estimated_Time'] * (float)$t['TaskWeight'] * (float)$t['StageWeight'];
+        $est = (float)$t['Estimated_Time'] * (float)$t['TaskWeight'];
         $logged = $loggedByPtid[(int)$t['Proj_Task_ID']] ?? 0.0;
         $remaining = $est - $logged;
         $isMine = ((int)$t['Assigned_To'] === $empId);
@@ -139,6 +139,15 @@ td { padding:3px 6px; border-bottom:1px solid #eee; vertical-align:top; }
 .tag-mine { background:#9B9B1B; color:#fff; padding:1px 4px; border-radius:2px; font-size:9px; font-weight:bold; margin-left:4px; }
 .tag-var { background:#c33; color:#fff; padding:1px 4px; border-radius:2px; font-size:9px; margin-left:4px; }
 .tag-var.approved { background:#1a6b1a; }
+
+/* Collapse / expand chrome */
+.proj-card h2 { cursor: pointer; user-select: none; position: relative; padding-right: 28px; }
+.proj-card h2 .toggle { position:absolute; right:0; top:0; font-size:16px; color:#9B9B1B; transition: transform 0.15s; display:inline-block; }
+.proj-card.collapsed h2 .toggle { transform: rotate(-90deg); }
+.proj-card.collapsed .proj-body { display: none; }
+.bulk-controls { margin-bottom:10px; }
+.bulk-controls button { padding:4px 10px; background:#555; color:#fff; border:none; border-radius:3px; cursor:pointer; font-size:11px; margin-right:4px; }
+@media print { .bulk-controls { display:none; } .proj-card.collapsed .proj-body { display: block !important; } .proj-card h2 .toggle { display:none; } }
 </style>
 </head>
 <body>
@@ -151,15 +160,22 @@ td { padding:3px 6px; border-bottom:1px solid #eee; vertical-align:top; }
 
 <h1>My Project Checklist — <?= htmlspecialchars($user) ?></h1>
 <p style="color:#555">Generated <?= date('d/m/Y H:i') ?>. Tasks <strong>highlighted</strong> are assigned to you.
-Variation tasks appear in italic; <span style="color:#c33">unapproved variations</span> show in red.</p>
+Variation tasks appear in italic; <span style="color:#c33">unapproved variations</span> show in red.
+Click a project heading to collapse/expand. Printing always shows everything.</p>
+
+<div class="bulk-controls no-print">
+  <button onclick="document.querySelectorAll('.proj-card').forEach(c => c.classList.remove('collapsed'))">Expand all</button>
+  <button onclick="document.querySelectorAll('.proj-card').forEach(c => c.classList.add('collapsed'))">Collapse all</button>
+  <button onclick="document.querySelectorAll('.proj-card').forEach(c => c.querySelector('.tag-mine') ? c.classList.remove('collapsed') : c.classList.add('collapsed'))">Show only projects with my tasks</button>
+</div>
 
 <?php if (empty($projects)): ?>
   <p style="color:#888"><em>No active projects assigned. If this is a mistake, ask Erik / Jen to add you to a project.</em></p>
 <?php else: ?>
 
 <?php foreach ($projects as $p): $pid = (int)$p['proj_id']; $tasks = $tasksByProject[$pid] ?? []; $tot = $projTotals[$pid] ?? ['est'=>0,'logged'=>0,'remaining'=>0,'mine_remaining'=>0]; ?>
-<div class="proj-card">
-  <h2 style="margin-top:0">
+<div class="proj-card" id="proj-<?= $pid ?>">
+  <h2 style="margin-top:0" onclick="this.parentElement.classList.toggle('collapsed')">
     <?= htmlspecialchars($p['JobName']) ?>
     <span class="proj-totals <?= $tot['remaining'] < 0 ? 'over' : '' ?>">
       <?= number_format($tot['logged'],1) ?>h / <?= number_format($tot['est'],1) ?>h
@@ -168,7 +184,9 @@ Variation tasks appear in italic; <span style="color:#c33">unapproved variations
         (<strong><?= number_format($tot['mine_remaining'],1) ?>h yours</strong>)
       <?php endif; ?>
     </span>
+    <span class="toggle">▾</span>
   </h2>
+  <div class="proj-body">
   <div class="proj-meta">
     Manager: <?= htmlspecialchars($p['ManagerLogin'] ?? '?') ?>
     <?php if ($p['Job_Description']): ?> &middot; <?= htmlspecialchars(mb_substr($p['Job_Description'], 0, 120)) ?><?php endif; ?>
@@ -215,9 +233,23 @@ Variation tasks appear in italic; <span style="color:#c33">unapproved variations
     <?php endforeach; ?>
   </table>
   <?php endif; ?>
+  </div><!-- /proj-body -->
 </div>
 <?php endforeach; ?>
 <?php endif; ?>
 
+<script>
+// Optional deep-link: my_checklist.php#proj-1234 expands and scrolls to that card
+(function() {
+    var hash = window.location.hash;
+    if (hash && hash.indexOf('#proj-') === 0) {
+        var el = document.getElementById(hash.substring(1));
+        if (el) {
+            el.classList.remove('collapsed');
+            setTimeout(function() { el.scrollIntoView({behavior:'smooth', block:'start'}); }, 50);
+        }
+    }
+})();
+</script>
 </body>
 </html>

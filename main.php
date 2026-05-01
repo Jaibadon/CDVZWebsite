@@ -45,7 +45,7 @@ $removedFilter = $hasVariations ? "AND COALESCE(pt.Is_Removed, 0) = 0" : "";
 $ptStmt = $pdo->query(
     "SELECT pt.Proj_Task_ID AS ptid, ps.Proj_ID, pt.Task_Type_ID, tt.Task_Name,
             st.Stage_Type_Name,
-            (tt.Estimated_Time * COALESCE(pt.Weight,1) * COALESCE(ps.Weight,1)) AS estimated
+            (tt.Estimated_Time * COALESCE(pt.Weight,1)) AS estimated
             $variationCols
        FROM Project_Tasks pt
        JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID

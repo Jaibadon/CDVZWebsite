@@ -10,7 +10,10 @@ require_once 'db_connect.php';
 $pdo = get_db();
 $proj_id = (int)($_GET['proj_id'] ?? 0);
 if ($proj_id <= 0) die('Missing proj_id');
-$includeUnapproved = !empty($_GET['include_unapproved']);
+// Default: show ALL variations (including unapproved) — pass ?approved_only=1
+// to switch to a print-ready approved-only version for the client.
+$approvedOnly = !empty($_GET['approved_only']);
+$includeUnapproved = !$approvedOnly;
 
 $h = $pdo->prepare(
     "SELECT p.proj_id, p.JobName, p.Job_Address, p.Job_Description,
@@ -70,19 +73,54 @@ foreach ($vtStmt->fetchAll() as $t) {
     $variationTasksByStage[(int)$t['Project_Stage_ID']][] = $t;
 }
 
-// Removed-task summary (if any)
+// Removed-task summary: which tasks were taken out of the original quote,
+// from which stage, and via which variation. Filtered by approval scope.
 $rmStmt = $pdo->prepare(
     "SELECT t.Description AS TaskDesc, COALESCE(t.Weight,1) AS TaskWeight,
             tt.Task_Name, tt.Estimated_Time,
-            v.Variation_Number, v.Title AS RemovalVariationTitle
+            st.Stage_Type_Name AS RemovedFromStage,
+            v.Variation_Number, v.Title AS RemovalVariationTitle, v.Status AS RemovalStatus
        FROM Project_Tasks t
        LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
        LEFT JOIN Project_Stages s ON t.Project_Stage_ID = s.Project_Stage_ID
+       LEFT JOIN Stage_Types st ON s.Stage_Type_ID = st.Stage_Type_ID
        LEFT JOIN Project_Variations v ON t.Removed_In_Variation_ID = v.Variation_ID
       WHERE s.Proj_ID = ? AND t.Is_Removed = 1"
 );
 $rmStmt->execute([$proj_id]);
-$removed = $rmStmt->fetchAll();
+$removedAll = $rmStmt->fetchAll();
+// Filter to only removed tasks whose removal-variation is in scope
+$shownVarIds = array_column($variations, 'Variation_ID');
+$removed = array_filter($removedAll, function($r) use ($shownVarIds) {
+    return in_array((int)$r['Variation_Number'], array_column($GLOBALS['variations'] ?? [], 'Variation_Number'), true)
+        || in_array($r['Variation_Number'], array_map(fn($v) => $v['Variation_Number'], $shownVarIds ? $GLOBALS['variations'] : []));
+});
+// simpler: only show removed-tasks whose Removed_In_Variation_ID is in our $variations list
+$removed = [];
+$visibleVids = [];
+foreach ($variations as $vRow) $visibleVids[(int)$vRow['Variation_ID']] = true;
+foreach ($removedAll as $r) {
+    // Re-query: include if its removal variation is shown
+    // (We need Removed_In_Variation_ID — query separately)
+}
+// Re-do cleanly:
+$rmStmt = $pdo->prepare(
+    "SELECT t.Removed_In_Variation_ID, t.Description AS TaskDesc, COALESCE(t.Weight,1) AS TaskWeight,
+            tt.Task_Name, tt.Estimated_Time,
+            st.Stage_Type_Name AS RemovedFromStage,
+            v.Variation_Number, v.Title AS RemovalVariationTitle, v.Status AS RemovalStatus
+       FROM Project_Tasks t
+       LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
+       LEFT JOIN Project_Stages s ON t.Project_Stage_ID = s.Project_Stage_ID
+       LEFT JOIN Stage_Types st ON s.Stage_Type_ID = st.Stage_Type_ID
+       LEFT JOIN Project_Variations v ON t.Removed_In_Variation_ID = v.Variation_ID
+      WHERE s.Proj_ID = ? AND t.Is_Removed = 1"
+);
+$rmStmt->execute([$proj_id]);
+$removed = [];
+foreach ($rmStmt->fetchAll() as $r) {
+    if (isset($visibleVids[(int)$r['Removed_In_Variation_ID']])) $removed[] = $r;
+}
 
 $grandHours = 0; $grandSub = 0;
 ?>
@@ -123,10 +161,12 @@ table { width:100%; border-collapse:collapse; margin-bottom:6px; }
   <a href="updateform_admin1.php?proj_id=<?= $proj_id ?>">&larr; Back to project</a> &nbsp;|&nbsp;
   <a href="quote.php?proj_id=<?= $proj_id ?>">Original quote + variations</a> &nbsp;|&nbsp;
   <button onclick="window.print()">🖨 Print</button>
-  <?php if (!$includeUnapproved): ?>
-    &nbsp;|&nbsp; <a href="?proj_id=<?= $proj_id ?>&include_unapproved=1">Show all variations (including unapproved)</a>
+  <?php if ($approvedOnly): ?>
+    &nbsp;|&nbsp; <strong>Approved variations only</strong>
+    &nbsp;|&nbsp; <a href="?proj_id=<?= $proj_id ?>" style="color:#c33">Switch to all variations (incl. unapproved)</a>
   <?php else: ?>
-    &nbsp;|&nbsp; <em style="color:#c33"><strong>Internal draft: includes unapproved variations</strong></em>
+    &nbsp;|&nbsp; <em style="color:#c33"><strong>Showing ALL variations (including unapproved)</strong></em>
+    &nbsp;|&nbsp; <a href="?proj_id=<?= $proj_id ?>&approved_only=1" style="background:#1a6b1a;color:#fff;padding:3px 10px;border-radius:3px;text-decoration:none">Print Approved Variations Only</a>
   <?php endif; ?>
 </div>
 
@@ -165,7 +205,7 @@ table { width:100%; border-collapse:collapse; margin-bottom:6px; }
   ?>
   <tr class="stage-row"><td colspan="4"><?= htmlspecialchars($vstage['Stage_Type_Name'] ?? '') ?> — <?= htmlspecialchars($vstage['StageDesc'] ?? '') ?></td></tr>
   <?php foreach ($vtasks as $t):
-      $h = (float)($t['Estimated_Time'] ?? 0) * (float)$t['TaskWeight'] * $vsw;
+      $h = (float)($t['Estimated_Time'] ?? 0) * (float)$t['TaskWeight'];
       $sr = (float)($t['StaffRate'] ?? 0);
       $rate = ($sr > 0 ? $sr : $baseRate) * $multiplier;
       $sub = $h * $rate + (float)($t['Fixed_Cost'] ?? 0);
@@ -190,9 +230,10 @@ table { width:100%; border-collapse:collapse; margin-bottom:6px; }
 <?php $grandHours += $vHours; $grandSub += $vSub; endforeach; ?>
 
 <?php if (!empty($removed)): ?>
-<h2>Tasks removed from original quote</h2>
+<h2>Tasks removed from the original quote</h2>
+<p style="font-size:11px;color:#555">The following tasks were taken out of the original scope as part of the variations above:</p>
 <table class="quote-table">
-  <tr><th>Task</th><th class="right">Hours</th><th>Removed in</th></tr>
+  <tr><th>Removed task</th><th>From stage</th><th>Removed in</th><th class="right">Hours saved</th></tr>
   <?php foreach ($removed as $rt):
       $rh = (float)($rt['Estimated_Time'] ?? 0) * (float)$rt['TaskWeight'];
       $grandHours -= $rh;
@@ -200,11 +241,13 @@ table { width:100%; border-collapse:collapse; margin-bottom:6px; }
   ?>
   <tr>
     <td style="text-decoration:line-through;color:#999"><?= htmlspecialchars($rt['TaskDesc'] ?: $rt['Task_Name']) ?></td>
+    <td><?= htmlspecialchars($rt['RemovedFromStage'] ?? '—') ?></td>
+    <td><?= $rt['Variation_Number'] ? 'Variation #' . (int)$rt['Variation_Number'] . ': ' . htmlspecialchars($rt['RemovalVariationTitle'] ?? '') : '—' ?></td>
     <td class="right" style="color:#999">−<?= number_format($rh, 2) ?></td>
-    <td><?= $rt['Variation_Number'] ? '#' . (int)$rt['Variation_Number'] . ': ' . htmlspecialchars($rt['RemovalVariationTitle']) : '—' ?></td>
   </tr>
   <?php endforeach; ?>
 </table>
+<p style="font-size:11px;color:#555;font-style:italic">Note: Removed task <em>"xxx"</em> from stage <em>"yyy"</em> &mdash; the original quote total has been reduced by the hours shown.</p>
 <?php endif; ?>
 
 <table class="totals">
