@@ -198,6 +198,49 @@ class XeroClient
     }
 
     /**
+     * Fetch the rendered invoice PDF from Xero. Returns raw bytes.
+     * Used by xero_invoice_email.php so we can send it ourselves from
+     * accounts@cadviz.co.nz instead of using Xero's email feature
+     * (which always sends from a Xero-controlled From: address).
+     */
+    public function getInvoicePdf(string $xeroId): string
+    {
+        $ch = curl_init();
+        curl_setopt_array($ch, [
+            CURLOPT_URL            => self::API_BASE . '/Invoices/' . urlencode($xeroId),
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 60,
+            CURLOPT_HTTPHEADER     => [
+                'Authorization: Bearer ' . $this->token['access_token'],
+                'Xero-Tenant-Id: '       . $this->token['tenant_id'],
+                'Accept: application/pdf',
+            ],
+        ]);
+        $raw  = curl_exec($ch);
+        $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+        if ($code === 401) {  // refresh + retry
+            $this->refreshAccessToken();
+            return $this->getInvoicePdf($xeroId);
+        }
+        if ($code >= 400 || !$raw) throw new XeroException("Xero PDF fetch failed: $code");
+        return $raw;
+    }
+
+    /**
+     * Mark a Xero invoice as "sent to contact" — flips the Sent indicator
+     * in the Xero UI without actually sending anything from Xero. We call
+     * this after we email the PDF ourselves, so Xero stays in sync.
+     */
+    public function markSentToContact(string $xeroId): void
+    {
+        $this->apiCall('POST', '/Invoices/' . urlencode($xeroId), [
+            'InvoiceID' => $xeroId,
+            'SentToContact' => true,
+        ]);
+    }
+
+    /**
      * Look up (or create) a Xero contact for the given client name.
      * Returns the ContactID GUID. We avoid creating duplicates by searching
      * Name first.

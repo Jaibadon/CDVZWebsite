@@ -154,7 +154,11 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         echo "<font size=4>***SENT - everything is awesome!</font>";
     }
 
-    // ── Xero status badge + push button ───────────────────────────────────
+    // ── Xero status badge + push / email buttons ─────────────────────────
+    // Push: uploads to Xero (creates AUTHORISED invoice + PDF). No email.
+    // Email: fetches PDF from Xero and sends from accounts@cadviz.co.nz
+    //        (NOT through Xero — Xero's mailer uses a Xero-controlled
+    //         From: address that hits client spam folders).
     $xs = $rs['Xero_Status'] ?? null;
     if ($xs) {
         $badgeColor = ($xs === 'PAID') ? '#1a6b1a' : (($xs === 'AUTHORISED') ? '#5577aa' : '#999');
@@ -162,11 +166,15 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         if (!empty($rs['Xero_OnlineUrl'])) {
             echo " <a href=\"" . htmlspecialchars($rs['Xero_OnlineUrl']) . "\" target=\"_blank\" style=\"font-size:11px\">view in Xero</a>";
         }
-    } else {
-        echo " <form method=\"post\" action=\"xero_invoice_push.php\" style=\"display:inline\" onsubmit=\"return confirm('Push invoice #$invNo to Xero?');\">"
+        // Once it's in Xero we can email it from accounts@cadviz.co.nz
+        echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client from accounts@cadviz.co.nz?');\">"
            . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
-           . "<input type=\"hidden\" name=\"email\" value=\"1\">"
-           . "<input type=\"submit\" value=\"➜ Push to Xero + email\" style=\"background:#13B5EA;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
+           . "<input type=\"submit\" value=\"✉ Email from CADViz\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
+           . "</form>";
+    } else {
+        echo " <form method=\"post\" action=\"xero_invoice_push.php\" style=\"display:inline\" onsubmit=\"return confirm('Push invoice #$invNo to Xero (creates the invoice; does NOT send the email yet)?');\">"
+           . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
+           . "<input type=\"submit\" value=\"➜ Push to Xero\" style=\"background:#13B5EA;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
            . "</form>";
     }
 }

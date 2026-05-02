@@ -402,14 +402,27 @@ window.onload = function () {
 <?php endif; ?>
 
 <!-- ── Submit form ───────────────────────────────────────────────────────── -->
-<form action="submit.php" id="submit_form" name="submit_form" method="post" style="width:680px;margin:0 auto">
+<?php
+    $hasGap = $mustFillFullWeek && !empty($missingWeekdays);
+    // First few missing day labels for the confirm dialog
+    $gapPreview = '';
+    if ($hasGap) {
+        $sample = array_slice($missingWeekdays, 0, 8);
+        $gapPreview = implode(', ', array_map(fn($d) => date('D j M', strtotime($d)), $sample));
+        if (count($missingWeekdays) > 8) $gapPreview .= ' (+' . (count($missingWeekdays) - 8) . ' more)';
+    }
+?>
+<form action="submit.php" id="submit_form" name="submit_form" method="post" style="width:680px;margin:0 auto"
+      <?php if ($hasGap): ?>onsubmit="return confirm('⚠ You still have <?= count($missingWeekdays) ?> missing weekday(s):\n\n<?= addslashes($gapPreview) ?>\n\nThis week will be saved, but the gap remains until you fill those days too.\n\nSubmit anyway?');"<?php endif; ?>>
 <input type="hidden" name="hidden_week" value="<?= htmlspecialchars($weekStart) ?>">
 <div style="padding:4px 0">
-  <input type="submit" name="Submit" value="Submit Timesheet"
-         <?= ($mustFillFullWeek && !empty($missingWeekdays)) ? 'disabled title="Fill in all weekdays first"' : '' ?>
-         style="padding:4px 14px;background:<?= ($mustFillFullWeek && !empty($missingWeekdays)) ? '#999' : '#9B9B1B' ?>;color:#fff;border:none;cursor:<?= ($mustFillFullWeek && !empty($missingWeekdays)) ? 'not-allowed' : 'pointer' ?>;border-radius:3px">
-  <?php if ($mustFillFullWeek && !empty($missingWeekdays)): ?>
-    <span style="color:#a00;font-size:11px;margin-left:8px">Submit blocked — fill all missing weekdays above first.</span>
+  <input type="submit" name="Submit"
+         value="<?= $hasGap ? '⚠ Submit (you have missing days)' : 'Submit Timesheet' ?>"
+         style="padding:6px 16px;background:<?= $hasGap ? '#c33' : '#9B9B1B' ?>;color:#fff;border:none;cursor:pointer;border-radius:3px;font-weight:<?= $hasGap ? 'bold' : 'normal' ?>;<?= $hasGap ? 'box-shadow:0 0 0 2px #fff3cd inset;' : '' ?>">
+  <?php if ($hasGap): ?>
+    <span style="color:#a00;font-size:11px;margin-left:8px">
+      <?= count($missingWeekdays) ?> missing weekday(s) in the past 4 weeks — submit will save what you've entered, but please go back and fill those too.
+    </span>
   <?php endif; ?>
 </div>
 

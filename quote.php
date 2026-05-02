@@ -228,6 +228,14 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
     ? 'Based on the scope of works CADViz can itemise the stages and tasks required to complete your project as follows:'
     : 'Stages and tasks for this project, with target hours per task:' ?></p>
 
+<?php if (empty($stages)): ?>
+<div class="card" style="background:#fff3cd;border:1px solid #c8a52e;color:#7a5a00;padding:10px 14px;margin:10px 0">
+  <strong>No stages defined yet on this project.</strong><br>
+  <span style="font-size:11px">Add stages and tasks via
+    <a href="project_stages.php?proj_id=<?= $proj_id ?>">Stages / Tasks (Quote builder)</a>
+    before printing the quote. (Or, if this is a small fixed-price job, switch the project's Quote Type to "fixed" so it prints as a lump-sum quote.)</span>
+</div>
+<?php endif; ?>
 <table class="items">
 <?php foreach ($stages as $stage):
     $sid = (int)$stage['Project_Stage_ID'];
