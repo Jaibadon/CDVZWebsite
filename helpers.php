@@ -4,6 +4,96 @@
  * Include with: require_once 'helpers.php';
  */
 
+// ─── App_Meta key/value store ─────────────────────────────────────────
+function meta_get(PDO $pdo, string $key, ?string $default = null): ?string {
+    try {
+        $st = $pdo->prepare("SELECT meta_value FROM App_Meta WHERE meta_key = ?");
+        $st->execute([$key]);
+        $v = $st->fetchColumn();
+        return $v === false ? $default : $v;
+    } catch (Exception $e) { return $default; }
+}
+function meta_set(PDO $pdo, string $key, string $value): void {
+    try {
+        $pdo->prepare("INSERT INTO App_Meta (meta_key, meta_value, updated_at) VALUES (?, ?, NOW())
+                       ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value), updated_at = NOW()")
+            ->execute([$key, $value]);
+    } catch (Exception $e) { /* table may not exist yet */ }
+}
+
+/**
+ * Auto-deactivate jobs and clients that have had no activity in the last
+ * 5 years. Activity = a Timesheets row (for projects) or a Project / Invoice
+ * touched in the window (for clients). Logs every deactivation in
+ * Dormancy_Log so an admin can review/undo from dormancy_sweep.php.
+ *
+ * Idempotent — re-runs in the same month are skipped via App_Meta.
+ *
+ * Returns ['projects' => N, 'clients' => N, 'ran' => bool].
+ */
+function dormancy_sweep_if_due(PDO $pdo): array {
+    $thisMonth = date('Y-m');
+    if (meta_get($pdo, 'dormancy_last_run') === $thisMonth) {
+        return ['projects' => 0, 'clients' => 0, 'ran' => false];
+    }
+    return dormancy_sweep_run($pdo);
+}
+
+function dormancy_sweep_run(PDO $pdo): array {
+    $cutoff = date('Y-m-d', strtotime('-5 years'));
+    $log = $pdo->prepare("INSERT INTO Dormancy_Log (swept_at, entity_type, entity_id, entity_label, last_activity)
+                          VALUES (NOW(), ?, ?, ?, ?)");
+
+    // ── Projects: Active=1 with no timesheet entry in 5y AND created/touched 5y+ ago
+    $projCount = 0;
+    try {
+        $proj = $pdo->prepare(
+            "SELECT p.proj_id, p.JobName,
+                    (SELECT MAX(TS_DATE) FROM Timesheets WHERE proj_id = p.proj_id) AS last_ts
+               FROM Projects p
+              WHERE COALESCE(p.Active, 0) <> 0
+                AND NOT EXISTS (SELECT 1 FROM Timesheets t WHERE t.proj_id = p.proj_id AND t.TS_DATE >= ?)"
+        );
+        $proj->execute([$cutoff]);
+        $upd = $pdo->prepare("UPDATE Projects SET Active = 0 WHERE proj_id = ?");
+        foreach ($proj->fetchAll() as $r) {
+            $upd->execute([(int)$r['proj_id']]);
+            $log->execute(['project', (int)$r['proj_id'], $r['JobName'], $r['last_ts']]);
+            $projCount++;
+        }
+    } catch (Exception $e) { /* schema mismatch — skip */ }
+
+    // ── Clients: no recent project AND no recent invoice
+    $cliCount = 0;
+    try {
+        // Detect Clients.Active column (some installs may not have it)
+        $hasActive = (bool)$pdo->query("SHOW COLUMNS FROM Clients LIKE 'Active'")->fetch();
+        if ($hasActive) {
+            $cli = $pdo->prepare(
+                "SELECT c.Client_id, c.Client_Name,
+                        GREATEST(
+                          COALESCE((SELECT MAX(t.TS_DATE) FROM Timesheets t JOIN Projects p ON t.proj_id = p.proj_id WHERE p.Client_ID = c.Client_id), '1970-01-01'),
+                          COALESCE((SELECT MAX(i.Date)    FROM Invoices  i WHERE i.Client_ID = c.Client_id), '1970-01-01')
+                        ) AS last_activity
+                   FROM Clients c
+                  WHERE COALESCE(c.Active, 0) <> 0
+                 HAVING last_activity < ?"
+            );
+            $cli->execute([$cutoff]);
+            $upd = $pdo->prepare("UPDATE Clients SET Active = 0 WHERE Client_id = ?");
+            foreach ($cli->fetchAll() as $r) {
+                $upd->execute([(int)$r['Client_id']]);
+                $log->execute(['client', (int)$r['Client_id'], $r['Client_Name'], $r['last_activity']]);
+                $cliCount++;
+            }
+        }
+    } catch (Exception $e) { /* skip */ }
+
+    meta_set($pdo, 'dormancy_last_run', date('Y-m'));
+    meta_set($pdo, 'dormancy_last_run_at', date('Y-m-d H:i:s'));
+    return ['projects' => $projCount, 'clients' => $cliCount, 'ran' => true];
+}
+
 /**
  * Convert any common date string into MySQL ISO format (Y-m-d).
  * Accepts: d/m/Y, d-m-Y, d.m.Y, Y-m-d, "Monday, 26 April 2026", etc.

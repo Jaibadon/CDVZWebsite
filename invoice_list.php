@@ -96,6 +96,9 @@ $sql = "SELECT Invoices.Invoice_No   AS Invoice_No,
                Invoices.Tax_Rate     AS Tax_Rate,
                Invoices.Status_INV   AS Status_INV,
                Invoices.Proj_ID      AS Proj_ID,
+               Invoices.Xero_InvoiceID AS Xero_InvoiceID,
+               Invoices.Xero_Status   AS Xero_Status,
+               Invoices.Xero_OnlineUrl AS Xero_OnlineUrl,
                Clients.Client_Name   AS Client_Name,
                Projects.JobName      AS JobName
           FROM Invoices
@@ -149,6 +152,22 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         echo "<font size=4 color=Red>***READY to Send Jen and I love you sweet thing :)</font>";
     } elseif ($status == 2) {
         echo "<font size=4>***SENT - everything is awesome!</font>";
+    }
+
+    // ── Xero status badge + push button ───────────────────────────────────
+    $xs = $rs['Xero_Status'] ?? null;
+    if ($xs) {
+        $badgeColor = ($xs === 'PAID') ? '#1a6b1a' : (($xs === 'AUTHORISED') ? '#5577aa' : '#999');
+        echo " <span style=\"background:$badgeColor;color:#fff;padding:2px 6px;border-radius:8px;font-size:11px;margin-left:6px\">Xero: " . htmlspecialchars($xs) . "</span>";
+        if (!empty($rs['Xero_OnlineUrl'])) {
+            echo " <a href=\"" . htmlspecialchars($rs['Xero_OnlineUrl']) . "\" target=\"_blank\" style=\"font-size:11px\">view in Xero</a>";
+        }
+    } else {
+        echo " <form method=\"post\" action=\"xero_invoice_push.php\" style=\"display:inline\" onsubmit=\"return confirm('Push invoice #$invNo to Xero?');\">"
+           . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
+           . "<input type=\"hidden\" name=\"email\" value=\"1\">"
+           . "<input type=\"submit\" value=\"➜ Push to Xero + email\" style=\"background:#13B5EA;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
+           . "</form>";
     }
 }
 if ($count === 0) {

@@ -1,10 +1,28 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
+require_once 'xero_client.php';
 
 $user    = htmlspecialchars($_SESSION['UserID']);
 $isAdmin = in_array($_SESSION['UserID'], ['erik', 'jen'], true)
            || (!empty($_SESSION['AccessLevel']) && $_SESSION['AccessLevel'] >= 9);
+
+// Run the dormant-jobs sweep at most once per month, on Erik's first menu
+// load of the month. Cheap no-op the rest of the time.
+$dormancyResult = null;
+if ($isAdmin && ($_SESSION['UserID'] ?? '') === 'erik') {
+    try {
+        $dormancyResult = dormancy_sweep_if_due(get_db());
+    } catch (Exception $e) { /* App_Meta may not exist if migration not run */ }
+}
+
+// Xero connection state for menu badges
+$xeroConfigured = XeroClient::isConfigured();
+$xeroConnected  = $xeroConfigured && XeroClient::isConnected(get_db());
+$xeroFlash      = $_SESSION['xero_flash'] ?? '';
+$xeroFlashErr   = $_SESSION['xero_flash_err'] ?? '';
+unset($_SESSION['xero_flash'], $_SESSION['xero_flash_err']);
 
 // Pending unapproved variations (admin alert)
 $pendingVariations = [];
@@ -63,6 +81,19 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
     <span>Logged in as <strong><?= $user ?></strong> &nbsp;|&nbsp; <a href="logout.php">Logout</a></span>
   </div>
   <div class="body">
+
+    <?php if ($xeroFlash): ?>
+      <div style="background:#d6f5d6;border:1px solid #1a6b1a;color:#1a6b1a;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($xeroFlash) ?></div>
+    <?php endif; ?>
+    <?php if ($xeroFlashErr): ?>
+      <div style="background:#ffd6d6;border:1px solid #c33;color:#a00;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($xeroFlashErr) ?></div>
+    <?php endif; ?>
+    <?php if (!empty($dormancyResult) && ($dormancyResult['projects'] + $dormancyResult['clients']) > 0): ?>
+      <div style="background:#fff3cd;border:1px solid #c8a52e;color:#7a5a00;padding:8px 12px;border-radius:4px;margin-bottom:12px">
+        Dormancy sweep ran today: deactivated <strong><?= (int)$dormancyResult['projects'] ?></strong> projects and <strong><?= (int)$dormancyResult['clients'] ?></strong> clients with no activity in the last 5 years.
+        <a href="dormancy_sweep.php?undo=1">Review / undo</a>
+      </div>
+    <?php endif; ?>
 
     <?php if ($isAdmin && !empty($pendingVariations)): ?>
     <div style="background:#fff3cd;border:2px solid #c33;border-radius:4px;padding:12px 16px;margin-bottom:16px">
@@ -129,15 +160,10 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
 
     <h3>Xero</h3>
     <div class="grid">
-      <?php
-        require_once 'xero_client.php';
-        $xeroConfigured = XeroClient::isConfigured();
-        $xeroConnected  = $xeroConfigured && XeroClient::isConnected($pdo);
-      ?>
       <?php if (!$xeroConfigured): ?>
         <span class="btn secondary" style="background:#999;cursor:default" title="Add XERO_CLIENT_ID + SECRET to config.php">Xero — not configured</span>
       <?php elseif (!$xeroConnected): ?>
-        <a class="btn secondary" href="xero_connect.php" style="background:#c33">Connect to Xero</a>
+        <a class="btn" href="xero_connect.php" style="background:#13B5EA">Connect to Xero</a>
       <?php else: ?>
         <a class="btn secondary" href="monthly_invoicing.php">Xero: Outstanding &amp; Overdue</a>
         <a class="btn secondary" href="xero_sync.php">Sync Xero now</a>

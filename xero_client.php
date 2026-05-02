@@ -1,4 +1,11 @@
 <?php
+// Pull in DB credentials AND XERO_* constants. xero_connect.php and other
+// Xero scripts may require this file without first loading db_connect.php,
+// so config must be self-loaded here.
+if (!defined('XERO_CLIENT_ID') && file_exists(__DIR__ . '/config.php')) {
+    require_once __DIR__ . '/config.php';
+}
+
 /**
  * Lightweight Xero API client (no Composer dependency).
  *

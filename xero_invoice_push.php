@@ -27,10 +27,15 @@ $pdo = get_db();
 try {
     $xc = new XeroClient($pdo);
 
-    // Pull invoice header + client
+    // Pull invoice header + client. Schema:
+    //   Invoices.Date (timestamp), .PayBy (datetime), .Notes, .Order_No_INV,
+    //            .Subtotal, .Tax_Rate, .Xero_InvoiceID (for re-push/update)
+    //   Clients.billing_email
     $h = $pdo->prepare(
-        "SELECT i.Invoice_No, i.Invoice_Date, i.Due_Date, i.Comments,
-                c.Client_id, c.Client_Name, c.Email, c.Multiplier
+        "SELECT i.Invoice_No, i.Date AS Invoice_Date, i.PayBy AS Due_Date,
+                i.Notes AS Comments, i.Order_No_INV, i.Subtotal, i.Tax_Rate,
+                i.Xero_InvoiceID,
+                c.Client_id, c.Client_Name, c.billing_email AS Email, c.Multiplier
            FROM Invoices i
            LEFT JOIN Clients c ON i.Client_ID = c.Client_id
           WHERE i.Invoice_No = ?"
@@ -54,7 +59,8 @@ try {
     $lines->execute([$invoiceNo]);
     $items = $lines->fetchAll();
 
-    if (empty($items)) throw new Exception("Invoice #$invoiceNo has no timesheet lines.");
+    // Note: empty $items is no longer fatal — we fall back to a lump-sum
+    // line built from Invoices.Subtotal further down (small fixed-price jobs).
 
     $multiplier = (float)($head['Multiplier'] ?? 1) ?: 1;
     $baseRate   = 90.00;
@@ -69,25 +75,42 @@ try {
             'Description' => trim(($li['JobName'] ?? '') . ' — ' . ($li['Task'] ?? '')),
             'Quantity'    => round($hrs, 2),
             'UnitAmount'  => round($rate, 2),
-            'AccountCode' => '200',           // Standard sales account; Erik can adjust per org defaults
+            'AccountCode' => '240',           // 240 Sales (CADViz Xero account)
             'TaxType'     => 'OUTPUT2',       // NZ GST 15% sales
+        ];
+    }
+
+    // Fallback: lump-sum invoice (no timesheet rows e.g. small fixed-price jobs)
+    if (empty($xeroLines) && (float)($head['Subtotal'] ?? 0) > 0) {
+        $xeroLines[] = [
+            'Description' => trim(($head['Comments'] ?? '') ?: ('Invoice #' . $invoiceNo)),
+            'Quantity'    => 1,
+            'UnitAmount'  => round((float)$head['Subtotal'], 2),
+            'AccountCode' => '240',
+            'TaxType'     => 'OUTPUT2',
         ];
     }
 
     if (empty($head['Client_Name'])) throw new Exception("Client missing name; can't create Xero contact.");
     $contactId = $xc->ensureContact($head['Client_Name'], $head['Email'] ?? null);
 
+    if (empty($xeroLines)) throw new Exception("Invoice #$invoiceNo has no line items and no subtotal — nothing to send.");
+
     $invoiceBody = [
         'Type'            => 'ACCREC',
         'Contact'         => ['ContactID' => $contactId],
-        'Date'            => display_date($head['Invoice_Date'], 'Y-m-d') ?: date('Y-m-d'),
-        'DueDate'         => display_date($head['Due_Date'], 'Y-m-d') ?: date('Y-m-d', strtotime('+20 days')),
-        'InvoiceNumber'   => 'INV-' . $invoiceNo,
-        'Reference'       => $head['Comments'] ?? '',
+        'Date'            => $head['Invoice_Date'] ? date('Y-m-d', strtotime($head['Invoice_Date'])) : date('Y-m-d'),
+        'DueDate'         => $head['Due_Date']     ? date('Y-m-d', strtotime($head['Due_Date']))     : date('Y-m-d', strtotime('+20 days')),
+        'InvoiceNumber'   => 'CV-' . str_pad((string)$invoiceNo, 5, '0', STR_PAD_LEFT),
+        'Reference'       => $head['Order_No_INV'] ?: ($head['Comments'] ?? ''),
         'LineAmountTypes' => 'Exclusive',
         'Status'          => 'AUTHORISED',
         'LineItems'       => $xeroLines,
     ];
+    // Update an existing Xero invoice instead of creating a duplicate
+    if (!empty($head['Xero_InvoiceID'])) {
+        $invoiceBody['InvoiceID'] = $head['Xero_InvoiceID'];
+    }
 
     $xeroResp = $xc->postInvoice($invoiceBody);
     $xeroId   = $xeroResp['InvoiceID'] ?? null;

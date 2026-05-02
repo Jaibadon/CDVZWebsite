@@ -15,14 +15,15 @@
  *      access to the CADViz organisation. Tokens are stored in
  *      Xero_Tokens and refresh automatically.
  *
- * Scopes requested:
- *   - offline_access      — required to receive refresh_token
- *   - accounting.contacts — needed to attach invoices to contacts
- *   - accounting.transactions — read/write invoices
- *   - accounting.transactions.read — for status sync GETs
+ * Scopes requested (Xero deprecated `accounting.transactions` 2024 — must use
+ * the granular `accounting.invoices` family now):
+ *   - offline_access              — required to receive refresh_token
+ *   - accounting.contacts         — read/create Xero contacts (clients)
+ *   - accounting.invoices         — create/update invoices
+ *   - accounting.invoices.read    — sync invoice statuses for follow-up
  */
 
 const XERO_CLIENT_ID     = 'PUT-YOUR-CLIENT-ID-HERE';
 const XERO_CLIENT_SECRET = 'PUT-YOUR-CLIENT-SECRET-HERE';
 const XERO_REDIRECT_URI  = 'https://remote.cadviz.co.nz/xero_callback.php';
-const XERO_SCOPES        = 'offline_access accounting.contacts accounting.transactions accounting.transactions.read';
+const XERO_SCOPES        = 'offline_access accounting.contacts accounting.invoices accounting.invoices.read';

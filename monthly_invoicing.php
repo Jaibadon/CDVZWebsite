@@ -1,6 +1,7 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'xero_client.php';
 
 $userID = $_SESSION['UserID'];
 
@@ -12,6 +13,33 @@ if (!in_array($userID, $allowed)) {
 }
 
 $pdo = get_db();
+$xeroConnected = XeroClient::isConfigured() && XeroClient::isConnected($pdo);
+
+// Pull the follow-up list: invoices that are AUTHORISED in Xero with money
+// still owing past the due date.
+$followups = [];
+if ($xeroConnected) {
+    try {
+        $followups = $pdo->query(
+            "SELECT i.Invoice_No, i.Date, i.Subtotal, i.Notes, i.Order_No_INV,
+                    i.Xero_Status, i.Xero_AmountDue, i.Xero_AmountPaid, i.Xero_DueDate,
+                    i.Xero_LastSynced, i.Xero_OnlineUrl,
+                    DATEDIFF(CURDATE(), i.Xero_DueDate) AS days_overdue,
+                    c.Client_Name, c.billing_email, c.phone_no
+               FROM Invoices i
+               LEFT JOIN Clients c ON i.Client_ID = c.Client_id
+              WHERE i.Xero_InvoiceID IS NOT NULL
+                AND i.Xero_Status = 'AUTHORISED'
+                AND i.Xero_AmountDue > 0
+                AND (i.Xero_DueDate IS NULL OR i.Xero_DueDate < CURDATE())
+              ORDER BY i.Xero_DueDate ASC, i.Invoice_No DESC"
+        )->fetchAll();
+    } catch (Exception $e) { /* migration may not be run */ }
+}
+
+$flash    = $_SESSION['xero_flash']     ?? '';
+$flashErr = $_SESSION['xero_flash_err'] ?? '';
+unset($_SESSION['xero_flash'], $_SESSION['xero_flash_err']);
 ?>
 <script language="Javascript">
     document.onkeydown = function() {
@@ -34,6 +62,61 @@ $pdo = get_db();
 </style>
 </head>
 <body bgcolor="#EBEBEB" text="black">
+
+<!-- ── Xero overdue follow-up panel (Jen's monthly call list) ───────────── -->
+<div style="max-width:900px;margin:10px auto;padding:12px 16px;background:#fff;border:1px solid #ccc;border-radius:4px">
+  <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <strong style="font-size:14px;color:#9B9B1B">Xero — Overdue Follow-up</strong>
+    <?php if (!$xeroConnected): ?>
+      <span style="color:#a00">⚠ Not connected.</span>
+      <a href="xero_connect.php" style="background:#13B5EA;color:#fff;padding:4px 10px;border-radius:3px;text-decoration:none">Connect to Xero</a>
+    <?php else: ?>
+      <a href="xero_sync.php?back=monthly_invoicing.php" style="background:#13B5EA;color:#fff;padding:4px 10px;border-radius:3px;text-decoration:none">🔄 Sync from Xero</a>
+      <span style="color:#666;font-size:11px"><?= count($followups) ?> overdue invoice(s) need follow-up</span>
+    <?php endif; ?>
+  </div>
+
+  <?php if ($flash): ?><p style="background:#d6f5d6;color:#1a6b1a;padding:6px 10px;margin:8px 0 0;border-radius:3px"><?= htmlspecialchars($flash) ?></p><?php endif; ?>
+  <?php if ($flashErr): ?><p style="background:#ffd6d6;color:#a00;padding:6px 10px;margin:8px 0 0;border-radius:3px"><?= htmlspecialchars($flashErr) ?></p><?php endif; ?>
+
+  <?php if ($xeroConnected && !empty($followups)): ?>
+  <table class="table" style="margin-top:10px;width:100%">
+    <thead><tr>
+      <th>Inv #</th><th>Client</th><th>Due</th><th>Days Late</th><th>Owing</th><th>Contact</th><th>Action</th>
+    </tr></thead>
+    <tbody>
+      <?php foreach ($followups as $f): ?>
+      <tr>
+        <td>
+          <?php if ($f['Xero_OnlineUrl']): ?>
+            <a href="<?= htmlspecialchars($f['Xero_OnlineUrl']) ?>" target="_blank">CV-<?= str_pad((string)$f['Invoice_No'], 5, '0', STR_PAD_LEFT) ?></a>
+          <?php else: ?>
+            CV-<?= str_pad((string)$f['Invoice_No'], 5, '0', STR_PAD_LEFT) ?>
+          <?php endif; ?>
+        </td>
+        <td><?= htmlspecialchars($f['Client_Name'] ?? '?') ?></td>
+        <td><?= htmlspecialchars($f['Xero_DueDate'] ?? '—') ?></td>
+        <td style="<?= ((int)$f['days_overdue'] > 30) ? 'background:#ffd6d6;color:#a00;font-weight:bold' : 'background:#fff3cd;color:#7a5a00' ?>">
+          <?= (int)$f['days_overdue'] ?>d
+        </td>
+        <td>$<?= number_format((float)$f['Xero_AmountDue'], 2) ?></td>
+        <td style="font-size:11px">
+          <?php if ($f['phone_no']): ?>📞 <?= htmlspecialchars($f['phone_no']) ?><br><?php endif; ?>
+          <?php if ($f['billing_email']): ?>✉ <a href="mailto:<?= htmlspecialchars($f['billing_email']) ?>"><?= htmlspecialchars($f['billing_email']) ?></a><?php endif; ?>
+        </td>
+        <td><span style="color:#999;font-size:11px">Manual call required</span></td>
+      </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+  <p style="font-size:11px;color:#666;margin-top:6px">
+    Last synced: <?= !empty($followups[0]['Xero_LastSynced']) ? htmlspecialchars($followups[0]['Xero_LastSynced']) : '(never)' ?>.
+    Press "Sync from Xero" to refresh statuses before making calls.
+  </p>
+  <?php elseif ($xeroConnected): ?>
+    <p style="color:#1a6b1a;margin:8px 0 0">✓ No overdue invoices in Xero.</p>
+  <?php endif; ?>
+</div>
 
 <table width="600" border="0" cellspacing="0" cellpadding="0" bgcolor="#EBEBEB" id="table8">
   <tr>
