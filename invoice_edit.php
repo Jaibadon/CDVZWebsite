@@ -354,15 +354,15 @@ echo "</tr>";
 <table>
     <tr>
       <td><?php
-echo '<a href="invoice.php?invoice_no=' . htmlspecialchars($rs['invoice_no']) . '">Preview Invoice</a>';
+echo '<a href="invoice.php?Invoice_No=' . htmlspecialchars((string)($rs['Invoice_No'] ?? $invoice_no)) . '">Preview Invoice</a>';
 ?></td>
       <td width="200">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;</td>
       <td><?php
-echo '<a href="invoice_edit.php?invoice_no=' . ((int)$rs['invoice_no'] - 1) . '">&lt;&lt; Previous</a>';
+echo '<a href="invoice_edit.php?Invoice_No=' . ((int)($rs['Invoice_No'] ?? $invoice_no) - 1) . '">&lt;&lt; Previous</a>';
 ?></td>
       <td>&nbsp;</td>
       <td><?php
-echo '<a href="invoice_edit.php?invoice_no=' . ((int)$rs['invoice_no'] + 1) . '">Next &gt;&gt;</a>';
+echo '<a href="invoice_edit.php?Invoice_No=' . ((int)($rs['Invoice_No'] ?? $invoice_no) + 1) . '">Next &gt;&gt;</a>';
 ?></td>
     </tr>
 </table>

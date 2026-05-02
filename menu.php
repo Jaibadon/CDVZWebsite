@@ -24,6 +24,13 @@ $xeroFlash      = $_SESSION['xero_flash'] ?? '';
 $xeroFlashErr   = $_SESSION['xero_flash_err'] ?? '';
 unset($_SESSION['xero_flash'], $_SESSION['xero_flash_err']);
 
+// Google SMTP (XOAUTH2) state
+require_once 'smtp_oauth.php';
+$smtpConfigured = SmtpOAuth::isConfigured();
+$smtpConnected  = $smtpConfigured && SmtpOAuth::isConnected(get_db());
+$smtpFlash      = $_SESSION['smtp_flash'] ?? '';
+unset($_SESSION['smtp_flash']);
+
 // Pending unapproved variations (admin alert)
 $pendingVariations = [];
 if ($isAdmin) {
@@ -156,6 +163,19 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
       <a class="btn secondary" href="staff_hours.php">Staff Hours</a>
       <a class="btn secondary" href="monthly_invoicing.php">Monthly Invoicing</a>
       <a class="btn secondary" href="task_analytics.php">Task Analytics</a>
+    </div>
+
+    <?php if ($smtpFlash): ?><div style="background:#d6f5d6;border:1px solid #1a6b1a;color:#1a6b1a;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($smtpFlash) ?></div><?php endif; ?>
+
+    <h3>Email (Google SMTP / OAuth)</h3>
+    <div class="grid">
+      <?php if (!$smtpConfigured): ?>
+        <span class="btn secondary" style="background:#999;cursor:default" title="Add GOOGLE_OAUTH_CLIENT_ID + SECRET to config.php">Google SMTP — not configured</span>
+      <?php elseif (!$smtpConnected): ?>
+        <a class="btn" href="smtp_oauth_connect.php" style="background:#4285F4">Connect Google SMTP</a>
+      <?php else: ?>
+        <span class="btn secondary" style="background:#1a6b1a;cursor:default" title="Connected as <?= htmlspecialchars(SmtpOAuth::authenticatedUser(get_db())) ?>">Google SMTP ✓</span>
+      <?php endif; ?>
     </div>
 
     <h3>Xero</h3>

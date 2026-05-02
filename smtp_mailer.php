@@ -26,6 +26,8 @@
 if (!defined('SMTP_HOST') && file_exists(__DIR__ . '/config.php')) {
     require_once __DIR__ . '/config.php';
 }
+require_once __DIR__ . '/smtp_oauth.php';
+require_once __DIR__ . '/db_connect.php';
 
 class SmtpException extends \Exception {}
 
@@ -33,10 +35,22 @@ class SmtpMailer
 {
     public static function isConfigured(): bool
     {
-        return defined('SMTP_HOST') && SMTP_HOST !== ''
-            && defined('SMTP_USER') && SMTP_USER !== ''
+        if (!defined('SMTP_HOST') || SMTP_HOST === '') return false;
+        $mode = defined('SMTP_AUTH_MODE') ? SMTP_AUTH_MODE : 'login';
+        if ($mode === 'oauth2') {
+            return SmtpOAuth::isConfigured();
+        }
+        return defined('SMTP_USER') && SMTP_USER !== ''
             && defined('SMTP_PASS') && SMTP_PASS !== ''
             && SMTP_PASS !== 'PUT-MAILBOX-PASSWORD-HERE';
+    }
+
+    public static function isReady(PDO $pdo): bool
+    {
+        if (!self::isConfigured()) return false;
+        $mode = defined('SMTP_AUTH_MODE') ? SMTP_AUTH_MODE : 'login';
+        if ($mode === 'oauth2') return SmtpOAuth::isConnected($pdo);
+        return true;
     }
 
     public static function send(array $msg): void
@@ -203,12 +217,23 @@ class SmtpMailer
             $expect(250);
         }
 
-        $write('AUTH LOGIN');
-        $expect(334);
-        $write(base64_encode(SMTP_USER));
-        $expect(334);
-        $write(base64_encode(SMTP_PASS));
-        $expect(235);
+        $mode = defined('SMTP_AUTH_MODE') ? SMTP_AUTH_MODE : 'login';
+        if ($mode === 'oauth2') {
+            // Google deprecated AUTH LOGIN. Use XOAUTH2 — fetch a fresh
+            // access_token from Smtp_Tokens (refresh if expiring).
+            $accessToken = SmtpOAuth::getAccessToken(get_db());
+            $authUser    = SmtpOAuth::authenticatedUser(get_db());
+            $xoauth = base64_encode("user=" . $authUser . "\x01auth=Bearer " . $accessToken . "\x01\x01");
+            $write('AUTH XOAUTH2 ' . $xoauth);
+            $expect(235);
+        } else {
+            $write('AUTH LOGIN');
+            $expect(334);
+            $write(base64_encode(SMTP_USER));
+            $expect(334);
+            $write(base64_encode(SMTP_PASS));
+            $expect(235);
+        }
 
         $write('MAIL FROM:<' . SMTP_FROM_EMAIL . '>');
         $expect(250);

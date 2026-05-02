@@ -1,6 +1,7 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 require_once 'xero_client.php';
 
 $userID = $_SESSION['UserID'];
@@ -170,14 +171,25 @@ if ($xeroConnected) {
       <?php if (empty($overdue)): ?>
         <p style="color:#1a6b1a">✓ Nothing outstanding. Great.</p>
       <?php else: ?>
-        <p style="font-size:11px;color:#555">Manual follow-up needed each month — give the client a phone call.</p>
+        <p style="font-size:11px;color:#555">
+          Manual follow-up needed each month — give the client a phone call,
+          and click <strong>Send reminder</strong> to email them an overdue
+          notice from <code>accounts@cadviz.co.nz</code> (better deliverability
+          than letting Xero send it). Reminders skip auto if one was already
+          sent in the last 6 days.
+          <br>
+          <a href="xero_send_reminders.php?dry_run=1" target="_blank">Preview reminder run (dry-run)</a>
+          &nbsp;|&nbsp;
+          <a href="xero_send_reminders.php" target="_blank" onclick="return confirm('Send all due reminders now (cron-equivalent)?');">Run reminder batch now</a>
+        </p>
         <table class="table">
-          <tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Email</th><th>Due</th><th class="right">Amount Due</th><th>Status</th><th>Action</th></tr>
+          <tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Email</th><th>Due</th><th class="right">Amount Due</th><th>Status</th><th>Last reminder</th><th>Action</th></tr>
           <?php foreach ($overdue as $od):
               $isOverdue = $od['Xero_DueDate'] && $od['Xero_DueDate'] < date('Y-m-d');
+              $lastReminder = meta_get($pdo, 'reminder_last_' . (int)$od['Invoice_No']);
           ?>
             <tr<?= $isOverdue ? ' style="background:#ffd6d6"' : '' ?>>
-              <td>INV-<?= (int)$od['Invoice_No'] ?></td>
+              <td>CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?></td>
               <td><?= htmlspecialchars($od['Client_Name'] ?? '?') ?></td>
               <td><?= htmlspecialchars($od['Phone_1'] ?? '') ?></td>
               <td><a href="mailto:<?= htmlspecialchars($od['Email'] ?? '') ?>"><?= htmlspecialchars($od['Email'] ?? '') ?></a></td>
@@ -185,16 +197,21 @@ if ($xeroConnected) {
                 <?php if ($isOverdue): ?><br><strong style="color:#a00">OVERDUE</strong><?php endif; ?></td>
               <td class="right">$<?= number_format((float)$od['Xero_AmountDue'], 2) ?></td>
               <td><?= htmlspecialchars($od['Xero_Status']) ?></td>
+              <td style="font-size:11px"><?= $lastReminder ? date('d/m/Y', strtotime($lastReminder)) : '<span style="color:#999">—</span>' ?></td>
               <td>
                 <?php if ($od['Xero_OnlineUrl']): ?>
-                  <a href="<?= htmlspecialchars($od['Xero_OnlineUrl']) ?>" target="_blank">Online invoice</a><br>
+                  <a href="<?= htmlspecialchars($od['Xero_OnlineUrl']) ?>" target="_blank" style="font-size:11px">Online</a> ·
                 <?php endif; ?>
-                <a href="invoice.php?Invoice_No=<?= (int)$od['Invoice_No'] ?>">Local view</a>
+                <a href="invoice.php?Invoice_No=<?= (int)$od['Invoice_No'] ?>" style="font-size:11px">Local</a>
+                <br>
+                <a href="xero_send_reminders.php?invoice_no=<?= (int)$od['Invoice_No'] ?>"
+                   onclick="return confirm('Send overdue reminder for CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?> from accounts@cadviz.co.nz?');"
+                   style="background:#9B9B1B;color:#fff;padding:2px 8px;border-radius:3px;text-decoration:none;font-size:11px">✉ Send reminder</a>
               </td>
             </tr>
           <?php endforeach; ?>
         </table>
-        <p style="font-size:11px;color:#666;margin-top:6px">Once paid, run "Sync from Xero now" again — paid invoices drop off this list automatically.</p>
+        <p style="font-size:11px;color:#666;margin-top:6px">Once paid, run "Sync from Xero now" again — paid invoices drop off this list automatically. Disable Xero's built-in auto-reminders so clients don't get duplicate emails.</p>
       <?php endif; ?>
     <?php endif; ?>
   </div>

@@ -171,6 +171,15 @@ if ($locked === "true") {
     }
 }
 
+// Re-check missing weekdays AFTER the submit so we can warn the staff
+// member (without blocking) about any remaining gaps.
+$postSubmitMissing = [];
+if (is_employed_staff($_SESSION['UserID'] ?? '')) {
+    try {
+        $postSubmitMissing = missing_weekdays($pdo, (int)($_SESSION['Employee_id'] ?? 0), 4);
+    } catch (Exception $e) { /* helpers may not be loaded */ }
+}
+
 // ─── DB work done — start emitting the response page ────────────────────
 ?>
 <!DOCTYPE html>
@@ -184,6 +193,30 @@ if ($locked === "true") {
 <link rel="stylesheet" href="global.css" type="text/css">
 </head>
 <body bgcolor="#DFEFEF">
+
+<?php if (!empty($postSubmitMissing)): ?>
+<!-- Big red banner for full-time staff who still have missing days. The
+     timesheet WAS submitted (this week's entries are saved) — this is just
+     a reminder that the gap remains. -->
+<div style="max-width:760px;margin:14px auto;padding:14px 18px;background:#ffd6d6;border:3px solid #c33;border-radius:6px;color:#a00">
+  <h2 style="margin:0 0 6px;color:#a00">⚠ Submitted, but you still have missing days</h2>
+  <p style="margin:0 0 8px"><strong>Your timesheet WAS saved</strong> — but as a full-time staff member you
+     still have <strong><?= count($postSubmitMissing) ?> weekday(s)</strong> in the past 4 weeks with no time
+     logged. Please go back and fill them in (project work, leave, or sick).</p>
+  <p style="margin:0 0 6px"><strong>Missing dates:</strong></p>
+  <ul style="margin:0 0 8px 18px">
+    <?php foreach (array_slice($postSubmitMissing, 0, 12) as $d):
+        $mon = date('Y-m-d', strtotime('monday this week', strtotime($d)));
+    ?>
+      <li><?= htmlspecialchars(date('D j M Y', strtotime($d))) ?> &nbsp;
+          <a href="main.php?week=<?= urlencode($mon) ?>" style="color:#a00">→ Open week of <?= htmlspecialchars(date('D j M', strtotime($mon))) ?></a></li>
+    <?php endforeach; ?>
+    <?php if (count($postSubmitMissing) > 12): ?><li>(+<?= count($postSubmitMissing) - 12 ?> more)</li><?php endif; ?>
+  </ul>
+  <a href="main.php" style="background:#c33;color:#fff;padding:6px 14px;border-radius:3px;text-decoration:none;font-weight:bold">← Back to timesheet to fill missing days</a>
+</div>
+<?php endif; ?>
+
 <?php if ($errorShown): ?>
 <?php elseif ($locked === "false" || $error === "successful"): ?>
 <p>&nbsp;</p><p>&nbsp;</p>

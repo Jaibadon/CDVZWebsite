@@ -66,7 +66,7 @@ try {
     $pdf    = $client->getInvoicePdf($row['Xero_InvoiceID']);
 
     // ── Compose the email ─────────────────────────────────────────────────
-    $invNumStr  = 'CV-' . str_pad((string)$invoiceNo, 5, '0', STR_PAD_LEFT);
+    $invNumStr  = 'CAD-' . str_pad((string)$invoiceNo, 5, '0', STR_PAD_LEFT);
     $totalIncTax = (float)$row['Subtotal'] * (1 + (float)$row['Tax_Rate']);
     $clientName = trim($row['Client_Name'] ?: 'there');
     $payBy      = $row['PayBy'] ? date('d/m/Y', strtotime($row['PayBy'])) : null;

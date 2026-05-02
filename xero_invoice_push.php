@@ -101,7 +101,7 @@ try {
         'Contact'         => ['ContactID' => $contactId],
         'Date'            => $head['Invoice_Date'] ? date('Y-m-d', strtotime($head['Invoice_Date'])) : date('Y-m-d'),
         'DueDate'         => $head['Due_Date']     ? date('Y-m-d', strtotime($head['Due_Date']))     : date('Y-m-d', strtotime('+20 days')),
-        'InvoiceNumber'   => 'CV-' . str_pad((string)$invoiceNo, 5, '0', STR_PAD_LEFT),
+        'InvoiceNumber'   => 'CAD-' . str_pad((string)$invoiceNo, 5, '0', STR_PAD_LEFT),
         'Reference'       => $head['Order_No_INV'] ?: ($head['Comments'] ?? ''),
         'LineAmountTypes' => 'Exclusive',
         'Status'          => 'AUTHORISED',
