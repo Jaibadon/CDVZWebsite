@@ -126,6 +126,24 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
       <a class="btn secondary" href="monthly_invoicing.php">Monthly Invoicing</a>
       <a class="btn secondary" href="task_analytics.php">Task Analytics</a>
     </div>
+
+    <h3>Xero</h3>
+    <div class="grid">
+      <?php
+        require_once 'xero_client.php';
+        $xeroConfigured = XeroClient::isConfigured();
+        $xeroConnected  = $xeroConfigured && XeroClient::isConnected($pdo);
+      ?>
+      <?php if (!$xeroConfigured): ?>
+        <span class="btn secondary" style="background:#999;cursor:default" title="Add XERO_CLIENT_ID + SECRET to config.php">Xero — not configured</span>
+      <?php elseif (!$xeroConnected): ?>
+        <a class="btn secondary" href="xero_connect.php" style="background:#c33">Connect to Xero</a>
+      <?php else: ?>
+        <a class="btn secondary" href="monthly_invoicing.php">Xero: Outstanding &amp; Overdue</a>
+        <a class="btn secondary" href="xero_sync.php">Sync Xero now</a>
+        <a class="btn secondary" href="xero_disconnect.php" style="background:#666">Disconnect Xero</a>
+      <?php endif; ?>
+    </div>
     <?php endif; ?>
 
   </div>

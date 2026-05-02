@@ -94,7 +94,80 @@ foreach ($rows as $row) {
     echo '$' . number_format($tot, 2);
 }
 echo '<br><strong>GRAND TOTAL [excl]......$' . number_format($grand, 2) . '</strong>';
+
+// ── Xero overdue follow-up list ───────────────────────────────────────
+require_once 'xero_client.php';
+$xeroConnected = XeroClient::isConnected($pdo);
+$overdue = [];
+$lastSync = null;
+if ($xeroConnected) {
+    try {
+        $st = $pdo->query(
+            "SELECT i.Invoice_No, i.Xero_Status, i.Xero_AmountDue, i.Xero_DueDate, i.Xero_OnlineUrl,
+                    i.Xero_LastSynced, c.Client_Name, c.Phone_1, c.Email
+               FROM Invoices i
+               LEFT JOIN Clients c ON i.Client_ID = c.Client_id
+              WHERE i.Xero_InvoiceID IS NOT NULL
+                AND i.Xero_AmountDue > 0
+                AND i.Xero_Status IN ('AUTHORISED','SUBMITTED')
+              ORDER BY i.Xero_DueDate ASC"
+        );
+        $overdue = $st->fetchAll();
+    } catch (Exception $e) {
+        // Columns may not exist yet if migration not run
+    }
+    try {
+        $lastSync = $pdo->query("SELECT MAX(Xero_LastSynced) FROM Invoices")->fetchColumn();
+    } catch (Exception $e) {}
+}
 ?>
+
+<div class="page" style="max-width:900px;margin-top:20px">
+  <div class="card">
+    <h2 style="margin-top:0">Xero — Outstanding & Overdue Invoices</h2>
+    <?php if (!XeroClient::isConfigured()): ?>
+      <p style="color:#a00">Xero not configured. Add XERO_CLIENT_ID / XERO_CLIENT_SECRET to config.php (see config.xero.sample.php).</p>
+    <?php elseif (!$xeroConnected): ?>
+      <p>Not connected. <a href="xero_connect.php" class="btn-primary">Connect to Xero</a> (Erik must complete the OAuth consent).</p>
+    <?php else: ?>
+      <p>
+        <a href="xero_sync.php" class="btn-primary">🔄 Sync from Xero now</a>
+        <?php if ($lastSync): ?>
+          <span style="color:#666;font-size:11px;margin-left:10px">Last synced: <?= htmlspecialchars($lastSync) ?> UTC</span>
+        <?php endif; ?>
+      </p>
+      <?php if (empty($overdue)): ?>
+        <p style="color:#1a6b1a">✓ Nothing outstanding. Great.</p>
+      <?php else: ?>
+        <p style="font-size:11px;color:#555">Manual follow-up needed each month — give the client a phone call.</p>
+        <table class="table">
+          <tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Email</th><th>Due</th><th class="right">Amount Due</th><th>Status</th><th>Action</th></tr>
+          <?php foreach ($overdue as $od):
+              $isOverdue = $od['Xero_DueDate'] && $od['Xero_DueDate'] < date('Y-m-d');
+          ?>
+            <tr<?= $isOverdue ? ' style="background:#ffd6d6"' : '' ?>>
+              <td>INV-<?= (int)$od['Invoice_No'] ?></td>
+              <td><?= htmlspecialchars($od['Client_Name'] ?? '?') ?></td>
+              <td><?= htmlspecialchars($od['Phone_1'] ?? '') ?></td>
+              <td><a href="mailto:<?= htmlspecialchars($od['Email'] ?? '') ?>"><?= htmlspecialchars($od['Email'] ?? '') ?></a></td>
+              <td><?= $od['Xero_DueDate'] ? date('d/m/Y', strtotime($od['Xero_DueDate'])) : '?' ?>
+                <?php if ($isOverdue): ?><br><strong style="color:#a00">OVERDUE</strong><?php endif; ?></td>
+              <td class="right">$<?= number_format((float)$od['Xero_AmountDue'], 2) ?></td>
+              <td><?= htmlspecialchars($od['Xero_Status']) ?></td>
+              <td>
+                <?php if ($od['Xero_OnlineUrl']): ?>
+                  <a href="<?= htmlspecialchars($od['Xero_OnlineUrl']) ?>" target="_blank">Online invoice</a><br>
+                <?php endif; ?>
+                <a href="invoice.php?Invoice_No=<?= (int)$od['Invoice_No'] ?>">Local view</a>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+        </table>
+        <p style="font-size:11px;color:#666;margin-top:6px">Once paid, run "Sync from Xero now" again — paid invoices drop off this list automatically.</p>
+      <?php endif; ?>
+    <?php endif; ?>
+  </div>
+</div>
 
 </body>
 </html>

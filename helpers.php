@@ -66,23 +66,33 @@ function is_employed_staff(?string $userId): bool {
  * Hours > 0 (so leave/sick on the LEAVE SICK project counts too).
  */
 function missing_weekdays(PDO $pdo, int $empId, int $weeksBack = 4): array {
-    $today = strtotime(date('Y-m-d'));
-    $start = strtotime("-{$weeksBack} weeks", $today);
+    if ($empId <= 0) return [];
+    $today = new DateTime(date('Y-m-d'));
+    $start = (clone $today)->modify("-{$weeksBack} weeks");
 
+    // Normalise both sides to Y-m-d. Timesheets.TS_DATE may be DATE or
+    // DATETIME — we always cast to DATE in SQL to make the keys comparable.
     $stmt = $pdo->prepare(
-        "SELECT DISTINCT TS_DATE FROM Timesheets
-          WHERE Employee_id = ? AND TS_DATE BETWEEN ? AND ? AND Hours > 0"
+        "SELECT DISTINCT DATE_FORMAT(TS_DATE, '%Y-%m-%d') AS d
+           FROM Timesheets
+          WHERE Employee_id = ?
+            AND TS_DATE BETWEEN ? AND ?
+            AND Hours > 0"
     );
-    $stmt->execute([$empId, date('Y-m-d', $start), date('Y-m-d', $today)]);
+    $stmt->execute([$empId, $start->format('Y-m-d'), $today->format('Y-m-d')]);
     $logged = [];
-    foreach ($stmt->fetchAll() as $r) $logged[$r['TS_DATE']] = true;
+    foreach ($stmt->fetchAll() as $r) $logged[$r['d']] = true;
 
     $missing = [];
-    for ($t = $start; $t <= $today; $t = strtotime('+1 day', $t)) {
-        $dow = (int)date('N', $t); // 1=Mon … 7=Sun
-        if ($dow >= 6) continue;   // skip Sat/Sun
-        $d = date('Y-m-d', $t);
-        if (!isset($logged[$d])) $missing[] = $d;
+    $cur = clone $start;
+    $oneDay = new DateInterval('P1D');
+    while ($cur <= $today) {
+        $dow = (int)$cur->format('N'); // 1=Mon … 7=Sun
+        if ($dow < 6) {
+            $d = $cur->format('Y-m-d');
+            if (!isset($logged[$d])) $missing[] = $d;
+        }
+        $cur->add($oneDay);
     }
     return $missing;
 }

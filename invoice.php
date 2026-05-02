@@ -309,5 +309,59 @@ if ($baseTs) {
 </td>
 </tr>
 </table>
+
+<?php
+// ── Xero push panel (admin only) ──────────────────────────────────────
+require_once 'xero_client.php';
+if (in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)):
+    $xc_status = null; $xc_due = null; $xc_paid = null; $xc_url = null; $xc_id = null; $xc_synced = null;
+    try {
+        $st = $pdo->prepare("SELECT Xero_InvoiceID, Xero_Status, Xero_AmountDue, Xero_AmountPaid, Xero_OnlineUrl, Xero_LastSynced FROM Invoices WHERE Invoice_No = ?");
+        $st->execute([$invoice_no]);
+        if ($r = $st->fetch()) {
+            $xc_id = $r['Xero_InvoiceID']; $xc_status = $r['Xero_Status']; $xc_due = $r['Xero_AmountDue'];
+            $xc_paid = $r['Xero_AmountPaid']; $xc_url = $r['Xero_OnlineUrl']; $xc_synced = $r['Xero_LastSynced'];
+        }
+    } catch (Exception $e) { /* migration not run */ }
+    $xc_connected = XeroClient::isConfigured() && XeroClient::isConnected($pdo);
+?>
+<div class="page no-print" style="max-width:760px;margin:14px auto">
+  <div class="card" style="background:#eef4ff;border-color:#c0d0ee">
+    <h3 style="margin:0 0 6px;color:#246">Xero</h3>
+    <?php if (!$xc_connected): ?>
+      <p style="margin:0">Xero not connected. <a href="xero_connect.php">Connect now</a> (admin only).</p>
+    <?php elseif ($xc_id): ?>
+      <p style="margin:0">
+        Status in Xero: <strong><?= htmlspecialchars($xc_status) ?></strong>
+        &middot; Amount due: <strong>$<?= number_format((float)$xc_due, 2) ?></strong>
+        &middot; Paid: $<?= number_format((float)$xc_paid, 2) ?>
+        <?php if ($xc_synced): ?><span style="color:#666;font-size:11px">· last synced <?= htmlspecialchars($xc_synced) ?> UTC</span><?php endif; ?>
+      </p>
+      <p style="margin:6px 0 0">
+        <?php if ($xc_url): ?><a href="<?= htmlspecialchars($xc_url) ?>" target="_blank" class="btn-primary">Open in Xero</a><?php endif; ?>
+        <a href="xero_sync.php" class="btn-secondary">Sync now</a>
+        <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Re-push this invoice to Xero? Will create a NEW Xero invoice if the existing Xero ID is unrecognised.');">
+          <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
+          <input type="hidden" name="email" value="0">
+          <button type="submit" class="btn-secondary">Re-push (no email)</button>
+        </form>
+      </p>
+    <?php else: ?>
+      <p style="margin:0">Not yet pushed to Xero.</p>
+      <form method="post" action="xero_invoice_push.php" style="margin-top:6px;display:inline" onsubmit="return confirm('Push INV-<?= $invoice_no ?> to Xero as AUTHORISED?');">
+        <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
+        <input type="hidden" name="email" value="0">
+        <button type="submit" class="btn-primary">Push to Xero</button>
+      </form>
+      <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Push INV-<?= $invoice_no ?> to Xero AND email to client?');">
+        <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
+        <input type="hidden" name="email" value="1">
+        <button type="submit" class="btn-primary" style="background:#1a6b1a">Push + Email to Client</button>
+      </form>
+    <?php endif; ?>
+  </div>
+</div>
+<?php endif; ?>
+
 </body>
 </html>
