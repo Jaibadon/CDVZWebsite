@@ -51,11 +51,13 @@ try {
     $billto = pick_billing_email($cli['Billing_Email'] ?? null, $cli['email'] ?? null);
     if (!$billto) throw new Exception("Client #$clientId (" . ($cli['Client_Name'] ?? '') . ") has no valid email (Billing Email or Email). Fix it on the Client page first.");
 
-    // Pull all unpaid invoices for this client.
+    // Pull all unpaid invoices for this client. Xero_OnlineUrl is the
+    // pay-online link Xero generates per invoice — embedded in each row of
+    // the email so the client can click straight through to settle it.
     $st = $pdo->prepare(
         "SELECT i.Invoice_No, i.Subtotal, i.Tax_Rate, i.PaymentOption, i.Date, i.PayBy,
                 i.Sent, i.Status_INV,
-                i.Xero_InvoiceID, i.Xero_AmountDue, i.Xero_DueDate,
+                i.Xero_InvoiceID, i.Xero_AmountDue, i.Xero_DueDate, i.Xero_OnlineUrl,
                 p.JobName, p.Order_No
            FROM Invoices i
            LEFT JOIN Projects p ON i.Proj_ID = p.proj_id
@@ -113,15 +115,21 @@ try {
         $dueIso     = $inv['PayBy'] ?: ($inv['Xero_DueDate'] ?: compute_pay_by($inv['Date'] ?? null, $inv['PaymentOption'] ?? null));
         $dueDate    = $dueIso ? date('d/m/Y', strtotime($dueIso)) : '';
         $job        = trim(($inv['Order_No'] ? $inv['Order_No'] . ' / ' : '') . ($inv['JobName'] ?? ''));
+        $payUrl     = trim((string)($inv['Xero_OnlineUrl'] ?? ''));
 
-        $linesText[] = sprintf("  %s  %s  due %s  %s  $%s",
-            $invNumStr, $invDate ?: '          ', $dueDate ?: '          ', $job, number_format($amount, 2));
+        $linesText[] = sprintf("  %s  %s  due %s  %s  $%s%s",
+            $invNumStr, $invDate ?: '          ', $dueDate ?: '          ', $job, number_format($amount, 2),
+            $payUrl !== '' ? "\r\n      View online: {$payUrl}" : '');
+        $payCell = $payUrl !== ''
+            ? '<a href="' . htmlspecialchars($payUrl) . '" style="color:#0a6;text-decoration:underline">View online</a>'
+            : '<span style="color:#888">&mdash;</span>';
         $linesHtml[] = '<tr>'
             . '<td style="padding:4px 8px"><strong>' . $invNumStr . '</strong></td>'
             . '<td style="padding:4px 8px">' . htmlspecialchars($invDate) . '</td>'
             . '<td style="padding:4px 8px">' . htmlspecialchars($dueDate) . '</td>'
             . '<td style="padding:4px 8px">' . htmlspecialchars($job) . '</td>'
             . '<td style="padding:4px 8px;text-align:right">$' . number_format($amount, 2) . '</td>'
+            . '<td style="padding:4px 8px;text-align:center">' . $payCell . '</td>'
             . '</tr>';
     }
 
@@ -162,6 +170,7 @@ try {
               .  '<th style="padding:6px 8px;text-align:left">Due</th>'
               .  '<th style="padding:6px 8px;text-align:left">Job</th>'
               .  '<th style="padding:6px 8px;text-align:right">Amount Due</th>'
+              .  '<th style="padding:6px 8px;text-align:center">View</th>'
               .  '</tr></thead><tbody>';
     $htmlBody .= implode('', $linesHtml);
     $htmlBody .= '</tbody></table>';

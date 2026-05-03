@@ -280,25 +280,82 @@ class XeroClient
     }
 
     /**
-     * Look up (or create) a Xero contact for the given client name.
-     * Returns the ContactID GUID. We avoid creating duplicates by searching
-     * Name first.
+     * Upsert a Xero contact. Looks up by Name first to avoid duplicates,
+     * then POSTs the supplied identifier details so the buyer record on
+     * the invoice carries at least one of the legally-required fields
+     * (NZ tax-invoice rules: an identifying address, phone, email,
+     * trading name, NZBN, or website URL).
+     *
+     * $details may contain any of:
+     *   email           string  -> EmailAddress
+     *   phone           string  -> Phones[DEFAULT].PhoneNumber
+     *   mobile          string  -> Phones[MOBILE].PhoneNumber
+     *   addressLine1    string  -> Addresses[POBOX].AddressLine1
+     *   addressLine2    string  -> Addresses[POBOX].AddressLine2
+     *   city            string  -> Addresses[POBOX].City
+     *   country         string  -> Addresses[POBOX].Country (defaults to "New Zealand")
+     *   contactPerson   string  -> ContactPersons[0] FirstName
+     *   nzbn            string  -> CompanyNumber (used for NZBN)
+     *   website         string  -> Website
+     *
+     * Always re-runs the upsert so an existing Xero contact missing
+     * identifiers gets refreshed with what we hold locally.
      */
-    public function ensureContact(string $name, ?string $email = null): string
+    public function ensureContact(string $name, $details = null): string
     {
+        // Backwards-compat: callers used to pass $email as a string second arg.
+        if (is_string($details)) $details = ['email' => $details];
+        $details = is_array($details) ? $details : [];
+
         $where = 'Name=="' . str_replace('"', '\"', $name) . '"';
         $resp  = $this->apiCall('GET', '/Contacts?' . http_build_query(['where' => $where]));
         $list  = $resp['Contacts'] ?? [];
-        if (!empty($list)) return $list[0]['ContactID'];
+        $existingId = $list[0]['ContactID'] ?? null;
 
-        // Create a new one
-        $body = ['Contacts' => [array_filter([
-            'Name'         => $name,
-            'EmailAddress' => $email,
-        ])]];
-        $resp = $this->apiCall('POST', '/Contacts', $body);
+        $contact = ['Name' => $name];
+        if ($existingId) $contact['ContactID'] = $existingId;
+
+        if (!empty($details['email']))   $contact['EmailAddress']  = trim((string)$details['email']);
+        if (!empty($details['nzbn']))    $contact['CompanyNumber'] = trim((string)$details['nzbn']);
+        if (!empty($details['website'])) $contact['Website']       = trim((string)$details['website']);
+
+        $phones = [];
+        if (!empty($details['phone']))  $phones[] = ['PhoneType' => 'DEFAULT', 'PhoneNumber' => trim((string)$details['phone'])];
+        if (!empty($details['mobile'])) $phones[] = ['PhoneType' => 'MOBILE',  'PhoneNumber' => trim((string)$details['mobile'])];
+        if ($phones) $contact['Phones'] = $phones;
+
+        $hasAddrParts = !empty($details['addressLine1']) || !empty($details['addressLine2']) || !empty($details['city']);
+        if ($hasAddrParts) {
+            $addr = ['AddressType' => 'POBOX'];
+            // Many of our Address1 values are multi-line free text — split on
+            // the first newline so AddressLine1 stays under Xero's 500-char
+            // limit and Suburb/City show up on a separate line in Xero.
+            $line1Source = (string)($details['addressLine1'] ?? '');
+            $lines       = preg_split('/\r\n|\r|\n/', trim($line1Source));
+            if (!empty($lines[0])) $addr['AddressLine1'] = $lines[0];
+            if (!empty($lines[1])) $addr['AddressLine2'] = $lines[1];
+            if (!empty($lines[2])) $addr['AddressLine3'] = $lines[2];
+            if (!empty($details['addressLine2'])) {
+                // Caller passed an explicit AddressLine2 (Address2 column = physical) —
+                // park it in AttentionTo so we don't overwrite the multi-line block above.
+                $addr['AttentionTo'] = trim((string)$details['addressLine2']);
+            }
+            if (!empty($details['city']))    $addr['City']    = trim((string)$details['city']);
+            if (!empty($details['country'])) $addr['Country'] = trim((string)$details['country']);
+            else                              $addr['Country'] = 'New Zealand';
+            $contact['Addresses'] = [$addr];
+        }
+
+        if (!empty($details['contactPerson'])) {
+            $contact['ContactPersons'] = [[
+                'FirstName'           => trim((string)$details['contactPerson']),
+                'IncludeInEmails'     => true,
+            ]];
+        }
+
+        $resp = $this->apiCall('POST', '/Contacts', ['Contacts' => [$contact]]);
         $c = $resp['Contacts'][0] ?? null;
-        if (!$c || empty($c['ContactID'])) throw new XeroException('Could not create Xero contact "' . $name . '"');
+        if (!$c || empty($c['ContactID'])) throw new XeroException('Could not ensure Xero contact "' . $name . '"');
         return $c['ContactID'];
     }
 

@@ -32,12 +32,20 @@ try {
     //   Invoices.Date (timestamp), .PayBy (datetime), .Notes, .Order_No_INV,
     //            .Subtotal, .Tax_Rate, .Xero_InvoiceID (for re-push/update)
     //   Clients.billing_email
+    // Pull the buyer-identifier columns (Address1/Address2, Phone, Mobile,
+    // billing_email/email, Contact) so ensureContact() can push at least
+    // one of the legally-required identifier details to Xero on every
+    // invoice push (NZ tax-invoice rule).
+    $contactCol = clients_has_contact($pdo) ? 'c.Contact AS ContactPerson' : 'NULL AS ContactPerson';
     $h = $pdo->prepare(
         "SELECT i.Invoice_No, i.Date AS Invoice_Date, i.PayBy AS Due_Date,
                 i.PaymentOption,
                 i.Notes AS Comments, i.Order_No_INV, i.Subtotal, i.Tax_Rate,
                 i.Xero_InvoiceID,
-                c.Client_id, c.Client_Name, c.billing_email AS Email, c.Multiplier
+                c.Client_id, c.Client_Name, c.Multiplier,
+                c.Address1, c.Address2, c.Phone, c.Mobile,
+                c.billing_email AS BillingEmail, c.email AS Email,
+                {$contactCol}
            FROM Invoices i
            LEFT JOIN Clients c ON i.Client_ID = c.Client_id
           WHERE i.Invoice_No = ?"
@@ -103,7 +111,20 @@ try {
     }
 
     if (empty($head['Client_Name'])) throw new Exception("Client missing name; can't create Xero contact.");
-    $contactId = $xc->ensureContact($head['Client_Name'], $head['Email'] ?? null);
+
+    // Build the buyer identifier set. Email is picked via the same fallback
+    // the email helpers use so we never push an "invalid placeholder" that
+    // Xero would reject (e.g. "No Email - erik").
+    $buyerEmail = pick_billing_email($head['BillingEmail'] ?? null, $head['Email'] ?? null);
+    $contactId  = $xc->ensureContact($head['Client_Name'], [
+        'email'         => $buyerEmail,
+        'phone'         => $head['Phone']         ?? null,
+        'mobile'        => $head['Mobile']        ?? null,
+        'addressLine1'  => $head['Address1']      ?? null,   // postal (multi-line)
+        'addressLine2'  => $head['Address2']      ?? null,   // physical
+        'country'       => 'New Zealand',
+        'contactPerson' => $head['ContactPerson'] ?? null,
+    ]);
 
     if (empty($xeroLines)) throw new Exception("Invoice #$invoiceNo has no line items and no subtotal — nothing to send.");
 
