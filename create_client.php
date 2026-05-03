@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
@@ -17,6 +18,7 @@ $Mobile      = !empty($_POST['Mobile'])      ? $_POST['Mobile']      : "No Mobil
 $emailIn     = $_POST['email'] ?? $_POST['Email'] ?? '';
 $Email       = $emailIn !== '' ? $emailIn : "No Email - " . $_SESSION['UserID'];
 $Billing_Email = !empty($_POST['Billing_Email']) ? $_POST['Billing_Email'] : "No Billing_Email - " . $_SESSION['UserID'];
+$Contact     = $_POST['Contact'] ?? '';
 $Multiplier  = !empty($_POST['Multiplier'])  ? $_POST['Multiplier']  : 1;
 $notes       = !empty($_POST['Notes'])       ? $_POST['Notes'] . " - " . $_SESSION['UserID'] . " - " . $curdate : "Client Entered - " . $_SESSION['UserID'] . " - " . $curdate;
 $activeIn    = $_POST['ACTIVE'] ?? $_POST['Active'] ?? '';
@@ -26,9 +28,16 @@ $Active      = (strtoupper($activeIn) === 'ON') ? 1 : 0;
 $nextStmt = $pdo->query("SELECT COALESCE(MAX(Client_id), 0) + 1 AS nxt FROM Clients");
 $nextId   = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
 
-$stmt = $pdo->prepare("INSERT INTO Clients (Client_id, Client_Name, Address1, Phone, Mobile, email, Billing_Email, Multiplier, Notes, Active)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-$stmt->execute([$nextId, $Client_Name, $Address1, $Phone, $Mobile, $Email, $Billing_Email, $Multiplier, $notes, $Active]);
+// Only include Contact if migrations/add_clients_contact.sql has been run.
+if (clients_has_contact($pdo)) {
+    $stmt = $pdo->prepare("INSERT INTO Clients (Client_id, Client_Name, Address1, Phone, Mobile, Contact, email, Billing_Email, Multiplier, Notes, Active)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt->execute([$nextId, $Client_Name, $Address1, $Phone, $Mobile, $Contact, $Email, $Billing_Email, $Multiplier, $notes, $Active]);
+} else {
+    $stmt = $pdo->prepare("INSERT INTO Clients (Client_id, Client_Name, Address1, Phone, Mobile, email, Billing_Email, Multiplier, Notes, Active)
+                           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+    $stmt->execute([$nextId, $Client_Name, $Address1, $Phone, $Mobile, $Email, $Billing_Email, $Multiplier, $notes, $Active]);
+}
 
 header('Location: project_new.php');
 exit;

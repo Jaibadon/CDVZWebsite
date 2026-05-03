@@ -112,12 +112,16 @@ if ($_SESSION['UserID'] == "jen") {
       <td><input type="text" name="Mobile" size="35" value=""></td>
     </tr>
     <tr>
+      <td><font color=#9B9B1B size="2"><b>Contact:</b></font></td>
+      <td><input type="text" name="Contact" size="35" value="">&nbsp;<font size="1" color="#666">(emails greet the first word — e.g. "Dear John" from "John Smith")</font></td>
+    </tr>
+    <tr>
       <td><font color=#9B9B1B size="2"><b>Email:</b></font></td>
-      <td><input type="text" name="email" size="35" value=""></td>
+      <td><input type="email" name="email" size="35" value=""></td>
     </tr>
     <tr>
       <td><font color=#9B9B1B size="2"><b>Billing Email:</b></font></td>
-      <td><input type="text" name="Billing_Email" size="35" value=""></td>
+      <td><input type="email" name="Billing_Email" size="35" value="">&nbsp;<font size="1" color="#666">(used for invoices/statements; falls back to Email if blank/invalid)</font></td>
     </tr>
     <tr>
       <td><font color=#9B9B1B size="2"><b>Multiplier:</b></font></td>

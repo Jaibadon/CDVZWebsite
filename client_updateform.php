@@ -24,10 +24,14 @@ if (!$row) {
     exit;
 }
 
-// Resolve column names regardless of casing returned by MySQL
-$clientName = $row['Client_Name'] ?? $row['CLIENT_NAME'] ?? $row['Client_name'] ?? '';
-$clientIdVal = $row['client_id'] ?? $row['Client_id'] ?? $row['Client_ID'] ?? '';
-$email = $row['Email'] ?? $row['email'] ?? '';
+// Resolve column names regardless of casing returned by MySQL.
+// (PDO row keys are case-sensitive — MySQL on Linux returns the column
+// exactly as declared, so Billing_Email vs billing_email matters.)
+$clientName   = $row['Client_Name']   ?? $row['CLIENT_NAME']   ?? $row['Client_name']   ?? '';
+$clientIdVal  = $row['client_id']     ?? $row['Client_id']     ?? $row['Client_ID']     ?? '';
+$email        = $row['email']         ?? $row['Email']         ?? $row['EMAIL']         ?? '';
+$billingEmail = $row['billing_email'] ?? $row['Billing_Email'] ?? $row['BILLING_EMAIL'] ?? '';
+$contact      = $row['Contact']       ?? $row['contact']       ?? $row['CONTACT']       ?? '';
 ?>
 <html>
 
@@ -153,12 +157,16 @@ echo "<input type='text' hidden name='client_id' value='" . htmlspecialchars($cl
       <td><input type="text" name="Mobile" size="35" value="<?= htmlspecialchars($row['Mobile'] ?? '') ?>"></td>
     </tr>
     <tr>
+      <td><font color=#9B9B1B size="2"><b>Contact:</b></font></td>
+      <td><input type="text" name="Contact" size="35" value="<?= htmlspecialchars($contact) ?>">&nbsp;<font size="1" color="#666">(emails greet the first word — e.g. "Dear John" from "John Smith")</font></td>
+    </tr>
+    <tr>
       <td><font color=#9B9B1B size="2"><b>Email:</b></font></td>
-      <td><input type="text" name="email" size="35" value="<?= htmlspecialchars($email) ?>"></td>
+      <td><input type="email" name="email" size="35" value="<?= htmlspecialchars($email) ?>"></td>
     </tr>
     <tr>
       <td><font color=#9B9B1B size="2"><b>Billing Email:</b></font></td>
-      <td><input type="text" name="Billing_Email" size="35" value="<?= htmlspecialchars($row['Billing_Email'] ?? '') ?>"></td>
+      <td><input type="email" name="Billing_Email" size="35" value="<?= htmlspecialchars($billingEmail) ?>">&nbsp;<font size="1" color="#666">(used for invoices/statements; falls back to Email if blank/invalid)</font></td>
     </tr>
     <tr>
       <td>&nbsp;</td>

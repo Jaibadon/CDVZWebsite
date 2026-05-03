@@ -218,11 +218,14 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         }
     }
 
-    // Statement button — only when this client has >1 unpaid invoice AND
-    // this row is past Not-Checked (Status_INV != 0). Same gate as the
-    // single-invoice email button so we never email statements that
-    // include unreviewed invoices.
-    if ($checked && $clientId > 0 && ($unpaidPerClient[$clientId] ?? 0) > 1) {
+    // Statement button — same gates as the single-invoice email button:
+    //   - Status_INV != 0 (reviewed)
+    //   - This row's invoice has been pushed to Xero ($xs is set)
+    //     (we attach Xero PDFs to the statement, so a row with no Xero
+    //     invoice has nothing to attach for itself)
+    //   - The client has >1 unpaid invoice (otherwise the per-invoice
+    //     Email button is the right choice)
+    if ($checked && $xs && $clientId > 0 && ($unpaidPerClient[$clientId] ?? 0) > 1) {
         echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Send a STATEMENT email to this client now?\\n\\nIncludes PDFs of every unpaid invoice and marks each one as Sent. The client will be asked to disregard if already paid. Continue?');\">"
            . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
            . "<input type=\"submit\" value=\"&#9993; Send Statement\" style=\"background:#5d3a9b;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"

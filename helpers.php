@@ -155,6 +155,56 @@ function compute_pay_by($invoiceDate, $paymentOption): ?string {
 }
 
 /**
+ * Cached "does Clients.Contact exist?" check. The Contact column is added
+ * by migrations/add_clients_contact.sql. SELECTs that reference it must
+ * gate on this so installs that haven't run the migration still work
+ * (the queries silently substitute NULL AS Contact).
+ */
+function clients_has_contact(PDO $pdo): bool {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    try {
+        $cached = (bool)$pdo->query("SHOW COLUMNS FROM Clients LIKE 'Contact'")->fetch();
+    } catch (Exception $e) {
+        $cached = false;
+    }
+    return $cached;
+}
+
+/**
+ * Pull a salutation first name out of the Clients.Contact column.
+ * Splits on the first whitespace, comma, slash, or ampersand so values like
+ * "John Smith", "John, Sales Manager", or "John & Jane Smith" all yield
+ * "John". Returns the fallback ("there") when Contact is empty.
+ */
+function client_first_name($contact, string $fallback = 'there'): string {
+    $c = trim((string)($contact ?? ''));
+    if ($c === '') return $fallback;
+    // Split on the first delimiter — whitespace, comma, slash, ampersand.
+    $parts = preg_split('/[\s,\/&]+/u', $c, 2);
+    $first = trim($parts[0] ?? '');
+    return $first !== '' ? $first : $fallback;
+}
+
+/**
+ * Pick the best email to send invoices/statements to: billing_email first,
+ * email column second. Validates with PHP's RFC-ish email filter so blanks
+ * and obvious typos ("foo @bar") never get used. Returns null when neither
+ * column holds a valid address — callers should surface that to the admin
+ * (e.g. via $_SESSION['xero_flash_err']) rather than attempting to send.
+ */
+function pick_billing_email($billingEmail, $email): ?string {
+    foreach ([$billingEmail, $email] as $candidate) {
+        $e = trim((string)($candidate ?? ''));
+        if ($e === '') continue;
+        // Some legacy rows store "No Email - <user>" as a placeholder; treat
+        // anything that doesn't pass FILTER_VALIDATE_EMAIL as missing.
+        if (filter_var($e, FILTER_VALIDATE_EMAIL)) return $e;
+    }
+    return null;
+}
+
+/**
  * Format a MySQL date string for display in d/m/Y, safely handling nulls.
  */
 function display_date($input, string $fmt = 'd/m/Y'): string {

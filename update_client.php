@@ -1,6 +1,7 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 $pdo = get_db();
 
@@ -27,12 +28,19 @@ $client_name  = (isset($_POST['Client_Name'])  && $_POST['Client_Name']  !== '')
 $activeVal = $_POST['ACTIVE'] ?? $_POST['Active'] ?? '';
 $active = (strtoupper($activeVal) === 'ON') ? 1 : 0;
 
+// Only include Contact in the UPDATE if the column actually exists
+// (migrations/add_clients_contact.sql adds it). Falls back gracefully
+// on installs that haven't run the migration yet.
+$hasContact = clients_has_contact($pdo);
+$contactClause = $hasContact ? 'Contact = ?,' : '';
+
 $sql = "UPDATE Clients SET
     Notes          = ?,
     Address1       = ?,
     Address2       = ?,
     Phone          = ?,
     Mobile         = ?,
+    {$contactClause}
     email          = ?,
     Billing_Email  = ?,
     Multiplier     = COALESCE(?, Multiplier),
@@ -40,13 +48,15 @@ $sql = "UPDATE Clients SET
     Active         = ?
 WHERE client_id = ?";
 
-$stmt = $pdo->prepare($sql);
-$stmt->execute([
+$params = [
     $new_notes,
     $_POST['Address1']      ?? '',
     $_POST['Address2']      ?? '',
     $_POST['Phone']         ?? '',
     $_POST['Mobile']        ?? '',
+];
+if ($hasContact) $params[] = $_POST['Contact'] ?? '';
+$params = array_merge($params, [
     $_POST['email']         ?? ($_POST['Email'] ?? ''),
     $_POST['Billing_Email'] ?? '',
     $multiplier,
@@ -54,6 +64,9 @@ $stmt->execute([
     $active,
     $client_id,
 ]);
+
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
 
 header('Location: clients.php');
 exit;

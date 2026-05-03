@@ -40,12 +40,16 @@ try {
     // Refresh from Xero before we decide what's unpaid.
     $syncResult = run_xero_sync($pdo);
 
-    $client = $pdo->prepare("SELECT Client_id, Client_Name, Address1, Billing_Email FROM Clients WHERE Client_id = ?");
+    // Pull both Billing_Email AND email so pick_billing_email() can fall
+    // back if billing_email is blank/invalid. Contact is used for the
+    // "Dear FirstName" greeting (gated on the column existing).
+    $contactCol = clients_has_contact($pdo) ? 'Contact' : 'NULL AS Contact';
+    $client = $pdo->prepare("SELECT Client_id, Client_Name, Address1, {$contactCol}, Billing_Email, email FROM Clients WHERE Client_id = ?");
     $client->execute([$clientId]);
     $cli = $client->fetch(PDO::FETCH_ASSOC);
     if (!$cli) throw new Exception("Client #$clientId not found.");
-    $billto = $cli['Billing_Email'] ?? '';
-    if (!$billto) throw new Exception("Client #$clientId has no billing_email — fill it on the Client page first.");
+    $billto = pick_billing_email($cli['Billing_Email'] ?? null, $cli['email'] ?? null);
+    if (!$billto) throw new Exception("Client #$clientId (" . ($cli['Client_Name'] ?? '') . ") has no valid email (Billing Email or Email). Fix it on the Client page first.");
 
     // Pull all unpaid invoices for this client.
     $st = $pdo->prepare(
@@ -122,9 +126,11 @@ try {
     }
 
     $totalForDisplay = $xeroOutstanding ?? $localGrand;
-    $clientName = trim($cli['Client_Name'] ?: 'there');
+    // Greet by Contact's first name when available; "there" otherwise.
+    $greetName  = client_first_name($cli['Contact'] ?? null, 'there');
+    $clientName = trim($cli['Client_Name'] ?: '');
 
-    $textBody  = "Hi {$clientName},\r\n\r\n";
+    $textBody  = "Dear {$greetName},\r\n\r\n";
     $textBody .= "Please find attached a statement of outstanding invoices from CADViz Limited (" . count($invoices) . " invoice(s)).\r\n\r\n";
     $textBody .= "If you have already paid any of the invoices listed below, please disregard this statement for those — our records simply haven't caught up with your payment(s) yet.\r\n\r\n";
     $textBody .= "Outstanding balance: $" . number_format($totalForDisplay, 2) . "\r\n\r\n";
@@ -137,7 +143,7 @@ try {
     $textBody .= "If you have any other queries please reply to this email.\r\n\r\n";
     $textBody .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
 
-    $htmlBody  = '<p>Hi ' . htmlspecialchars($clientName) . ',</p>';
+    $htmlBody  = '<p>Dear ' . htmlspecialchars($greetName) . ',</p>';
     $htmlBody .= '<p>Please find attached a statement of outstanding invoices from <strong>CADViz Limited</strong> (' . count($invoices) . ' invoice' . (count($invoices) === 1 ? '' : 's') . ').</p>';
     $htmlBody .= '<p style="color:#666"><em>If you have already paid any of the invoices listed below, please disregard this statement for those &mdash; our records simply haven\'t caught up with your payment(s) yet.</em></p>';
     $htmlBody .= '<p style="font-size:16px"><strong>Outstanding balance: $' . number_format($totalForDisplay, 2) . '</strong></p>';

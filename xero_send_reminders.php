@@ -63,19 +63,26 @@ $minGapDays     = (int)(meta_get($pdo, 'reminder_min_gap_days') ?: 6);
 $cap            = (int)($_ENV['CADVIZ_REMINDER_CAP'] ?? 30);
 
 // ── Pick candidates ────────────────────────────────────────────────────────
+// Require Xero_InvoiceID (i.e. the invoice has been pushed) and at least
+// one of billing_email / email being non-empty. Address validity is checked
+// per-row in the loop via pick_billing_email() so we can skip + report
+// invalid addresses cleanly instead of silently dropping them.
 $where = "i.Xero_InvoiceID IS NOT NULL
           AND i.Xero_Status = 'AUTHORISED'
           AND i.Xero_AmountDue > 0
           AND i.Xero_DueDate IS NOT NULL
           AND i.Xero_DueDate < CURDATE()
-          AND COALESCE(c.billing_email, '') <> ''";
+          AND (COALESCE(c.billing_email, '') <> '' OR COALESCE(c.email, '') <> '')";
 if ($singleInvoice > 0) $where .= " AND i.Invoice_No = " . (int)$singleInvoice;
 
+// Gate c.Contact behind feature detection so installs that haven't run
+// migrations/add_clients_contact.sql don't crash here.
+$contactCol = clients_has_contact($pdo) ? 'c.Contact' : 'NULL AS Contact';
 $rows = $pdo->query(
     "SELECT i.Invoice_No, i.Subtotal, i.Tax_Rate, i.Xero_DueDate, i.Xero_AmountDue,
             i.Xero_OnlineUrl, i.Xero_InvoiceID,
             DATEDIFF(CURDATE(), i.Xero_DueDate) AS days_overdue,
-            c.Client_Name, c.billing_email,
+            c.Client_Name, {$contactCol}, c.billing_email, c.email,
             (SELECT MAX(updated_at) FROM App_Meta WHERE meta_key = CONCAT('reminder_last_', i.Invoice_No)) AS last_reminder_at
        FROM Invoices i
        LEFT JOIN Clients c ON i.Client_ID = c.Client_id
@@ -106,21 +113,32 @@ foreach ($rows as $r) {
         }
     }
 
-    if ($dryRun) { $sent[$invNo] = '(dry-run) would have reminded ' . $r['billing_email']; continue; }
+    // Resolve a deliverable address (billing_email then email, both
+    // FILTER_VALIDATE_EMAIL'd). Skip if neither is valid — the WHERE
+    // already filtered out totally-empty rows, so this catches the
+    // "filled in with garbage" case ("No Email - erik" etc).
+    $toAddr = pick_billing_email($r['billing_email'] ?? null, $r['email'] ?? null);
+    if (!$toAddr) {
+        $skipped[$invNo] = 'no valid email on Clients (Billing Email / Email)';
+        continue;
+    }
+
+    if ($dryRun) { $sent[$invNo] = '(dry-run) would have reminded ' . $toAddr; continue; }
 
     try {
-        sendReminder($pdo, $r);
+        sendReminder($pdo, $r, $toAddr);
         meta_set($pdo, 'reminder_last_' . $invNo, date('Y-m-d H:i:s'));
-        $sent[$invNo] = 'sent to ' . $r['billing_email'] . " ({$days}d overdue)";
+        $sent[$invNo] = 'sent to ' . $toAddr . " ({$days}d overdue)";
     } catch (Exception $e) {
         $skipped[$invNo] = 'FAILED: ' . $e->getMessage();
     }
 }
 
-function sendReminder(PDO $pdo, array $r): void {
+function sendReminder(PDO $pdo, array $r, string $toAddr): void {
     $invNumStr = 'CAD-' . str_pad((string)$r['Invoice_No'], 5, '0', STR_PAD_LEFT);
     $totalIncTax = (float)$r['Subtotal'] * (1 + (float)$r['Tax_Rate']);
-    $name      = trim($r['Client_Name'] ?: 'there');
+    // Greet by Contact first name; fallback to a neutral "there".
+    $name      = client_first_name($r['Contact'] ?? null, 'there');
     $days      = (int)$r['days_overdue'];
     $due       = date('d/m/Y', strtotime($r['Xero_DueDate']));
     $amount    = '$' . number_format((float)$r['Xero_AmountDue'], 2);
@@ -128,7 +146,7 @@ function sendReminder(PDO $pdo, array $r): void {
 
     $tone = $days >= 30 ? 'firm' : ($days >= 14 ? 'reminder' : 'gentle');
 
-    $text = "Hi {$name},\r\n\r\n";
+    $text = "Dear {$name},\r\n\r\n";
     if ($tone === 'gentle') {
         $text .= "This is a friendly reminder that invoice {$invNumStr} for {$amount} was due on {$due} ({$days} days ago).\r\n\r\n";
     } elseif ($tone === 'reminder') {
@@ -142,7 +160,7 @@ function sendReminder(PDO $pdo, array $r): void {
     $text .= "If you have already paid this invoice, please disregard this email — our records simply haven't caught up with your payment yet.\r\n\r\n";
     $text .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
 
-    $html  = "<p>Hi " . htmlspecialchars($name) . ",</p>";
+    $html  = "<p>Dear " . htmlspecialchars($name) . ",</p>";
     if ($tone === 'gentle') {
         $html .= "<p>This is a friendly reminder that invoice <strong>{$invNumStr}</strong> for <strong>{$amount}</strong> was due on <strong>{$due}</strong> ({$days} days ago).</p>";
     } elseif ($tone === 'reminder') {
@@ -157,7 +175,7 @@ function sendReminder(PDO $pdo, array $r): void {
     $html .= "<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>";
 
     SmtpMailer::send([
-        'to'       => $r['billing_email'],
+        'to'       => $toAddr,
         'bcc'      => ['accounts@cadviz.co.nz'],
         'reply_to' => 'accounts@cadviz.co.nz',
         'subject'  => "Reminder: Invoice {$invNumStr} ({$days} days overdue)",
