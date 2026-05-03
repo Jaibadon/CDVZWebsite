@@ -70,17 +70,21 @@ try {
     // billing rate (the old (proj, task) grouping used MAX(Rate) which
     // could over/under-state the line when two staff with different rates
     // worked the same task).
+    //
+    // Greet "by FirstName" using Staff.`First Name` (the column literally has
+    // a space — backtick it). Fall back to Login when First Name is empty.
     $lines = $pdo->prepare(
         "SELECT t.proj_id, p.JobName, t.Task, t.Employee_id,
-                s.Login                    AS StaffLogin,
-                SUM(t.Hours)               AS Hours,
-                COALESCE(MAX(t.Rate),0)    AS Rate
+                s.Login                                                            AS StaffLogin,
+                COALESCE(NULLIF(TRIM(s.`First Name`), ''), s.Login)                 AS StaffFirstName,
+                SUM(t.Hours)                                                       AS Hours,
+                COALESCE(MAX(t.Rate),0)                                            AS Rate
            FROM Timesheets t
            LEFT JOIN Projects p ON t.proj_id     = p.proj_id
            LEFT JOIN Staff    s ON t.Employee_id = s.Employee_ID
           WHERE t.Invoice_No = ? AND t.Hours > 0
-          GROUP BY t.proj_id, t.Task, t.Employee_id, s.Login
-          ORDER BY p.JobName, t.Task, s.Login"
+          GROUP BY t.proj_id, t.Task, t.Employee_id, s.Login, s.`First Name`
+          ORDER BY p.JobName, t.Task, StaffFirstName"
     );
     $lines->execute([$invoiceNo]);
     $items = $lines->fetchAll();
@@ -91,31 +95,48 @@ try {
     $multiplier = (float)($head['Multiplier'] ?? 1) ?: 1;
     $baseRate   = 90.00;
 
-    $xeroLines = [];
+    // Group rows by JobName so we can emit one description-only "header"
+    // line per job (Xero treats Quantity 0 + UnitAmount 0 as a section
+    // heading), instead of repeating the JobName on every task row.
+    $byJob = [];
     foreach ($items as $li) {
-        $hrs  = (float)$li['Hours'];
-        $rate = (float)$li['Rate'];
-        if ($rate <= 0) $rate = $baseRate;
-        $rate *= $multiplier;
+        $job = trim((string)($li['JobName'] ?? ''));
+        $byJob[$job][] = $li;
+    }
 
-        $job        = trim((string)($li['JobName']    ?? ''));
-        $task       = trim((string)($li['Task']       ?? ''));
-        $staffLogin = trim((string)($li['StaffLogin'] ?? ''));
+    $xeroLines = [];
+    foreach ($byJob as $job => $jobItems) {
+        if ($job !== '') {
+            $xeroLines[] = [
+                'Description' => 'Project: ' . $job,
+                'Quantity'    => 0,
+                'UnitAmount'  => 0,
+                'LineAmount'  => 0,
+                // No AccountCode/TaxType on description-only lines.
+            ];
+        }
+        foreach ($jobItems as $li) {
+            $hrs  = (float)$li['Hours'];
+            $rate = (float)$li['Rate'];
+            if ($rate <= 0) $rate = $baseRate;
+            $rate *= $multiplier;
 
-        // "JobName — Task (by staffLogin)" — falls back gracefully when any
-        // piece is missing so we never end up with leading dashes or empty
-        // parens in the Xero description.
-        $description = $job;
-        if ($task !== '')       $description = $description !== '' ? $description . ' — ' . $task : $task;
-        if ($staffLogin !== '') $description .= ' (by ' . $staffLogin . ')';
+            $task      = trim((string)($li['Task']           ?? ''));
+            $firstName = trim((string)($li['StaffFirstName'] ?? ''));
 
-        $xeroLines[] = [
-            'Description' => $description,
-            'Quantity'    => round($hrs, 2),
-            'UnitAmount'  => round($rate, 2),
-            'AccountCode' => '240',           // 240 Sales (CADViz Xero account)
-            'TaxType'     => 'OUTPUT2',       // NZ GST 15% sales
-        ];
+            // Drop the JobName from per-task lines (the header line above
+            // covers it). Description: "Task (by FirstName)".
+            $description = $task !== '' ? $task : 'Services rendered';
+            if ($firstName !== '') $description .= ' (by ' . $firstName . ')';
+
+            $xeroLines[] = [
+                'Description' => $description,
+                'Quantity'    => round($hrs, 2),
+                'UnitAmount'  => round($rate, 2),
+                'AccountCode' => '240',           // 240 Sales (CADViz Xero account)
+                'TaxType'     => 'OUTPUT2',       // NZ GST 15% sales
+            ];
+        }
     }
 
     // Fallback: lump-sum invoice (no timesheet rows e.g. small fixed-price jobs)
