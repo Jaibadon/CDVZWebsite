@@ -111,12 +111,39 @@ if (!empty($projIds)) {
         $lStmt = $pdo->prepare(
             "SELECT Proj_Task_ID, SUM(Hours) AS hrs
                FROM Timesheets
-              WHERE Proj_Task_ID IS NOT NULL AND proj_id IN ($in)
+              WHERE Proj_Task_ID IS NOT NULL AND Proj_Task_ID > 0 AND proj_id IN ($in)
               GROUP BY Proj_Task_ID"
         );
         $lStmt->execute($projIds);
         foreach ($lStmt->fetchAll() as $r) $loggedByPtid[(int)$r['Proj_Task_ID']] = (float)$r['hrs'];
     } catch (Exception $e) { /* Proj_Task_ID column may not exist yet */ }
+
+    // Unassigned hours per project — Timesheets rows that ran against this
+    // project but with no Proj_Task_ID linkage (legacy entries, quick logs
+    // without picking a task). Don't get attributed to any task above, but
+    // still consume project budget, so surface them on the totals badge.
+    $unassignedByProj = [];
+    try {
+        $uStmt = $pdo->prepare(
+            "SELECT proj_id, SUM(Hours) AS hrs
+               FROM Timesheets
+              WHERE proj_id IN ($in)
+                AND (Proj_Task_ID IS NULL OR Proj_Task_ID = 0)
+              GROUP BY proj_id"
+        );
+        $uStmt->execute($projIds);
+        foreach ($uStmt->fetchAll() as $r) $unassignedByProj[(int)$r['proj_id']] = (float)$r['hrs'];
+    } catch (Exception $e) {
+        // Proj_Task_ID column missing → fall back to "everything is unassigned"
+        // so the badge still shows logged hours instead of zero.
+        try {
+            $uStmt = $pdo->prepare(
+                "SELECT proj_id, SUM(Hours) AS hrs FROM Timesheets WHERE proj_id IN ($in) GROUP BY proj_id"
+            );
+            $uStmt->execute($projIds);
+            foreach ($uStmt->fetchAll() as $r) $unassignedByProj[(int)$r['proj_id']] = (float)$r['hrs'];
+        } catch (Exception $e2) { /* give up */ }
+    }
 
     foreach ($allTasks as $t) {
         $pid = (int)$t['Proj_ID'];
@@ -137,11 +164,18 @@ if (!empty($projIds)) {
             'vtitle'    => $t['VTitle'],
             'vstatus'   => $t['VStatus'],
         ];
-        if (!isset($projTotals[$pid])) $projTotals[$pid] = ['est'=>0, 'logged'=>0, 'remaining'=>0, 'mine_remaining'=>0];
+        if (!isset($projTotals[$pid])) $projTotals[$pid] = ['est'=>0, 'logged'=>0, 'remaining'=>0, 'mine_remaining'=>0, 'unassigned'=>0];
         $projTotals[$pid]['est']       += $est;
         $projTotals[$pid]['logged']    += $logged;
         $projTotals[$pid]['remaining'] += $remaining;
         if ($isMine) $projTotals[$pid]['mine_remaining'] += max(0, $remaining);
+    }
+    // Backfill unassigned hours per project (works even for projects with
+    // zero Project_Tasks rows — they'd otherwise be missing from $projTotals).
+    foreach ($projIds as $pid) {
+        $pid = (int)$pid;
+        if (!isset($projTotals[$pid])) $projTotals[$pid] = ['est'=>0, 'logged'=>0, 'remaining'=>0, 'mine_remaining'=>0, 'unassigned'=>0];
+        $projTotals[$pid]['unassigned'] = (float)($unassignedByProj[$pid] ?? 0);
     }
 }
 ?>
@@ -213,7 +247,7 @@ Click a project heading to collapse/expand. Printing always shows everything.</p
   <p style="color:#888"><em>No active projects assigned. If this is a mistake, ask Erik / Jen to add you to a project.</em></p>
 <?php else: ?>
 
-<?php foreach ($projects as $p): $pid = (int)$p['proj_id']; $tasks = $tasksByProject[$pid] ?? []; $tot = $projTotals[$pid] ?? ['est'=>0,'logged'=>0,'remaining'=>0,'mine_remaining'=>0]; ?>
+<?php foreach ($projects as $p): $pid = (int)$p['proj_id']; $tasks = $tasksByProject[$pid] ?? []; $tot = $projTotals[$pid] ?? ['est'=>0,'logged'=>0,'remaining'=>0,'mine_remaining'=>0,'unassigned'=>0]; ?>
 <div class="proj-card" id="proj-<?= $pid ?>">
   <h2 style="margin-top:0" onclick="if(event.target.tagName!=='A')this.parentElement.classList.toggle('collapsed')">
     <?= htmlspecialchars($p['JobName']) ?>
@@ -222,6 +256,9 @@ Click a project heading to collapse/expand. Printing always shows everything.</p
       &middot; <?= number_format(max(0, $tot['remaining']),1) ?>h left
       <?php if ($tot['mine_remaining'] > 0): ?>
         (<strong><?= number_format($tot['mine_remaining'],1) ?>h yours</strong>)
+      <?php endif; ?>
+      <?php if (!empty($tot['unassigned']) && (float)$tot['unassigned'] > 0): ?>
+        &middot; <span style="color:#a05a00" title="Hours logged on this project that aren't tied to a specific task — staff who entered them didn't pick a task in the picker. Counted toward the project's overall hours but not against any task's remaining budget."><?= number_format((float)$tot['unassigned'], 1) ?>h unassigned</span>
       <?php endif; ?>
     </span>
     <?php if ($singleProjId === 0): ?>

@@ -129,6 +129,11 @@ if ($_SESSION['UserID'] == "erik") {
     $stmt->execute($params);
 }
 
+// One-time check: does Timesheets have the Proj_Task_ID column? Used per
+// row below to split logged hours into "via tasks" vs "unassigned".
+$hasProjTaskIdCol = false;
+try { $hasProjTaskIdCol = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Proj_Task_ID'")->fetch(); } catch (Exception $e) {}
+
 $shown = 0;
 while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $shown++;
@@ -182,9 +187,30 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     echo ",&nbsp;";
 
     // ── Hours used vs estimated ────────────────────────────────────────────
-    $tsStmt = $pdo->prepare("SELECT SUM(Hours) AS tot FROM Timesheets WHERE proj_id = ?");
-    $tsStmt->execute([$projId]);
-    $tot = (float)($tsStmt->fetch(PDO::FETCH_ASSOC)['tot'] ?? 0);
+    // Match my_checklist.php's accounting: split logged time into "via tasks"
+    // (Proj_Task_ID linked to a specific Project_Tasks row) and "unassigned"
+    // (rows with no Proj_Task_ID — legacy data or quick entries without
+    // picking a task). Unassigned hours don't count toward the per-task
+    // remaining-budget rollup but they DO consume the project's overall
+    // budget, so we surface them explicitly here.
+    if ($hasProjTaskIdCol) {
+        $tsStmt = $pdo->prepare(
+            "SELECT
+                COALESCE(SUM(CASE WHEN Proj_Task_ID IS NOT NULL AND Proj_Task_ID > 0 THEN Hours ELSE 0 END), 0) AS tasked,
+                COALESCE(SUM(CASE WHEN Proj_Task_ID IS NULL     OR  Proj_Task_ID = 0 THEN Hours ELSE 0 END), 0) AS unassigned
+              FROM Timesheets WHERE proj_id = ?"
+        );
+        $tsStmt->execute([$projId]);
+        $tsRow      = $tsStmt->fetch(PDO::FETCH_ASSOC) ?: ['tasked' => 0, 'unassigned' => 0];
+        $tasked     = (float)$tsRow['tasked'];
+        $unassigned = (float)$tsRow['unassigned'];
+    } else {
+        $tsStmt = $pdo->prepare("SELECT COALESCE(SUM(Hours), 0) AS tot FROM Timesheets WHERE proj_id = ?");
+        $tsStmt->execute([$projId]);
+        $tasked     = (float)($tsStmt->fetch(PDO::FETCH_ASSOC)['tot'] ?? 0);
+        $unassigned = 0.0;
+    }
+    $tot = $tasked + $unassigned;
 
     $estStmt = $pdo->prepare(
         "SELECT SUM(Estimated_Time * Project_Tasks.Weight) AS EST_HOURS
@@ -199,17 +225,24 @@ while ($row = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $estStmt->execute([$projId]);
     $estHours = (float)($estStmt->fetch(PDO::FETCH_ASSOC)['EST_HOURS'] ?? 0);
 
-    // Show *** in red ONLY when est hours are defined AND we've blown through the budget.
-    // Otherwise show green.
+    // Compose the breakdown string. Always include an estimate reference —
+    // the previous version went silent when no estimate was set, leaving
+    // the staff member staring at "100 hours used" with no idea whether
+    // that was on-budget or wildly over.
+    $breakdown = number_format($tasked, 1) . 'h via tasks';
+    if ($unassigned > 0) {
+        $breakdown .= ' + ' . number_format($unassigned, 1) . 'h unassigned';
+    }
+    $breakdown .= ' (' . number_format($tot, 1) . 'h total used)';
+    $estLabel = $estHours > 0
+        ? ' out of ' . number_format($estHours, 1) . 'h allowed'
+        : ' &mdash; <em>no estimate set yet (add tasks in the quote builder)</em>';
+
     $isOver = ($estHours > 0 && ($tot + 8) > $estHours);
     if ($isOver) {
-        echo '<span style="color:red;font-weight:bold;font-size:15px">*** ';
-        echo number_format($tot, 1) . ' Hours used out of ' . number_format($estHours, 1) . ' allowed</span>';
+        echo '<span style="color:red;font-weight:bold;font-size:14px">*** ' . $breakdown . $estLabel . '</span>';
     } else {
-        echo '<span style="color:green;font-size:14px">';
-        echo number_format($tot, 1) . ' Hours used';
-        if ($estHours > 0) echo ' out of ' . number_format($estHours, 1) . ' allowed';
-        echo '</span>';
+        echo '<span style="color:green;font-size:13px">' . $breakdown . $estLabel . '</span>';
     }
     echo ',&nbsp;&nbsp;&nbsp;Current Status:&nbsp;';
     echo htmlspecialchars((string)$status);
