@@ -12,6 +12,37 @@ $missingWeekdays = $mustFillFullWeek
     ? missing_weekdays($pdo, (int)($_SESSION['Employee_id'] ?? 0), 4)
     : [];
 
+// ── Split missing into "current week (Mon-Fri up to yesterday)" vs
+//    "previous weeks". The current-week portion gets re-checked
+//    client-side as the user types, so the submit button can flip back to
+//    normal once they've filled in every weekday before today. Previous
+//    weeks keep the existing red-banner / red-button behavior.
+$today              = date('Y-m-d');
+$todayDow           = (int)date('N');                                 // 1=Mon … 7=Sun
+$currentWeekMonday  = date('Y-m-d', strtotime('monday this week'));
+$isViewingCurrentWeek = ($weekStart === $currentWeekMonday);
+
+$missingPrevWeeks = [];
+$missingCurrWeek  = [];
+foreach ($missingWeekdays as $d) {
+    $dMon = date('Y-m-d', strtotime('monday this week', strtotime($d)));
+    if ($dMon === $currentWeekMonday) $missingCurrWeek[] = $d;
+    else                              $missingPrevWeeks[] = $d;
+}
+// Current-week gap is only "real" for weekdays before today.
+// (Sat/Sun never count; today and future days are still allowed to be empty.)
+$missingCurrWeekUpToYesterday = array_values(array_filter($missingCurrWeek, function($d) use ($todayDow) {
+    $dow = (int)date('N', strtotime($d));
+    return $dow < $todayDow && $dow <= 5;
+}));
+
+// Mon..Fri DoW indices (1..5) that should be filled by now in the
+// current week. JS uses these for dynamic re-checking on every keystroke.
+$requiredDowsCurrentWeek = [];
+for ($i = 1; $i <= 5; $i++) {
+    if ($i < $todayDow) $requiredDowsCurrentWeek[] = $i;
+}
+
 // ── Week selection ──────────────────────────────────────────────────────────
 // Accept either 'week' or 'Week' (form fields posted from various pages)
 $currentWeek = $_POST['week'] ?? $_POST['Week']
@@ -244,6 +275,95 @@ function OnLostFocusTest(el) {
 // Per-project task list keyed by proj_id → list of {tid, name, stage, est, logged, remaining}
 window.PROJECT_TASKS = <?= json_encode($projectTasksJs, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
 
+// Full-time-staff dynamic gap check. Only the *current* week recomputes
+// live as the user types — previous weeks fall through to the existing
+// server-rendered banner/button state.
+window.IS_FULLTIME       = <?= $mustFillFullWeek ? 'true' : 'false' ?>;
+window.IS_CURRENT_WEEK   = <?= $isViewingCurrentWeek ? 'true' : 'false' ?>;
+window.REQUIRED_WEEKDAYS = <?= json_encode($requiredDowsCurrentWeek) ?>;
+window.__currentWeekMissingDows = [];
+
+function recomputeCurrentWeekGap() {
+    if (!window.IS_FULLTIME || !window.IS_CURRENT_WEEK) return;
+    var dows     = window.REQUIRED_WEEKDAYS || [];
+    var dowNames = ['', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+    var stillMissing = [];
+    for (var i = 0; i < dows.length; i++) {
+        var d = dows[i];
+        var hasAny = false;
+        for (var r = 1; r <= 30; r++) {
+            var el = document.submit_form && document.submit_form.elements['D' + d + '_' + r];
+            if (el) {
+                var v = parseFloat(el.value);
+                if (!isNaN(v) && v > 0) { hasAny = true; break; }
+            }
+        }
+        if (!hasAny) stillMissing.push(dowNames[d]);
+    }
+    var btn  = document.getElementById('submit-btn');
+    var hint = document.getElementById('submit-hint');
+    if (!btn) return;
+    if (stillMissing.length > 0) {
+        btn.value = '⚠ Submit (you have missing days)';
+        btn.style.background = '#c33';
+        btn.style.fontWeight = 'bold';
+        btn.style.boxShadow  = '0 0 0 2px #fff3cd inset';
+        if (hint) {
+            hint.style.display = '';
+            hint.textContent = stillMissing.length + ' weekday(s) missing this week (' +
+                stillMissing.join(', ') + ') — fill every weekday before today, then ' +
+                'the button will go back to normal.';
+        }
+    } else {
+        btn.value = 'Submit Timesheet';
+        btn.style.background = '#9B9B1B';
+        btn.style.fontWeight = 'normal';
+        btn.style.boxShadow  = '';
+        if (hint) hint.style.display = 'none';
+    }
+    window.__currentWeekMissingDows = stillMissing;
+}
+
+// Recompute every time the user touches a day cell.
+document.addEventListener('input', function(e) {
+    if (e.target && e.target.classList && e.target.classList.contains('day-input')) {
+        recomputeCurrentWeekGap();
+    }
+});
+
+// Wire submit-time confirm dynamically. On the current week the dialog
+// only fires if there are still gaps after the user's edits; on previous
+// weeks we preserve the original "missing in last 4 weeks" behavior.
+window.MISSING_PREV_WEEKS_COUNT = <?= count($missingPrevWeeks) ?>;
+window.MISSING_LAST4_COUNT      = <?= count($missingWeekdays) ?>;
+document.addEventListener('DOMContentLoaded', function() {
+    // Sync button state with whatever values are already in the form.
+    recomputeCurrentWeekGap();
+    var f = document.submit_form;
+    if (!f) return;
+    f.addEventListener('submit', function(e) {
+        if (!window.IS_FULLTIME) return;
+        if (window.IS_CURRENT_WEEK) {
+            recomputeCurrentWeekGap(); // sync with the latest edits
+            var miss = window.__currentWeekMissingDows || [];
+            if (miss.length > 0) {
+                if (!confirm('⚠ You haven’t logged ' + miss.join(', ') +
+                             ' yet this week.\n\nFull-time staff must log every weekday before ' +
+                             'today (project hours OR a leave/sick entry).\n\nSubmit anyway?')) {
+                    e.preventDefault();
+                }
+            }
+        } else if (window.MISSING_LAST4_COUNT > 0) {
+            if (!confirm('⚠ You still have ' + window.MISSING_LAST4_COUNT +
+                         ' missing weekday(s) in the past 4 weeks.\n\n' +
+                         'This week will be saved, but the gap remains until you fill those days ' +
+                         'too.\n\nSubmit anyway?')) {
+                e.preventDefault();
+            }
+        }
+    });
+});
+
 function populateTaskSelect(rowIdx, projId, currentPtid) {
     var sel = document.querySelector('select[name="Task' + rowIdx + '"]');
     if (!sel || sel.disabled) return;
@@ -376,19 +496,21 @@ window.onload = function () {
 </form>
 </div>
 
-<?php if ($mustFillFullWeek && !empty($missingWeekdays)):
-    // Group missing dates by week-starting Monday for readability
+<?php
+// Banner #1 (existing behavior, narrowed scope) — list missing weekdays in
+// previous weeks. The current week is handled separately by the live
+// JS-driven hint next to the submit button.
+if ($mustFillFullWeek && !empty($missingPrevWeeks)):
     $byWeek = [];
-    foreach ($missingWeekdays as $d) {
+    foreach ($missingPrevWeeks as $d) {
         $mon = date('Y-m-d', strtotime('monday this week', strtotime($d)));
         $byWeek[$mon][] = date('D j M', strtotime($d));
     }
 ?>
 <div style="width:680px;margin:6px auto;background:#ffd6d6;border:2px solid #c33;border-radius:4px;padding:10px 14px;color:#a00">
-  <strong style="font-size:14px">⚠ <?= count($missingWeekdays) ?> weekday(s) not filled in the past 4 weeks</strong>
+  <strong style="font-size:14px">⚠ <?= count($missingPrevWeeks) ?> weekday(s) not filled in previous weeks</strong>
   <div style="font-size:11px;margin-top:4px">
     As a full-time staff member you must log every weekday — either with project tasks or with a leave / sick entry.
-    <strong>You cannot submit until these are filled.</strong>
   </div>
   <ul style="margin:6px 0 0;padding-left:18px;font-size:11px">
     <?php foreach ($byWeek as $weekMon => $days): ?>
@@ -401,29 +523,49 @@ window.onload = function () {
 </div>
 <?php endif; ?>
 
+<?php
+// Banner #2 (new) — when the user clicks "Open this week" on a previous-
+// week link AND they haven't filled the current week through yesterday,
+// bounce them to fix the current week first.
+if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYesterday)):
+    $todaysGapLabels = array_map(fn($d) => date('D j M', strtotime($d)), $missingCurrWeekUpToYesterday);
+?>
+<div style="width:680px;margin:6px auto;background:#fff3cd;border:2px solid #d68910;border-radius:4px;padding:10px 14px;color:#7a4d00">
+  <strong style="font-size:14px">⚠ Finish the current week first</strong>
+  <div style="font-size:11px;margin-top:4px">
+    You haven't logged every weekday before today in the current week
+    (<strong><?= htmlspecialchars(implode(', ', $todaysGapLabels)) ?></strong> still empty).
+    Please complete the current week before filling in earlier ones.
+    &nbsp;<a href="main.php?week=<?= urlencode($currentWeekMonday) ?>" style="color:#7a4d00;text-decoration:underline;font-weight:bold">Go to current week</a>
+  </div>
+</div>
+<?php endif; ?>
+
 <!-- ── Submit form ───────────────────────────────────────────────────────── -->
 <?php
-    $hasGap = $mustFillFullWeek && !empty($missingWeekdays);
-    // First few missing day labels for the confirm dialog
-    $gapPreview = '';
-    if ($hasGap) {
-        $sample = array_slice($missingWeekdays, 0, 8);
-        $gapPreview = implode(', ', array_map(fn($d) => date('D j M', strtotime($d)), $sample));
-        if (count($missingWeekdays) > 8) $gapPreview .= ' (+' . (count($missingWeekdays) - 8) . ' more)';
-    }
+    // Initial state. On the current week, the JS recomputes this on every
+    // keystroke (so the button flips back to normal once Mon→yesterday is
+    // filled). On previous weeks we keep the original "any missing day in
+    // the last 4 weeks" rule so the historic banner & button stay aligned.
+    $initialHasGap = $mustFillFullWeek && (
+        $isViewingCurrentWeek
+            ? !empty($missingCurrWeekUpToYesterday)
+            : !empty($missingWeekdays)
+    );
 ?>
-<form action="submit.php" id="submit_form" name="submit_form" method="post" style="width:680px;margin:0 auto"
-      <?php if ($hasGap): ?>onsubmit="return confirm('⚠ You still have <?= count($missingWeekdays) ?> missing weekday(s):\n\n<?= addslashes($gapPreview) ?>\n\nThis week will be saved, but the gap remains until you fill those days too.\n\nSubmit anyway?');"<?php endif; ?>>
+<form action="submit.php" id="submit_form" name="submit_form" method="post" style="width:680px;margin:0 auto">
 <input type="hidden" name="hidden_week" value="<?= htmlspecialchars($weekStart) ?>">
 <div style="padding:4px 0">
-  <input type="submit" name="Submit"
-         value="<?= $hasGap ? '⚠ Submit (you have missing days)' : 'Submit Timesheet' ?>"
-         style="padding:6px 16px;background:<?= $hasGap ? '#c33' : '#9B9B1B' ?>;color:#fff;border:none;cursor:pointer;border-radius:3px;font-weight:<?= $hasGap ? 'bold' : 'normal' ?>;<?= $hasGap ? 'box-shadow:0 0 0 2px #fff3cd inset;' : '' ?>">
-  <?php if ($hasGap): ?>
-    <span style="color:#a00;font-size:11px;margin-left:8px">
+  <input type="submit" name="Submit" id="submit-btn"
+         value="<?= $initialHasGap ? '⚠ Submit (you have missing days)' : 'Submit Timesheet' ?>"
+         style="padding:6px 16px;background:<?= $initialHasGap ? '#c33' : '#9B9B1B' ?>;color:#fff;border:none;cursor:pointer;border-radius:3px;font-weight:<?= $initialHasGap ? 'bold' : 'normal' ?>;<?= $initialHasGap ? 'box-shadow:0 0 0 2px #fff3cd inset;' : '' ?>">
+  <span id="submit-hint" style="color:#a00;font-size:11px;margin-left:8px;<?= $initialHasGap ? '' : 'display:none' ?>">
+    <?php if ($initialHasGap && $isViewingCurrentWeek): ?>
+      <?= count($missingCurrWeekUpToYesterday) ?> weekday(s) missing this week — fill every weekday before today, then the button will go back to normal.
+    <?php elseif ($initialHasGap): ?>
       <?= count($missingWeekdays) ?> missing weekday(s) in the past 4 weeks — submit will save what you've entered, but please go back and fill those too.
-    </span>
-  <?php endif; ?>
+    <?php endif; ?>
+  </span>
 </div>
 
 <div>
