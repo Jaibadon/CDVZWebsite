@@ -200,7 +200,7 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         // Hide "Email from CADViz" once it has been sent (Sent = 1).
         // Also block emailing while Status_INV is "Not Checked" (0).
         if ($sentFlag === 0 && $checked) {
-            echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client from accounts@cadviz.co.nz?');\">"
+            echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client now from accounts@cadviz.co.nz?\\n\\nThe email asks the client to disregard if already paid. Continue?');\">"
                . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
                . "<input type=\"submit\" value=\"&#9993; Email from CADViz\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
                . "</form>";
@@ -218,9 +218,12 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         }
     }
 
-    // Statement button — only if this client has more than one unpaid invoice.
-    if ($clientId > 0 && ($unpaidPerClient[$clientId] ?? 0) > 1) {
-        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Email a statement plus PDFs of every unpaid invoice for this client?');\">"
+    // Statement button — only when this client has >1 unpaid invoice AND
+    // this row is past Not-Checked (Status_INV != 0). Same gate as the
+    // single-invoice email button so we never email statements that
+    // include unreviewed invoices.
+    if ($checked && $clientId > 0 && ($unpaidPerClient[$clientId] ?? 0) > 1) {
+        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Send a STATEMENT email to this client now?\\n\\nIncludes PDFs of every unpaid invoice and marks each one as Sent. The client will be asked to disregard if already paid. Continue?');\">"
            . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
            . "<input type=\"submit\" value=\"&#9993; Send Statement\" style=\"background:#5d3a9b;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
            . "</form>";

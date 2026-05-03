@@ -180,7 +180,7 @@ if ($xeroConnected) {
           <br>
           <a href="xero_send_reminders.php?dry_run=1" target="_blank">Preview reminder run (dry-run)</a>
           &nbsp;|&nbsp;
-          <a href="xero_send_reminders.php" target="_blank" onclick="return confirm('Send all due reminders now (cron-equivalent)?');">Run reminder batch now</a>
+          <a href="xero_send_reminders.php" target="_blank" onclick="return confirm('Send overdue reminders to ALL clients due for one right now?\n\nXero is synced first, paid invoices are skipped, and each email asks the client to disregard if already paid. Continue?');">Run reminder batch now</a>
         </p>
         <table class="table">
           <tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Email</th><th>Due</th><th class="right">Amount Due</th><th>Status</th><th>Last reminder</th><th>Action</th></tr>
@@ -205,7 +205,7 @@ if ($xeroConnected) {
                 <a href="invoice.php?Invoice_No=<?= (int)$od['Invoice_No'] ?>" style="font-size:11px">Local</a>
                 <br>
                 <a href="xero_send_reminders.php?invoice_no=<?= (int)$od['Invoice_No'] ?>"
-                   onclick="return confirm('Send overdue reminder for CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?> from accounts@cadviz.co.nz?');"
+                   onclick="return confirm('Send overdue reminder for CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?> now from accounts@cadviz.co.nz?\n\nXero is re-synced first so a just-paid invoice will be skipped. The email asks the client to disregard if already paid. Continue?');"
                    style="background:#9B9B1B;color:#fff;padding:2px 8px;border-radius:3px;text-decoration:none;font-size:11px">✉ Send reminder</a>
               </td>
             </tr>

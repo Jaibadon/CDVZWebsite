@@ -67,6 +67,10 @@ $status_inv = (empty($_POST['Status_INV'])) ? 0 : (int)$_POST['Status_INV'];
 $payment_opt = (int)$_POST['Payment_Opt'];
 $order_no_inv = $_POST['ORDER_NO_INV'] ?? '';
 
+// Recompute PayBy from the (possibly updated) invoice date and PaymentOption
+// so the due date stays in sync after any edit.
+$payByDate = compute_pay_by($inv_date, $payment_opt);
+
 $stmt = $pdo->prepare("UPDATE Invoices SET
     CLIENT_ID = ?,
     DATE = ?,
@@ -77,6 +81,7 @@ $stmt = $pdo->prepare("UPDATE Invoices SET
     Notes = ?,
     Status_INV = ?,
     PaymentOption = ?,
+    PayBy = ?,
     Order_No_INV = ?
     WHERE Invoice_No = ?");
 
@@ -90,6 +95,7 @@ $stmt->execute([
     $new_notes,
     $status_inv,
     $payment_opt,
+    $payByDate,
     $order_no_inv,
     $invoice_no
 ]);

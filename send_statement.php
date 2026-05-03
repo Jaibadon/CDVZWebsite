@@ -15,6 +15,7 @@
 
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 require_once 'xero_client.php';
 require_once 'smtp_mailer.php';
 // Sync first so paid invoices drop off and the email reflects current truth.
@@ -48,7 +49,7 @@ try {
 
     // Pull all unpaid invoices for this client.
     $st = $pdo->prepare(
-        "SELECT i.Invoice_No, i.Subtotal, i.Tax_Rate, i.PaymentOption, i.Date,
+        "SELECT i.Invoice_No, i.Subtotal, i.Tax_Rate, i.PaymentOption, i.Date, i.PayBy,
                 i.Sent, i.Status_INV,
                 i.Xero_InvoiceID, i.Xero_AmountDue, i.Xero_DueDate,
                 p.JobName, p.Order_No
@@ -104,9 +105,10 @@ try {
         $amount    = $xeroDue !== null && $xeroDue > 0 ? $xeroDue : $localTotal;
         $localGrand += $amount;
 
-        $invDate = $inv['Date'] ? date('d/m/Y', strtotime($inv['Date'])) : '';
-        $dueDate = $inv['Xero_DueDate'] ? date('d/m/Y', strtotime($inv['Xero_DueDate'])) : '';
-        $job     = trim(($inv['Order_No'] ? $inv['Order_No'] . ' / ' : '') . ($inv['JobName'] ?? ''));
+        $invDate    = $inv['Date'] ? date('d/m/Y', strtotime($inv['Date'])) : '';
+        $dueIso     = $inv['PayBy'] ?: ($inv['Xero_DueDate'] ?: compute_pay_by($inv['Date'] ?? null, $inv['PaymentOption'] ?? null));
+        $dueDate    = $dueIso ? date('d/m/Y', strtotime($dueIso)) : '';
+        $job        = trim(($inv['Order_No'] ? $inv['Order_No'] . ' / ' : '') . ($inv['JobName'] ?? ''));
 
         $linesText[] = sprintf("  %s  %s  due %s  %s  $%s",
             $invNumStr, $invDate ?: '          ', $dueDate ?: '          ', $job, number_format($amount, 2));
@@ -124,6 +126,7 @@ try {
 
     $textBody  = "Hi {$clientName},\r\n\r\n";
     $textBody .= "Please find attached a statement of outstanding invoices from CADViz Limited (" . count($invoices) . " invoice(s)).\r\n\r\n";
+    $textBody .= "If you have already paid any of the invoices listed below, please disregard this statement for those — our records simply haven't caught up with your payment(s) yet.\r\n\r\n";
     $textBody .= "Outstanding balance: $" . number_format($totalForDisplay, 2) . "\r\n\r\n";
     $textBody .= "Outstanding invoices:\r\n" . implode("\r\n", $linesText) . "\r\n\r\n";
     $textBody .= "IMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. CAD-09489) as the bank-transfer reference, so we can match each payment to the correct invoice.\r\n\r\n";
@@ -131,11 +134,12 @@ try {
     if (!empty($missingPdf)) {
         $textBody .= "(PDF attachments could not be retrieved for: CAD-" . implode(', CAD-', array_map(fn($n) => str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf)) . ". Please contact us if you need copies.)\r\n\r\n";
     }
-    $textBody .= "If you have any queries please reply to this email.\r\n\r\n";
+    $textBody .= "If you have any other queries please reply to this email.\r\n\r\n";
     $textBody .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
 
     $htmlBody  = '<p>Hi ' . htmlspecialchars($clientName) . ',</p>';
     $htmlBody .= '<p>Please find attached a statement of outstanding invoices from <strong>CADViz Limited</strong> (' . count($invoices) . ' invoice' . (count($invoices) === 1 ? '' : 's') . ').</p>';
+    $htmlBody .= '<p style="color:#666"><em>If you have already paid any of the invoices listed below, please disregard this statement for those &mdash; our records simply haven\'t caught up with your payment(s) yet.</em></p>';
     $htmlBody .= '<p style="font-size:16px"><strong>Outstanding balance: $' . number_format($totalForDisplay, 2) . '</strong></p>';
     $htmlBody .= '<table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">';
     $htmlBody .= '<thead><tr style="background:#eee">'
@@ -154,7 +158,7 @@ try {
                   . implode(', ', array_map(fn($n) => 'CAD-' . str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf))
                   . '. Please reply to this email if you need copies.</p>';
     }
-    $htmlBody .= '<p>If you have any queries please reply to this email.</p>';
+    $htmlBody .= '<p>If you have any other queries please reply to this email.</p>';
     $htmlBody .= '<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>';
 
     $subject = 'Statement of outstanding invoices from CADViz Limited';

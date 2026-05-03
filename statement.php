@@ -1,6 +1,7 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 require_once 'xero_client.php';
 // Refresh local Xero_* columns before drawing the statement so the
 // figures match Xero's source of truth (paid invoices drop off).
@@ -51,6 +52,7 @@ $sql = "SELECT i.Invoice_No      AS NUM,
                i.Subtotal        AS Subtotal,
                i.Tax_Rate        AS Tax_Rate,
                i.PaymentOption   AS PaymentOption,
+               i.PayBy           AS PayBy,
                i.Xero_AmountDue  AS XeroAmountDue,
                i.Xero_DueDate    AS XeroDueDate,
                c.Client_Name     AS Client_Name,
@@ -208,19 +210,14 @@ foreach ($rows as $row) {
     $inv_date = $row['InvDate'] ?? null;
     $baseTs   = $inv_date ? strtotime($inv_date) : false;
 
-    // Prefer Xero's due date if we have it; otherwise compute from PaymentOption.
-    if (!empty($row['XeroDueDate'])) {
-        $ddateTs = strtotime($row['XeroDueDate']);
-    } elseif ($payopt === 1 && $baseTs) {
-        $ddateTs = strtotime('+1 month', $baseTs);
-    } elseif ($payopt === 2 && $baseTs) {
-        $ddateTs = strtotime('+7 days', $baseTs);
-    } elseif ($baseTs) {
-        $ddateTs = $baseTs;
-    } else {
-        $ddateTs = false;
-    }
-    $ddate = $ddateTs ? date('d/m/Y', $ddateTs) : '';
+    // Prefer the locally-stored PayBy (computed via the canonical
+    // compute_pay_by rule). Fall back to Xero's DueDate, then derive
+    // on the fly if neither is available.
+    $ddateIso = $row['PayBy']
+              ?: ($row['XeroDueDate']
+              ?: compute_pay_by($inv_date, $payopt));
+    $ddateTs  = $ddateIso ? strtotime($ddateIso) : false;
+    $ddate    = $ddateTs ? date('d/m/Y', $ddateTs) : '';
 
     $diff = $ddateTs ? (int)floor((time() - $ddateTs) / 86400) : -999;
     if ($diff < 0) {
@@ -329,7 +326,7 @@ foreach ($rows as $row) {
 <p class="no-print" style="margin-top:14px">
   <a href="invoice_list.php" class="btn-secondary">Back to invoice list</a>
   <?php if (!empty($rows)): ?>
-    <form method="post" action="send_statement.php" style="display:inline;margin-left:8px" onsubmit="return confirm('Email this statement plus PDFs of every unpaid invoice to <?= htmlspecialchars($billto) ?>?');">
+    <form method="post" action="send_statement.php" style="display:inline;margin-left:8px" onsubmit="return confirm('Email this statement plus PDFs of every unpaid invoice to <?= htmlspecialchars($billto) ?> now?\n\nEach unsent invoice will be marked as Sent. The client is asked to disregard for any invoice already paid. Continue?');">
       <input type="hidden" name="client_id" value="<?= (int)$client_id ?>">
       <button type="submit" class="btn-primary">&#9993; Send Statement to Client</button>
     </form>

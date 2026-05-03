@@ -14,6 +14,7 @@
  *   - From PHP:    require_once 'xero_sync.php'; $r = run_xero_sync(get_db());
  */
 require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/xero_client.php';
 
 /**
@@ -24,7 +25,7 @@ require_once __DIR__ . '/xero_client.php';
  */
 function run_xero_sync(PDO $pdo): array
 {
-    $result = ['updated' => 0, 'paid_marked' => 0, 'errors' => []];
+    $result = ['updated' => 0, 'paid_marked' => 0, 'duedate_pushed' => 0, 'errors' => []];
     try {
         if (!XeroClient::isConfigured() || !XeroClient::isConnected($pdo)) {
             $result['errors'][] = 'Xero not connected — sync skipped.';
@@ -37,7 +38,10 @@ function run_xero_sync(PDO $pdo): array
             if (!empty($inv['InvoiceID'])) $byId[$inv['InvoiceID']] = $inv;
         }
 
-        $rows = $pdo->query("SELECT Invoice_No, Xero_InvoiceID FROM Invoices WHERE Xero_InvoiceID IS NOT NULL")->fetchAll();
+        // Pull Date + PaymentOption + PayBy alongside the Xero ID so we can
+        // detect when Xero's DueDate disagrees with what PaymentOption says
+        // it should be and push a correction back to Xero.
+        $rows = $pdo->query("SELECT Invoice_No, Xero_InvoiceID, Date, PaymentOption, PayBy FROM Invoices WHERE Xero_InvoiceID IS NOT NULL")->fetchAll();
         $upd = $pdo->prepare(
             "UPDATE Invoices
                 SET Xero_Status = ?, Xero_AmountDue = ?, Xero_AmountPaid = ?, Xero_DueDate = ?, Xero_LastSynced = UTC_TIMESTAMP(),
@@ -76,6 +80,26 @@ function run_xero_sync(PDO $pdo): array
             ]);
             $result['updated']++;
             if ($status === 'PAID') $result['paid_marked']++;
+
+            // If the Xero DueDate disagrees with what PaymentOption says it
+            // should be, push the correction back to Xero (skip PAID — no
+            // point editing closed invoices). Also keep local PayBy in sync.
+            if ($status !== 'PAID') {
+                $expected = compute_pay_by($r['Date'], $r['PaymentOption']);
+                if ($expected && $expected !== $due) {
+                    try {
+                        $xc->postInvoice([
+                            'InvoiceID' => $r['Xero_InvoiceID'],
+                            'DueDate'   => $expected,
+                        ]);
+                        $pdo->prepare("UPDATE Invoices SET Xero_DueDate = ?, PayBy = ? WHERE Invoice_No = ?")
+                            ->execute([$expected, $expected, (int)$r['Invoice_No']]);
+                        $result['duedate_pushed']++;
+                    } catch (Exception $pushErr) {
+                        $result['errors'][] = "DueDate push failed for INV {$r['Invoice_No']}: " . $pushErr->getMessage();
+                    }
+                }
+            }
         }
     } catch (Exception $e) {
         $result['errors'][] = $e->getMessage();
@@ -102,8 +126,9 @@ $result = run_xero_sync($pdo);
 
 if ($isCli) {
     echo "Xero sync @ " . date('c') . "\n";
-    echo "  updated:     " . (int)$result['updated'] . "\n";
-    echo "  paid_marked: " . (int)$result['paid_marked'] . "\n";
+    echo "  updated:        " . (int)$result['updated'] . "\n";
+    echo "  paid_marked:    " . (int)$result['paid_marked'] . "\n";
+    echo "  duedate_pushed: " . (int)($result['duedate_pushed'] ?? 0) . "\n";
     foreach ($result['errors'] as $e) echo "  ERROR: $e\n";
     exit;
 }
@@ -121,6 +146,9 @@ if ($json) {
   <p>Updated <strong><?= (int)$result['updated'] ?></strong> invoice(s) from Xero.
      <?php if (!empty($result['paid_marked'])): ?>
        <br><span style="color:#1a6b1a">&#10003; <?= (int)$result['paid_marked'] ?> invoice(s) auto-marked as PAID locally.</span>
+     <?php endif; ?>
+     <?php if (!empty($result['duedate_pushed'])): ?>
+       <br><span style="color:#5577aa">&#8635; <?= (int)$result['duedate_pushed'] ?> invoice(s) had their DueDate corrected back to Xero (PaymentOption rule).</span>
      <?php endif; ?>
   </p>
   <?php foreach ($result['errors'] as $e): ?>

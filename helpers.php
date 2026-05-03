@@ -129,6 +129,32 @@ function to_mysql_date($input): ?string {
 }
 
 /**
+ * Compute the invoice's payment-due date (Y-m-d) from its invoice date and
+ * PaymentOption code. Returns null if either input is missing/invalid.
+ *
+ * PaymentOption 1 = 20th of the *next* calendar month, ALWAYS (regardless
+ *   of the invoice's day-of-month — `strtotime('+1 month', Jan 31)` lands
+ *   on Mar 3, which used to throw the due date a month ahead).
+ * PaymentOption 2 = invoice date + 7 days.
+ * PaymentOption 3 = invoice date itself (due immediately).
+ */
+function compute_pay_by($invoiceDate, $paymentOption): ?string {
+    if (empty($invoiceDate)) return null;
+    $opt = (int)$paymentOption;
+    $ts  = strtotime((string)$invoiceDate);
+    if (!$ts) return null;
+
+    if ($opt === 1) {
+        $first = new DateTime(date('Y-m-1', $ts));
+        $first->modify('+1 month');
+        return $first->format('Y-m-') . '20';
+    }
+    if ($opt === 2) return date('Y-m-d', strtotime('+7 days', $ts));
+    if ($opt === 3) return date('Y-m-d', $ts);
+    return null;
+}
+
+/**
  * Format a MySQL date string for display in d/m/Y, safely handling nulls.
  */
 function display_date($input, string $fmt = 'd/m/Y'): string {

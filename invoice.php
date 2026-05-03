@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
@@ -25,6 +26,7 @@ $sql = "SELECT Invoices.Invoice_No    AS Invoice_No,
                Invoices.Subtotal      AS Subtotal,
                Invoices.Tax_Rate      AS Tax_Rate,
                Invoices.PaymentOption AS PaymentOption,
+               Invoices.PayBy         AS PayBy,
                Invoices.Order_No_INV  AS Order_No_INV,
                Invoices.Notes         AS InvNotes,
                Clients.Client_id      AS Client_ID,
@@ -81,6 +83,18 @@ function fmtDate($v) {
 }
 
 $invDate = ci($rs, ['Date', 'DATE', 'InvDate', 'date']);
+
+// Resolve PayBy. Prefer the stored value; if it's missing, compute from
+// PaymentOption + invoice Date and persist so Xero, statements, and the
+// invoice page all show the same number forever after.
+$payByStored = $rs['PayBy'] ?? null;
+$payByDate   = $payByStored ?: compute_pay_by($invDate, $rs['PaymentOption'] ?? null);
+if (!$payByStored && $payByDate) {
+    try {
+        $pdo->prepare("UPDATE Invoices SET PayBy = ? WHERE Invoice_No = ?")
+            ->execute([$payByDate, (int)$invoice_no]);
+    } catch (Exception $e) { /* schema may not have PayBy yet — ignore */ }
+}
 
 $subtot = 0;
 foreach ($timesheets as $ts) {
@@ -247,19 +261,7 @@ if ($subtot >= 0) {
   </tr>
   <tr>
     <td><strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Payment due by:&nbsp;
-<?php
-$baseTs = $invDate ? strtotime($invDate) : false;
-if ($baseTs) {
-    if ($rs['PaymentOption'] == 1) {
-        $next = strtotime('+1 months', $baseTs);
-        echo '20/' . (int)date('n', $next) . '/' . (int)date('Y', $next);
-    } elseif ($rs['PaymentOption'] == 2) {
-        echo date('d/m/Y', strtotime('+7 days', $baseTs));
-    } elseif ($rs['PaymentOption'] == 3) {
-        echo date('d/m/Y', $baseTs);
-    }
-}
-?>
+<?= $payByDate ? htmlspecialchars(date('d/m/Y', strtotime($payByDate))) : '<em style="color:#a00">not set</em>' ?>
     </strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<font size=1>Thank you for your valued custom</font></td>
     <td align="right">&nbsp;</td>
     <td align="right">&nbsp;</td>
@@ -358,12 +360,12 @@ if (in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)):
       </p>
     <?php else: ?>
       <p style="margin:0">Not yet pushed to Xero.</p>
-      <form method="post" action="xero_invoice_push.php" style="margin-top:6px;display:inline" onsubmit="return confirm('Push INV-<?= $invoice_no ?> to Xero as AUTHORISED?');">
+      <form method="post" action="xero_invoice_push.php" style="margin-top:6px;display:inline" onsubmit="return confirm('Push CAD-<?= str_pad((string)$invoice_no, 5, '0', STR_PAD_LEFT) ?> to Xero as AUTHORISED?\n\nThis only creates the invoice in Xero — no email is sent. Continue?');">
         <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
         <input type="hidden" name="email" value="0">
         <button type="submit" class="btn-primary">Push to Xero</button>
       </form>
-      <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Push INV-<?= $invoice_no ?> to Xero AND email to client?');">
+      <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Push CAD-<?= str_pad((string)$invoice_no, 5, '0', STR_PAD_LEFT) ?> to Xero AND email it to the client now?\n\nThe email goes from accounts@cadviz.co.nz with the Xero PDF attached, and asks the client to disregard if already paid. Continue?');">
         <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
         <input type="hidden" name="email" value="1">
         <button type="submit" class="btn-primary" style="background:#1a6b1a">Push + Email to Client</button>

@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
@@ -38,9 +39,14 @@ $ts_proj_id = (int)$firstRow['proj_id'];
 $maxStmt = $pdo->query("SELECT COALESCE(MAX(Invoice_No), 0) AS maxy FROM Invoices");
 $maxy    = (int)$maxStmt->fetch(PDO::FETCH_ASSOC)['maxy'] + 1;
 
-// Insert new invoice with explicit Invoice_No
-$ins = $pdo->prepare("INSERT INTO Invoices (Invoice_No, Client_ID, Proj_ID, Date) VALUES (?, ?, ?, NOW())");
-$ins->execute([$maxy, $client_id, $ts_proj_id]);
+// Insert new invoice with explicit Invoice_No. Default PaymentOption=1
+// (20th of next month) and pre-compute PayBy so Xero, statements, and the
+// invoice page all agree on the due date from the first save.
+$today        = date('Y-m-d');
+$defaultOpt   = 1;
+$defaultPayBy = compute_pay_by($today, $defaultOpt);
+$ins = $pdo->prepare("INSERT INTO Invoices (Invoice_No, Client_ID, Proj_ID, Date, PaymentOption, PayBy) VALUES (?, ?, ?, NOW(), ?, ?)");
+$ins->execute([$maxy, $client_id, $ts_proj_id, $defaultOpt, $defaultPayBy]);
 
 // Re-fetch all uninvoiced timesheets for this project
 $stmt2 = $pdo->prepare("SELECT Timesheets.TS_ID, Staff.`BILLING RATE` AS BILLING_RATE, Clients.Multiplier AS Multiplier

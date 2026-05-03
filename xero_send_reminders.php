@@ -139,6 +139,7 @@ function sendReminder(PDO $pdo, array $r): void {
         $text .= "If there's an issue with this invoice please reply to this email so we can sort it.\r\n\r\n";
     }
     if ($online) $text .= "View / pay online: {$online}\r\n\r\n";
+    $text .= "If you have already paid this invoice, please disregard this email — our records simply haven't caught up with your payment yet.\r\n\r\n";
     $text .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
 
     $html  = "<p>Hi " . htmlspecialchars($name) . ",</p>";
@@ -152,6 +153,7 @@ function sendReminder(PDO $pdo, array $r): void {
         $html .= "<p>If there's an issue with this invoice please reply to this email so we can sort it.</p>";
     }
     if ($online) $html .= "<p><a href=\"" . htmlspecialchars($online) . "\">View / pay invoice online</a></p>";
+    $html .= "<p style=\"color:#666\"><em>If you have already paid this invoice, please disregard this email &mdash; our records simply haven't caught up with your payment yet.</em></p>";
     $html .= "<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>";
 
     SmtpMailer::send([

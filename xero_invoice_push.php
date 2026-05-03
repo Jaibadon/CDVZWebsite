@@ -10,6 +10,7 @@ require_once 'auth_check.php';
 require_once 'db_connect.php';
 require_once 'helpers.php';
 require_once 'xero_client.php';
+require_once 'lib_invoice_email.php';
 
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403); die('Admin only.');
@@ -33,6 +34,7 @@ try {
     //   Clients.billing_email
     $h = $pdo->prepare(
         "SELECT i.Invoice_No, i.Date AS Invoice_Date, i.PayBy AS Due_Date,
+                i.PaymentOption,
                 i.Notes AS Comments, i.Order_No_INV, i.Subtotal, i.Tax_Rate,
                 i.Xero_InvoiceID,
                 c.Client_id, c.Client_Name, c.billing_email AS Email, c.Multiplier
@@ -105,11 +107,25 @@ try {
 
     if (empty($xeroLines)) throw new Exception("Invoice #$invoiceNo has no line items and no subtotal — nothing to send.");
 
+    // Resolve the DueDate from PayBy first; fall back to compute_pay_by()
+    // (which honours the "20th of next month, ALWAYS" rule for option 1)
+    // and persist it back on Invoices.PayBy so subsequent views agree.
+    $invoiceDateForPush = $head['Invoice_Date'] ? date('Y-m-d', strtotime($head['Invoice_Date'])) : date('Y-m-d');
+    $dueDate            = $head['Due_Date'] ? date('Y-m-d', strtotime($head['Due_Date'])) : null;
+    if (!$dueDate) {
+        $dueDate = compute_pay_by($invoiceDateForPush, $head['PaymentOption'] ?? null);
+        if ($dueDate) {
+            $pdo->prepare("UPDATE Invoices SET PayBy = ? WHERE Invoice_No = ?")
+                ->execute([$dueDate, $invoiceNo]);
+        }
+    }
+    if (!$dueDate) $dueDate = date('Y-m-d', strtotime('+20 days'));
+
     $invoiceBody = [
         'Type'            => 'ACCREC',
         'Contact'         => ['ContactID' => $contactId],
-        'Date'            => $head['Invoice_Date'] ? date('Y-m-d', strtotime($head['Invoice_Date'])) : date('Y-m-d'),
-        'DueDate'         => $head['Due_Date']     ? date('Y-m-d', strtotime($head['Due_Date']))     : date('Y-m-d', strtotime('+20 days')),
+        'Date'            => $invoiceDateForPush,
+        'DueDate'         => $dueDate,
         'InvoiceNumber'   => 'CAD-' . str_pad((string)$invoiceNo, 5, '0', STR_PAD_LEFT),
         'Reference'       => $head['Order_No_INV'] ?: ($head['Comments'] ?? ''),
         'LineAmountTypes' => 'Exclusive',
@@ -137,12 +153,14 @@ try {
         $invoiceNo,
     ]);
 
-    // Optional: trigger email via Xero
+    // Optional: email the client. Routes through accounts@cadviz.co.nz
+    // (NOT Xero's mailer — Xero sends from a Xero-controlled From: address
+    // that hits client spam folders). lib_invoice_email.php is the single
+    // source of truth so this matches the Email-from-CADViz button exactly.
     $emailedNote = '';
     if ($alsoEmail) {
         try {
-            $xc->emailInvoice($xeroId);
-            $emailedNote = ' Email sent to client via Xero.';
+            $emailedNote = ' ' . send_invoice_email_via_smtp($pdo, $invoiceNo, false);
         } catch (Exception $em) {
             $emailedNote = ' WARNING: invoice created but email failed: ' . $em->getMessage();
         }
