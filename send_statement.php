@@ -197,14 +197,16 @@ try {
         'attachments' => $attachments,
     ]);
 
-    // Mark every previously-unsent invoice in this batch as Sent. Also mark
-    // SentToContact in Xero where we have a Xero ID, so the Xero UI agrees.
-    $markSent = $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW() WHERE Invoice_No = ? AND COALESCE(Sent, 0) = 0");
+    // Mark every invoice in this batch as Sent + Status_INV=2 (refreshing
+    // date_sent on every statement send so Erik can see when the most
+    // recent batch went out, even on resends). Also mark SentToContact
+    // in Xero where we have a Xero ID, so the Xero UI agrees.
+    $markSent = $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW(), Status_INV = 2 WHERE Invoice_No = ?");
     $markedCount = 0;
     foreach ($invoices as $inv) {
-        if ((int)($inv['Sent'] ?? 0) !== 0) continue;
+        $wasUnsent = (int)($inv['Sent'] ?? 0) === 0;
         $markSent->execute([(int)$inv['Invoice_No']]);
-        $markedCount += $markSent->rowCount();
+        if ($wasUnsent) $markedCount++;
         if (!empty($inv['Xero_InvoiceID'])) {
             try { $xc->markSentToContact($inv['Xero_InvoiceID']); } catch (Exception $e) { /* non-fatal */ }
         }

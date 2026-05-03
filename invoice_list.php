@@ -197,15 +197,20 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         if (!empty($rs['Xero_OnlineUrl'])) {
             echo " <a href=\"" . htmlspecialchars($rs['Xero_OnlineUrl']) . "\" target=\"_blank\" style=\"font-size:11px\">view in Xero</a>";
         }
-        // Hide "Email from CADViz" once it has been sent (Sent = 1).
-        // Also block emailing while Status_INV is "Not Checked" (0).
-        if ($sentFlag === 0 && $checked) {
-            echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client now from accounts@cadviz.co.nz?\\n\\nThe email asks the client to disregard if already paid. Continue?');\">"
+        // "Email from CADViz" stays available even after the first send so the
+        // admin can resend at will (each click flips Sent=1, date_sent=NOW(),
+        // and Status_INV=2 (Sent)). We just show a small green indicator
+        // when it's already been sent at least once. Status_INV=0 (Not
+        // Checked) still blocks the button — review-then-send.
+        if ($checked) {
+            if ($sentFlag !== 0) {
+                echo " <span style=\"color:#1a6b1a;font-size:11px;margin-left:6px\" title=\"This invoice has already been emailed at least once. Clicking again will resend.\">&#9993; Sent</span>";
+            }
+            $resendNote = $sentFlag !== 0 ? '\\n\\nThis invoice has already been sent — clicking will RESEND.' : '';
+            echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client now from accounts@cadviz.co.nz?\\n\\nThe email asks the client to disregard if already paid.$resendNote\\n\\nContinue?');\">"
                . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
-               . "<input type=\"submit\" value=\"&#9993; Email from CADViz\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
+               . "<input type=\"submit\" value=\"&#9993; " . ($sentFlag !== 0 ? 'Re-email from CADViz' : 'Email from CADViz') . "\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
                . "</form>";
-        } elseif ($sentFlag !== 0) {
-            echo " <span style=\"color:#1a6b1a;font-size:11px;margin-left:6px\">&#9993; Sent</span>";
         }
     } else {
         if ($checked) {

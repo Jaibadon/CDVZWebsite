@@ -101,7 +101,10 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     ]);
 
     try { $client->markSentToContact($row['Xero_InvoiceID']); } catch (Exception $e) { /* non-fatal */ }
-    $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW() WHERE Invoice_No = ?")->execute([$invoiceNo]);
+    // Set Sent=1, refresh date_sent on every send (so the admin can see
+    // *when* the most recent email went out), and bump Status_INV to 2
+    // ("Sent") so the dashboard label moves out of "Ready to Send".
+    $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW(), Status_INV = 2 WHERE Invoice_No = ?")->execute([$invoiceNo]);
 
     return "Invoice {$invNumStr} sent from accounts@cadviz.co.nz to {$toAddr}.";
 }
