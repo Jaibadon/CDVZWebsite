@@ -63,17 +63,24 @@ try {
         throw new Exception("Invoice #$invoiceNo is still marked Not Checked (Status_INV=0). Set it to Ready to Send before pushing to Xero.");
     }
 
-    // Pull line items from the Timesheets that belong to this invoice. We
-    // collapse by (proj, task) so the Xero invoice isn't a wall of rows.
+    // Pull line items from the Timesheets that belong to this invoice.
+    // We group by (proj, task, employee) so each staff member's portion of
+    // a task gets its own line — the Xero description then shows who did
+    // the work, and the per-line Rate matches that staff member's actual
+    // billing rate (the old (proj, task) grouping used MAX(Rate) which
+    // could over/under-state the line when two staff with different rates
+    // worked the same task).
     $lines = $pdo->prepare(
-        "SELECT t.proj_id, p.JobName, t.Task,
+        "SELECT t.proj_id, p.JobName, t.Task, t.Employee_id,
+                s.Login                    AS StaffLogin,
                 SUM(t.Hours)               AS Hours,
                 COALESCE(MAX(t.Rate),0)    AS Rate
            FROM Timesheets t
-           LEFT JOIN Projects p ON t.proj_id = p.proj_id
+           LEFT JOIN Projects p ON t.proj_id     = p.proj_id
+           LEFT JOIN Staff    s ON t.Employee_id = s.Employee_ID
           WHERE t.Invoice_No = ? AND t.Hours > 0
-          GROUP BY t.proj_id, t.Task
-          ORDER BY p.JobName, t.Task"
+          GROUP BY t.proj_id, t.Task, t.Employee_id, s.Login
+          ORDER BY p.JobName, t.Task, s.Login"
     );
     $lines->execute([$invoiceNo]);
     $items = $lines->fetchAll();
@@ -90,8 +97,20 @@ try {
         $rate = (float)$li['Rate'];
         if ($rate <= 0) $rate = $baseRate;
         $rate *= $multiplier;
+
+        $job        = trim((string)($li['JobName']    ?? ''));
+        $task       = trim((string)($li['Task']       ?? ''));
+        $staffLogin = trim((string)($li['StaffLogin'] ?? ''));
+
+        // "JobName — Task (by staffLogin)" — falls back gracefully when any
+        // piece is missing so we never end up with leading dashes or empty
+        // parens in the Xero description.
+        $description = $job;
+        if ($task !== '')       $description = $description !== '' ? $description . ' — ' . $task : $task;
+        if ($staffLogin !== '') $description .= ' (by ' . $staffLogin . ')';
+
         $xeroLines[] = [
-            'Description' => trim(($li['JobName'] ?? '') . ' — ' . ($li['Task'] ?? '')),
+            'Description' => $description,
             'Quantity'    => round($hrs, 2),
             'UnitAmount'  => round($rate, 2),
             'AccountCode' => '240',           // 240 Sales (CADViz Xero account)
