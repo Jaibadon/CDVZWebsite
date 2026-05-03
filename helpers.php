@@ -185,21 +185,89 @@ function client_first_name($contact, string $fallback = 'Valued Customer'): stri
 }
 
 /**
- * Pick the best email to send invoices/statements to: billing_email first,
- * email column second. Validates with PHP's RFC-ish email filter so blanks
- * and obvious typos ("foo @bar") never get used. Returns null when neither
- * column holds a valid address — callers should surface that to the admin
- * (e.g. via $_SESSION['xero_flash_err']) rather than attempting to send.
+ * Pick every valid recipient address from the billing_email + email columns
+ * to send invoices/statements to. Either column may hold one OR multiple
+ * addresses separated by `;` or `,` (the column is free-text in admin).
+ *
+ * Behaviour:
+ *   1. Try billing_email first. Split on `;`/`,`, trim, FILTER_VALIDATE_EMAIL.
+ *      Return the full set if any are valid.
+ *   2. Otherwise fall back to the email column the same way.
+ *   3. Return [] if nothing valid in either — callers should surface that
+ *      to the admin (e.g. via $_SESSION['xero_flash_err']).
+ *
+ * Legacy rows stored "No Email - <user>" as a placeholder; that string fails
+ * FILTER_VALIDATE_EMAIL and is correctly skipped.
+ */
+function pick_billing_emails($billingEmail, $email): array {
+    foreach ([$billingEmail, $email] as $candidate) {
+        $valid = [];
+        $parts = preg_split('/[;,]+/', (string)($candidate ?? ''));
+        foreach ($parts as $p) {
+            $p = trim($p);
+            if ($p === '') continue;
+            if (filter_var($p, FILTER_VALIDATE_EMAIL)) $valid[] = $p;
+        }
+        if (!empty($valid)) return $valid;
+    }
+    return [];
+}
+
+/**
+ * Convenience wrapper: same as pick_billing_emails() but returns just the
+ * first valid recipient (or null). Used by code paths that need a single
+ * address — e.g. Xero's Contact.EmailAddress field (which is a single
+ * string), or older callers that haven't been migrated to the array shape.
  */
 function pick_billing_email($billingEmail, $email): ?string {
-    foreach ([$billingEmail, $email] as $candidate) {
-        $e = trim((string)($candidate ?? ''));
-        if ($e === '') continue;
-        // Some legacy rows store "No Email - <user>" as a placeholder; treat
-        // anything that doesn't pass FILTER_VALIDATE_EMAIL as missing.
-        if (filter_var($e, FILTER_VALIDATE_EMAIL)) return $e;
+    $list = pick_billing_emails($billingEmail, $email);
+    return $list ? $list[0] : null;
+}
+
+/**
+ * Walk a project's stages + tasks and total up the estimate (hours +
+ * dollar subtotal). Mirrors the inline calc in quote.php exactly so that
+ * project_stages.php can pre-fill the Fixed_Price input with whatever the
+ * estimate-mode quote would total to, and quote.php's "internal breakdown"
+ * view can show the delta between that and the actual fixed price.
+ *
+ * Skips Project_Variations rows when that table exists — variations are
+ * billed separately. Honours Is_Removed (soft-deletes from accepted quotes).
+ */
+function compute_project_estimate(PDO $pdo, int $projId, float $multiplier = 1.0, float $baseRate = 90.00): array {
+    if ($multiplier <= 0) $multiplier = 1.0;
+    $hasVariations = false;
+    try {
+        $hasVariations = (bool)$pdo->query("SHOW TABLES LIKE 'Project_Variations'")->fetch();
+    } catch (Exception $e) { /* ignore */ }
+
+    $stagesWhere = "Proj_ID = ?" . ($hasVariations ? " AND Variation_ID IS NULL" : "");
+    $stStages = $pdo->prepare("SELECT Project_Stage_ID FROM Project_Stages WHERE $stagesWhere");
+    $stStages->execute([$projId]);
+    $sids = array_map('intval', array_column($stStages->fetchAll(PDO::FETCH_ASSOC), 'Project_Stage_ID'));
+    if (empty($sids)) return ['hours' => 0.0, 'subtotal' => 0.0];
+
+    $in = implode(',', array_fill(0, count($sids), '?'));
+    $tasksFilter = $hasVariations ? " AND COALESCE(t.Is_Removed, 0) = 0 AND t.Variation_ID IS NULL" : "";
+    $sql = "SELECT COALESCE(t.Weight,1) AS TaskWeight,
+                   tt.Estimated_Time, tt.Fixed_Cost,
+                   s.`BILLING RATE` AS StaffRate
+              FROM Project_Tasks t
+              LEFT JOIN Tasks_Types tt ON t.Task_Type_ID = tt.Task_ID
+              LEFT JOIN Staff s        ON t.Assigned_To  = s.Employee_ID
+             WHERE t.Project_Stage_ID IN ($in) $tasksFilter";
+    $st = $pdo->prepare($sql);
+    $st->execute($sids);
+
+    $hours = 0.0; $subtotal = 0.0;
+    foreach ($st->fetchAll(PDO::FETCH_ASSOC) as $t) {
+        $h         = (float)($t['Estimated_Time'] ?? 0) * (float)$t['TaskWeight'];
+        $staffRate = (float)($t['StaffRate'] ?? 0);
+        $rate      = ($staffRate > 0 ? $staffRate : $baseRate) * $multiplier;
+        $hours    += $h;
+        $subtotal += $h * $rate + (float)($t['Fixed_Cost'] ?? 0);
     }
-    return null;
+    return ['hours' => $hours, 'subtotal' => $subtotal];
 }
 
 /**

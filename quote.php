@@ -11,7 +11,17 @@ $pdo = get_db();
 $proj_id = (int)($_GET['proj_id'] ?? 0);
 if ($proj_id <= 0) die('Missing proj_id');
 
-$showMoney = !isset($_GET['nomoney']);  // checklist.php sets this
+// Breakdown override:
+//   breakdown=hours  → render the task breakdown (even on fixed-price
+//                      projects), hours column only, no money.
+//   breakdown=full   → render the task breakdown WITH money columns and,
+//                      on fixed-price projects, a margin-vs-estimate panel.
+//   (unset)          → existing behaviour: lump-sum line for fixed-price,
+//                      full estimate breakdown otherwise.
+$breakdown      = $_GET['breakdown'] ?? '';
+$forceBreakdown = ($breakdown === 'hours' || $breakdown === 'full');
+$internalView   = $forceBreakdown;          // CADViz-only review — hides T&Cs/sig
+$showMoney      = !isset($_GET['nomoney']) && $breakdown !== 'hours';
 $originalOnly = !empty($_GET['original_only']);  // hide variations section
 
 // Detect fixed-price columns
@@ -179,7 +189,11 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 </head>
 <body>
 <div class="print-bar">
-  <?= $showMoney ? 'Fee Proposal / Estimate of Costs' : 'Project Checklist (no rates)' ?>
+  <?php
+    if ($internalView)            echo 'Internal breakdown — ' . ($breakdown === 'hours' ? 'hours only' : 'hours + prices + margin');
+    elseif (!$showMoney)          echo 'Project Checklist (no rates)';
+    else                          echo 'Fee Proposal / Estimate of Costs';
+  ?>
   <button onclick="window.print()">Print / Save as PDF</button>
   <a href="project_stages.php?proj_id=<?= $proj_id ?>">Back to project stages</a>
 </div>
@@ -196,9 +210,22 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
   </div>
 </div>
 
-<h1><?= $showMoney
-    ? ($isFixedPrice ? 'Fee Proposal / Fixed-Price Quote' : 'Fee Proposal / Estimate of Costs')
-    : 'Project Checklist' ?></h1>
+<?php if ($internalView): ?>
+<div style="background:#7a4d00;color:#fff;padding:6px 10px;text-align:center;font-size:11px;letter-spacing:1px">
+  ⚠ INTERNAL CADViz REVIEW &mdash; DO NOT SEND THIS DOCUMENT TO THE CLIENT.
+  <?= $breakdown === 'hours' ? 'Hours-only breakdown.' : 'Hours + prices breakdown with margin comparison.' ?>
+</div>
+<?php endif; ?>
+
+<h1><?php
+    if ($internalView) {
+        echo 'Internal Project Breakdown' . ($breakdown === 'hours' ? ' — Hours' : ' — Hours + Prices');
+    } else {
+        echo $showMoney
+            ? ($isFixedPrice ? 'Fee Proposal / Fixed-Price Quote' : 'Fee Proposal / Estimate of Costs')
+            : 'Project Checklist';
+    }
+?></h1>
 
 <div class="field"><label>Client Name</label><div class="v"><?= htmlspecialchars($head['Client_Name'] ?? '') ?></div></div>
 <div class="field"><label>Job Name</label><div class="v"><?= htmlspecialchars($head['JobName'] ?? '') ?></div></div>
@@ -206,7 +233,7 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 <div class="field"><label>Project Type</label><div class="v"><?= htmlspecialchars($head['Project_Type_Name'] ?? '') ?></div></div>
 <div class="field"><label>Job Description / Scope of Works</label><div class="v" style="min-height:50px"><?= nl2br(htmlspecialchars($head['Job_Description'] ?? '')) ?></div></div>
 
-<?php if ($isFixedPrice && $showMoney): ?>
+<?php if ($isFixedPrice && $showMoney && !$forceBreakdown): ?>
 <!-- ── Fixed-price (lump sum) quote line ─────────────────────────────── -->
 <p style="margin-top:14px">Based on the scope of works above, CADViz quotes the following <strong>fixed price</strong> for this project:</p>
 <?php
@@ -384,6 +411,34 @@ endif; /* variations */ ?>
 <tr class="grand"><td class="label">Grand Total (Inc GST):</td><td class="right">$<?= number_format($total, 2) ?></td></tr>
 </table>
 
+<?php if ($isFixedPrice && $forceBreakdown):
+    // Margin comparison: estimate (from the breakdown above) vs the
+    // fixed price the client will actually be billed.
+    $estSubtotal   = $grandSub; // rows above sum up the un-margined estimate
+    $fpExGst       = $fixedPrice;
+    $fpMarkedExGst = $fixedPrice * (1 + $fixedMargin/100);
+    $delta         = $fpMarkedExGst - $estSubtotal;
+    $deltaPct      = $estSubtotal > 0 ? ($delta / $estSubtotal) * 100 : 0;
+    $deltaSign     = $delta >= 0 ? '+' : '−';
+    $deltaAbs      = abs($delta);
+    $deltaColor    = $delta >= 0 ? '#1a6b1a' : '#a00';
+?>
+<table class="totals" style="margin-top:6px;width:60%;margin-left:40%;background:#fffaf0;border:1px solid #c8a52e">
+  <tr><td colspan="2" style="background:#fff3cd;padding:6px 10px;font-weight:bold;color:#7a5a00">Fixed-price vs. estimate (internal)</td></tr>
+  <tr><td class="label">Estimate subtotal (sum of tasks):</td><td class="right">$<?= number_format($estSubtotal, 2) ?></td></tr>
+  <tr><td class="label">Fixed price (excl. GST, before safety margin):</td><td class="right">$<?= number_format($fpExGst, 2) ?></td></tr>
+  <tr><td class="label">Safety margin applied (<?= number_format($fixedMargin, 2) ?>%):</td><td class="right">$<?= number_format($fpMarkedExGst - $fpExGst, 2) ?></td></tr>
+  <tr><td class="label"><strong>Fixed price quoted to client (excl. GST):</strong></td><td class="right"><strong>$<?= number_format($fpMarkedExGst, 2) ?></strong></td></tr>
+  <tr><td class="label" style="color:<?= $deltaColor ?>"><strong>Delta vs estimate:</strong></td>
+      <td class="right" style="color:<?= $deltaColor ?>"><strong><?= $deltaSign ?>$<?= number_format($deltaAbs, 2) ?> (<?= $deltaSign ?><?= number_format(abs($deltaPct), 1) ?>%)</strong></td></tr>
+</table>
+<p style="font-size:10px;color:#7a5a00;margin-top:6px">
+  Positive delta = the fixed price (with safety margin) is <em>above</em> the bottom-up estimate (we're protected).
+  Negative delta = the fixed price is <em>below</em> the estimate (we'd be working at a loss vs. the rates above — review margin or scope).
+</p>
+<?php endif; ?>
+
+<?php if (!$internalView): ?>
 <div class="notes">
   <p>Please note that the rates listed are a combination of "base" rate and the principle's / director's rate for some tasks. The base rate represents the average of the staff's actually billable rate. The billable rates are tuned based on staff efficiency so that the net invoiced is equivalent.</p>
   <p>It is possible that the "Grand Total" listed above may not be enough to complete the job if the client requires revisions or otherwise changes the scope of work. This estimate does not include any printing costs, courier fees, council fees, engineer's fees or other third party services or materials.</p>
@@ -533,7 +588,8 @@ endif; /* variations */ ?>
   </li>
 </ol>
 </div>
-<?php else: /* checklist mode */ ?>
+<?php endif; /* end !$internalView wrapper around T&C + sig blocks */ ?>
+<?php else: /* checklist mode (no money) */ ?>
 <table class="totals">
 <tr class="grand"><td class="label">Total Estimated Hours:</td><td class="right"><?= number_format($grandHours, 2) ?> hrs</td></tr>
 </table>

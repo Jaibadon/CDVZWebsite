@@ -113,28 +113,30 @@ foreach ($rows as $r) {
         }
     }
 
-    // Resolve a deliverable address (billing_email then email, both
-    // FILTER_VALIDATE_EMAIL'd). Skip if neither is valid — the WHERE
-    // already filtered out totally-empty rows, so this catches the
-    // "filled in with garbage" case ("No Email - erik" etc).
-    $toAddr = pick_billing_email($r['billing_email'] ?? null, $r['email'] ?? null);
-    if (!$toAddr) {
+    // Resolve deliverable addresses (billing_email then email, both
+    // FILTER_VALIDATE_EMAIL'd, and either column may carry multiple
+    // addresses separated by `;` or `,`). Skip if neither column has
+    // anything valid — the WHERE already filtered out totally-empty rows,
+    // so this catches the "filled in with garbage" case ("No Email - erik" etc).
+    $toAddrs = pick_billing_emails($r['billing_email'] ?? null, $r['email'] ?? null);
+    if (empty($toAddrs)) {
         $skipped[$invNo] = 'no valid email on Clients (Billing Email / Email)';
         continue;
     }
+    $toLabel = implode(', ', $toAddrs);
 
-    if ($dryRun) { $sent[$invNo] = '(dry-run) would have reminded ' . $toAddr; continue; }
+    if ($dryRun) { $sent[$invNo] = '(dry-run) would have reminded ' . $toLabel; continue; }
 
     try {
-        sendReminder($pdo, $r, $toAddr);
+        sendReminder($pdo, $r, $toAddrs);
         meta_set($pdo, 'reminder_last_' . $invNo, date('Y-m-d H:i:s'));
-        $sent[$invNo] = 'sent to ' . $toAddr . " ({$days}d overdue)";
+        $sent[$invNo] = 'sent to ' . $toLabel . " ({$days}d overdue)";
     } catch (Exception $e) {
         $skipped[$invNo] = 'FAILED: ' . $e->getMessage();
     }
 }
 
-function sendReminder(PDO $pdo, array $r, string $toAddr): void {
+function sendReminder(PDO $pdo, array $r, array $toAddrs): void {
     $invNumStr = 'CAD-' . str_pad((string)$r['Invoice_No'], 5, '0', STR_PAD_LEFT);
     $totalIncTax = (float)$r['Subtotal'] * (1 + (float)$r['Tax_Rate']);
     // Greet by Contact first name; fallback to "Valued Customer".
@@ -175,7 +177,7 @@ function sendReminder(PDO $pdo, array $r, string $toAddr): void {
     $html .= "<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>";
 
     SmtpMailer::send([
-        'to'       => $toAddr,
+        'to'       => $toAddrs,
         'bcc'      => ['accounts@cadviz.co.nz'],
         'reply_to' => 'accounts@cadviz.co.nz',
         'subject'  => "Reminder: Invoice {$invNumStr} ({$days} days overdue)",

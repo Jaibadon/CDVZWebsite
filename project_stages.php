@@ -1,6 +1,7 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 if (!in_array($_SESSION['UserID'], ['erik', 'jen'], true)) {
     http_response_code(403);
@@ -82,6 +83,22 @@ if (!$proj) die('Project not found');
 // NULL or 'draft' means draft (free editing). 'accepted' means quote locked.
 $quoteStatus = ($proj['Quote_Status'] ?? null) === 'accepted' ? 'accepted' : 'draft';
 $quoteType   = ($proj['Quote_Type']   ?? null) === 'fixed'    ? 'fixed'    : 'estimate';
+
+// Compute the estimate-mode total for this project — used to:
+//   1. Pre-fill the Fixed_Price input when no value is saved yet (so Erik
+//      can hit Save to lock the estimate as the fixed price unchanged).
+//   2. Show the delta on the internal "Hours + Prices" breakdown view in
+//      quote.php so reviewers can see how the fixed price compares to the
+//      raw estimate.
+$projMultiplier = 1.0;
+try {
+    $mst = $pdo->prepare("SELECT c.Multiplier FROM Projects p LEFT JOIN Clients c ON p.Client_ID = c.Client_id WHERE p.proj_id = ?");
+    $mst->execute([$proj_id]);
+    $projMultiplier = (float)($mst->fetchColumn() ?: 1.0);
+} catch (Exception $e) { /* fallback to 1 */ }
+$estimate           = compute_project_estimate($pdo, $proj_id, $projMultiplier, 90.00);
+$estimateSubtotal   = (float)$estimate['subtotal'];
+$estimateHours      = (float)$estimate['hours'];
 
 // Editor settings (consumed by stages_editor.php)
 $mode             = 'project';
@@ -203,7 +220,16 @@ ob_start();
       <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
       <input type="hidden" name="Quote_Type" value="fixed">
       <strong>Fixed Price (excl. GST):</strong>
-      $<input type="number" step="0.01" min="0" name="Fixed_Price" value="<?= htmlspecialchars((string)($proj['Fixed_Price'] ?? '')) ?>" style="width:100px" placeholder="0.00">
+      <?php
+        // When no Fixed_Price is saved yet, pre-fill the input with the
+        // computed estimate total so Erik has a starting point — he can
+        // overwrite, or hit Save to lock the estimate in unchanged.
+        $fixedPriceInputVal = ($proj['Fixed_Price'] !== null && $proj['Fixed_Price'] !== '')
+            ? (string)$proj['Fixed_Price']
+            : ($estimateSubtotal > 0 ? number_format($estimateSubtotal, 2, '.', '') : '');
+      ?>
+      $<input type="number" step="0.01" min="0" name="Fixed_Price" value="<?= htmlspecialchars($fixedPriceInputVal) ?>" style="width:100px" placeholder="0.00"
+              title="Defaults to the project's estimated total (<?= htmlspecialchars(number_format($estimateSubtotal, 2)) ?>). Edit to override.">
       &nbsp; <strong>Safety margin:</strong>
       <input type="number" step="0.5" min="0" max="50" name="Fixed_Margin_Pct" value="<?= htmlspecialchars((string)($proj['Fixed_Margin_Pct'] ?? '12.5')) ?>" style="width:55px">%
       <input type="submit" value="Save"
@@ -225,6 +251,15 @@ ob_start();
     <div style="font-size:11px;color:#666;margin-top:4px">
       📌 In Fixed-Price mode you don't need to break the project into tasks. The stage/task editor below stays available as optional internal notes
       (timesheet hours can still be logged against tasks for analytics). Variations on this project use a manual price (no margin applied).
+    </div>
+    <!-- Internal breakdown views (CADViz only — never sent to the client) -->
+    <div style="margin-top:8px;font-size:11px">
+      <strong style="color:#246">Internal review:</strong>
+      <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=hours" target="_blank"
+         style="background:#7a4d00;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:6px">Breakdown — hours only</a>
+      <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=full" target="_blank"
+         style="background:#7a4d00;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:4px">Breakdown — hours + prices + margin</a>
+      <span style="color:#666">&nbsp;(both show the underlying tasks; "+ prices" also compares the fixed price to the estimate)</span>
     </div>
   </div>
   <?php endif; ?>

@@ -48,11 +48,13 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     }
     if (empty($row['Xero_InvoiceID'])) throw new Exception("Invoice #$invoiceNo hasn't been pushed to Xero yet — push first.");
 
-    // Pick a deliverable address — billing_email first, fall back to email,
-    // and only accept addresses that pass FILTER_VALIDATE_EMAIL. Refuse to
-    // send (with a clear error for the admin) when neither is usable.
-    $toAddr = pick_billing_email($row['billing_email'] ?? null, $row['email'] ?? null);
-    if (!$toAddr) {
+    // Pick deliverable addresses — billing_email first, fall back to email.
+    // Either column may carry multiple addresses separated by `;` or `,`
+    // (e.g. "ap@acme.co; cfo@acme.co"). All valid ones get the email.
+    // Refuse to send (with a clear error for the admin) when neither
+    // column has anything that passes FILTER_VALIDATE_EMAIL.
+    $toAddrs = pick_billing_emails($row['billing_email'] ?? null, $row['email'] ?? null);
+    if (empty($toAddrs)) {
         throw new Exception("Client " . ($row['Client_Name'] ?? '') . " has no valid email (Billing Email or Email). Fix it on the Client page first.");
     }
 
@@ -86,7 +88,7 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     $htmlBody .= '<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>';
 
     SmtpMailer::send([
-        'to'          => $toAddr,
+        'to'          => $toAddrs,
         'cc'          => $ccErik ? ['erik@cadviz.co.nz'] : [],
         'bcc'         => ['accounts@cadviz.co.nz'],
         'reply_to'    => 'accounts@cadviz.co.nz',
@@ -106,5 +108,5 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     // ("Sent") so the dashboard label moves out of "Ready to Send".
     $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW(), Status_INV = 2 WHERE Invoice_No = ?")->execute([$invoiceNo]);
 
-    return "Invoice {$invNumStr} sent from accounts@cadviz.co.nz to {$toAddr}.";
+    return "Invoice {$invNumStr} sent from accounts@cadviz.co.nz to " . implode(', ', $toAddrs) . '.';
 }

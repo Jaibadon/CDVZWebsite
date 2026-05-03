@@ -48,8 +48,11 @@ try {
     $client->execute([$clientId]);
     $cli = $client->fetch(PDO::FETCH_ASSOC);
     if (!$cli) throw new Exception("Client #$clientId not found.");
-    $billto = pick_billing_email($cli['Billing_Email'] ?? null, $cli['email'] ?? null);
-    if (!$billto) throw new Exception("Client #$clientId (" . ($cli['Client_Name'] ?? '') . ") has no valid email (Billing Email or Email). Fix it on the Client page first.");
+    // Multiple addresses (e.g. "ap@acme.co; cfo@acme.co") in either column
+    // are split, validated, and all included on the To: line.
+    $billtos = pick_billing_emails($cli['Billing_Email'] ?? null, $cli['email'] ?? null);
+    if (empty($billtos)) throw new Exception("Client #$clientId (" . ($cli['Client_Name'] ?? '') . ") has no valid email (Billing Email or Email). Fix it on the Client page first.");
+    $billto = implode(', ', $billtos); // for the success-flash text below
 
     // Pull all unpaid invoices for this client. Xero_OnlineUrl is the
     // pay-online link Xero generates per invoice — embedded in each row of
@@ -187,7 +190,7 @@ try {
     $subject = 'Statement of outstanding invoices from CADViz Limited';
 
     SmtpMailer::send([
-        'to'          => $billto,
+        'to'          => $billtos,
         'cc'          => $ccErik ? ['erik@cadviz.co.nz'] : [],
         'bcc'         => ['accounts@cadviz.co.nz'],
         'reply_to'    => 'accounts@cadviz.co.nz',
