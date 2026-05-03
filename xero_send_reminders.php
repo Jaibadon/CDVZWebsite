@@ -137,8 +137,8 @@ foreach ($rows as $r) {
 function sendReminder(PDO $pdo, array $r, string $toAddr): void {
     $invNumStr = 'CAD-' . str_pad((string)$r['Invoice_No'], 5, '0', STR_PAD_LEFT);
     $totalIncTax = (float)$r['Subtotal'] * (1 + (float)$r['Tax_Rate']);
-    // Greet by Contact first name; fallback to a neutral "there".
-    $name      = client_first_name($r['Contact'] ?? null, 'there');
+    // Greet by Contact first name; fallback to "Valued Customer".
+    $name      = client_first_name($r['Contact'] ?? null);
     $days      = (int)$r['days_overdue'];
     $due       = date('d/m/Y', strtotime($r['Xero_DueDate']));
     $amount    = '$' . number_format((float)$r['Xero_AmountDue'], 2);

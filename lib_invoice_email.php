@@ -61,10 +61,10 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
 
     $invNumStr   = 'CAD-' . str_pad((string)$invoiceNo, 5, '0', STR_PAD_LEFT);
     $totalIncTax = (float)$row['Subtotal'] * (1 + (float)$row['Tax_Rate']);
-    // Greet by Contact's first name when available; fall back to a neutral
-    // "there" otherwise (NOT the company name — that reads oddly in
-    // first-person greeting).
-    $greetName  = client_first_name($row['Contact'] ?? null, 'there');
+    // Greet by Contact's first name when available; fall back to the
+    // helper's "Valued Customer" default (NOT the company name — that
+    // reads oddly in a first-person greeting).
+    $greetName  = client_first_name($row['Contact'] ?? null);
     $clientName = trim($row['Client_Name'] ?: '');
     $payBy      = $row['PayBy'] ? date('d/m/Y', strtotime($row['PayBy'])) : null;
     $onlineUrl  = $row['Xero_OnlineUrl'] ?: '';

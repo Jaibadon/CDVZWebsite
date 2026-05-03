@@ -126,8 +126,8 @@ try {
     }
 
     $totalForDisplay = $xeroOutstanding ?? $localGrand;
-    // Greet by Contact's first name when available; "there" otherwise.
-    $greetName  = client_first_name($cli['Contact'] ?? null, 'there');
+    // Greet by Contact's first name when available; "Valued Customer" otherwise.
+    $greetName  = client_first_name($cli['Contact'] ?? null);
     $clientName = trim($cli['Client_Name'] ?: '');
 
     $textBody  = "Dear {$greetName},\r\n\r\n";

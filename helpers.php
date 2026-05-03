@@ -175,9 +175,11 @@ function clients_has_contact(PDO $pdo): bool {
  * Pull a salutation first name out of the Clients.Contact column.
  * Splits on the first whitespace, comma, slash, or ampersand so values like
  * "John Smith", "John, Sales Manager", or "John & Jane Smith" all yield
- * "John". Returns the fallback ("there") when Contact is empty.
+ * "John". Returns the fallback ("Valued Customer") when Contact is empty —
+ * reads naturally on an invoice ("Dear Valued Customer,") whereas the
+ * casual "there" fallback would be jarring on a billing document.
  */
-function client_first_name($contact, string $fallback = 'there'): string {
+function client_first_name($contact, string $fallback = 'Valued Customer'): string {
     $c = trim((string)($contact ?? ''));
     if ($c === '') return $fallback;
     // Split on the first delimiter — whitespace, comma, slash, ampersand.
