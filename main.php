@@ -12,15 +12,42 @@ $missingWeekdays = $mustFillFullWeek
     ? missing_weekdays($pdo, (int)($_SESSION['Employee_id'] ?? 0), 4)
     : [];
 
+// ── Week selection ──────────────────────────────────────────────────────────
+// Compute today's Monday once, robustly. `strtotime('monday this week')`
+// has a known PHP quirk where on a Monday it can resolve to the *previous*
+// Monday — DateTime + ISO dow is unambiguous.
+$_todayDow      = (int)(new DateTime('today'))->format('N') - 1;   // 0=Mon … 6=Sun
+$_todaysMonday  = (new DateTime('today'))->modify("-{$_todayDow} days")->format('Y-m-d');
+
+// Accept either 'week' or 'Week' (form fields posted from various pages)
+$currentWeek = $_POST['week'] ?? $_POST['Week']
+            ?? $_GET['week']  ?? $_GET['Week']
+            ?? $_SESSION['Week'] ?? $_todaysMonday;
+$ts = strtotime($currentWeek);
+$currentWeek = $ts ? date('Y-m-d', $ts) : $_todaysMonday;
+$_SESSION['Week'] = $currentWeek;
+
+$weekStart = $currentWeek;
+$weekEnd   = date('Y-m-d', strtotime('+6 days', strtotime($weekStart)));
+
 // ── Split missing into "current week (Mon-Fri up to yesterday)" vs
 //    "previous weeks". The current-week portion gets re-checked
 //    client-side as the user types, so the submit button can flip back to
 //    normal once they've filled in every weekday before today. Previous
-//    weeks keep the existing red-banner / red-button behavior.
+//    weeks keep the existing red-banner / red-button behavior. FUTURE
+//    weeks intentionally skip the gap nag entirely — full-time staff
+//    book annual leave on those weeks in advance, the past-4-weeks
+//    counter has nothing to do with submitting a future week.
+//
+// NOTE: this block has to run AFTER $weekStart / $_todaysMonday are set,
+//       otherwise $isViewingCurrentWeek silently always evaluates false
+//       (which is why before this fix the button on Monday and on every
+//       future week showed red — the dynamic JS path was unreachable).
 $today              = date('Y-m-d');
 $todayDow           = (int)date('N');                                 // 1=Mon … 7=Sun
 $currentWeekMonday  = $_todaysMonday;
 $isViewingCurrentWeek = ($weekStart === $currentWeekMonday);
+$weekIsFuture        = ($weekStart > $currentWeekMonday);
 
 $missingPrevWeeks = [];
 $missingCurrWeek  = [];
@@ -44,24 +71,6 @@ $requiredDowsCurrentWeek = [];
 for ($i = 1; $i <= 5; $i++) {
     if ($i < $todayDow) $requiredDowsCurrentWeek[] = $i;
 }
-
-// ── Week selection ──────────────────────────────────────────────────────────
-// Compute today's Monday once, robustly. `strtotime('monday this week')`
-// has a known PHP quirk where on a Monday it can resolve to the *previous*
-// Monday — DateTime + ISO dow is unambiguous.
-$_todayDow      = (int)(new DateTime('today'))->format('N') - 1;   // 0=Mon … 6=Sun
-$_todaysMonday  = (new DateTime('today'))->modify("-{$_todayDow} days")->format('Y-m-d');
-
-// Accept either 'week' or 'Week' (form fields posted from various pages)
-$currentWeek = $_POST['week'] ?? $_POST['Week']
-            ?? $_GET['week']  ?? $_GET['Week']
-            ?? $_SESSION['Week'] ?? $_todaysMonday;
-$ts = strtotime($currentWeek);
-$currentWeek = $ts ? date('Y-m-d', $ts) : $_todaysMonday;
-$_SESSION['Week'] = $currentWeek;
-
-$weekStart = $currentWeek;
-$weekEnd   = date('Y-m-d', strtotime('+6 days', strtotime($weekStart)));
 
 // ── Load all active projects ────────────────────────────────────────────────
 $projStmt = $pdo->query("SELECT proj_id, JobName, active FROM Projects ORDER BY JobName");
@@ -317,6 +326,7 @@ window.PROJECT_TASKS = <?= json_encode($projectTasksJs, JSON_HEX_TAG | JSON_HEX_
 // server-rendered banner/button state.
 window.IS_FULLTIME       = <?= $mustFillFullWeek ? 'true' : 'false' ?>;
 window.IS_CURRENT_WEEK   = <?= $isViewingCurrentWeek ? 'true' : 'false' ?>;
+window.IS_FUTURE_WEEK    = <?= $weekIsFuture ? 'true' : 'false' ?>;
 window.REQUIRED_WEEKDAYS = <?= json_encode($requiredDowsCurrentWeek) ?>;
 window.__currentWeekMissingDows = [];
 
@@ -390,7 +400,10 @@ document.addEventListener('DOMContentLoaded', function() {
                     e.preventDefault();
                 }
             }
-        } else if (window.MISSING_LAST4_COUNT > 0) {
+        } else if (!window.IS_FUTURE_WEEK && window.MISSING_LAST4_COUNT > 0) {
+            // Past-weeks nag fires when submitting a previous week with
+            // historic gaps. Future weeks (booking leave in advance)
+            // skip this — there's nothing to nag the user about yet.
             if (!confirm('⚠ You still have ' + window.MISSING_LAST4_COUNT +
                          ' missing weekday(s) in the past 4 weeks.\n\n' +
                          'This week will be saved, but the gap remains until you fill those days ' +
@@ -586,7 +599,7 @@ if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYe
      on the main menu. -->
 <div style="width:680px;margin:6px auto;background:#eef4ff;border:1px solid #c0d0ee;border-radius:4px;padding:8px 12px;color:#246;font-size:11px">
   <strong>📅 Annual leave:</strong> please book your leave in advance by
-  entering your hours against project <strong>#1435 (ANNUAL LEAVE)</strong>
+  entering your hours against project <strong>0 - Leave Annual</strong>
   on the relevant dates. Future-dated leave entries appear red on your
   timesheet until Erik approves them — the dropdown above now goes
   <strong>3 weeks ahead</strong> so you can book them ahead of time.
@@ -599,11 +612,12 @@ if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYe
     // keystroke (so the button flips back to normal once Mon→yesterday is
     // filled). On previous weeks we keep the original "any missing day in
     // the last 4 weeks" rule so the historic banner & button stay aligned.
-    $initialHasGap = $mustFillFullWeek && (
-        $isViewingCurrentWeek
-            ? !empty($missingCurrWeekUpToYesterday)
-            : !empty($missingWeekdays)
-    );
+    // On FUTURE weeks the gap nag never fires — the user is filling those
+    // in advance for annual leave, the past-weeks counter is irrelevant.
+    if (!$mustFillFullWeek)             $initialHasGap = false;
+    elseif ($isViewingCurrentWeek)      $initialHasGap = !empty($missingCurrWeekUpToYesterday);
+    elseif ($weekIsFuture)              $initialHasGap = false;
+    else                                $initialHasGap = !empty($missingWeekdays);
 ?>
 <form action="submit.php" id="submit_form" name="submit_form" method="post" style="width:680px;margin:0 auto">
 <input type="hidden" name="hidden_week" value="<?= htmlspecialchars($weekStart) ?>">

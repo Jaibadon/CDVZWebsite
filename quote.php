@@ -16,6 +16,9 @@ if ($proj_id <= 0) die('Missing proj_id');
 //                      projects), hours column only, no money.
 //   breakdown=full   → render the task breakdown WITH money columns and,
 //                      on fixed-price projects, a margin-vs-estimate panel.
+//   breakdown=tasks  → just task names (no hours, no rates) followed by
+//                      the fixed-price totals at the end. Client-facing
+//                      "scope of work + price" summary.
 //   (unset)          → existing behaviour: lump-sum line for fixed-price,
 //                      full estimate breakdown otherwise.
 //
@@ -24,13 +27,15 @@ if ($proj_id <= 0) die('Missing proj_id');
 //             CADViz-only review).
 //   Client  : softens the warning, keeps T&Cs/sig, still shows the
 //             margin/comparison numbers (Erik is happy to share these
-//             with select clients). Hours-only client view also shows the
-//             fixed price + GST at the end so the client sees the price.
+//             with select clients). Hours-only / tasks-only client views
+//             also show the fixed price + GST at the end so the client
+//             sees the price.
 $breakdown      = $_GET['breakdown'] ?? '';
-$forceBreakdown = ($breakdown === 'hours' || $breakdown === 'full');
+$forceBreakdown = in_array($breakdown, ['hours','full','tasks'], true);
 $audience       = (($_GET['audience'] ?? '') === 'client') ? 'client' : 'internal';
 $internalView   = $forceBreakdown && $audience !== 'client';
-$showMoney      = !isset($_GET['nomoney']) && $breakdown !== 'hours';
+$showMoney      = !isset($_GET['nomoney']) && !in_array($breakdown, ['hours','tasks'], true);
+$showHours      = $breakdown !== 'tasks';   // tasks-only view hides the Hours column entirely
 $originalOnly = !empty($_GET['original_only']);  // hide variations section
 
 // "Is this a real document we'd send to a client?" — controls notes,
@@ -207,8 +212,10 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 <body>
 <div class="print-bar">
   <?php
-    if ($forceBreakdown)          echo ($audience === 'client' ? 'Client-facing breakdown — ' : 'Internal breakdown — ')
-                                       . ($breakdown === 'hours' ? 'hours only' : 'hours + prices');
+    if ($forceBreakdown) {
+        $bdLabel = ['hours' => 'hours only', 'full' => 'hours + prices', 'tasks' => 'tasks + price only'][$breakdown] ?? '';
+        echo ($audience === 'client' ? 'Client-facing breakdown — ' : 'Internal breakdown — ') . $bdLabel;
+    }
     elseif (!$showMoney)          echo 'Project Checklist (no rates)';
     else                          echo 'Fee Proposal / Estimate of Costs';
   ?>
@@ -256,7 +263,7 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 
 <h1><?php
     if ($forceBreakdown) {
-        $label = $breakdown === 'hours' ? 'Hours' : 'Hours + Prices';
+        $label = ['hours' => 'Hours', 'full' => 'Hours + Prices', 'tasks' => 'Scope + Fixed Price'][$breakdown] ?? '';
         echo ($audience === 'client' ? 'Project Breakdown — ' : 'Internal Project Breakdown — ') . $label;
     } else {
         echo $showMoney
@@ -309,11 +316,17 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
     $stageHours = 0.0;
     $stageSub   = 0.0;
 ?>
+<?php
+  // Column count for stage header: 1 (just task name) + Hours? + Money(2)?
+  $stageColSpan = 1 + ($showHours ? 1 : 0) + ($showMoney ? 2 : 0);
+?>
 <tr class="stage-head">
-  <td colspan="<?= $showMoney ? 4 : 2 ?>">Stage: <?= htmlspecialchars(($stage['Stage_Type_Name'] ?? '') . ($stage['StageDesc'] ? ' — ' . $stage['StageDesc'] : '')) ?></td>
+  <td colspan="<?= $stageColSpan ?>">Stage: <?= htmlspecialchars(($stage['Stage_Type_Name'] ?? '') . ($stage['StageDesc'] ? ' — ' . $stage['StageDesc'] : '')) ?></td>
 </tr>
 <tr><th>Task / Item</th>
-  <th class="right" style="width:60px">Hours</th>
+  <?php if ($showHours): ?>
+    <th class="right" style="width:60px">Hours</th>
+  <?php endif; ?>
   <?php if ($showMoney): ?>
     <th class="right" style="width:80px">Rate</th>
     <th class="right" style="width:90px">Subtotal</th>
@@ -338,21 +351,27 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 ?>
 <tr>
   <td><?= $nameHtml ?></td>
-  <td class="right"><?= number_format($hrs, 2) ?></td>
+  <?php if ($showHours): ?>
+    <td class="right"><?= number_format($hrs, 2) ?></td>
+  <?php endif; ?>
   <?php if ($showMoney): ?>
     <td class="right">$<?= number_format($rate, 2) ?></td>
     <td class="right">$<?= number_format($sub, 2) ?></td>
   <?php endif; ?>
 </tr>
 <?php endforeach; ?>
+<?php if ($showHours || $showMoney): ?>
 <tr class="subtotal">
   <td class="right">Subtotal:</td>
-  <td class="right"><?= number_format($stageHours, 2) ?></td>
+  <?php if ($showHours): ?>
+    <td class="right"><?= number_format($stageHours, 2) ?></td>
+  <?php endif; ?>
   <?php if ($showMoney): ?>
     <td></td>
     <td class="right">$<?= number_format($stageSub, 2) ?></td>
   <?php endif; ?>
 </tr>
+<?php endif; ?>
 <?php
     $grandHours += $stageHours;
     $grandSub   += $stageSub;
@@ -398,7 +417,8 @@ if (!empty($variations)):
       $vsHours = 0.0; $vsSub = 0.0;
       $vtasks = $variationTasksByStage[$vsid] ?? [];
   ?>
-    <tr class="stage-row"><td colspan="<?= $showMoney ? 4 : 2 ?>"><?= htmlspecialchars($vstage['Stage_Type_Name'] ?? '') ?> — <?= htmlspecialchars($vstage['StageDesc'] ?? '') ?></td></tr>
+    <?php $vStageColSpan = 1 + ($showHours ? 1 : 0) + ($showMoney ? 2 : 0); ?>
+    <tr class="stage-row"><td colspan="<?= $vStageColSpan ?>"><?= htmlspecialchars($vstage['Stage_Type_Name'] ?? '') ?> — <?= htmlspecialchars($vstage['StageDesc'] ?? '') ?></td></tr>
     <?php foreach ($vtasks as $t):
         $h = (float)($t['Estimated_Time'] ?? 0) * (float)$t['TaskWeight'];
         $sr = (float)($t['StaffRate'] ?? 0);
@@ -408,16 +428,21 @@ if (!empty($variations)):
     ?>
     <tr>
       <td><?= htmlspecialchars($t['TaskDesc'] ?: $t['Task_Name']) ?></td>
-      <td class="right"><?= number_format($h, 2) ?></td>
+      <?php if ($showHours): ?>
+        <td class="right"><?= number_format($h, 2) ?></td>
+      <?php endif; ?>
       <?php if ($showMoney): ?>
         <td class="right">$<?= number_format($rate, 2) ?></td>
         <td class="right">$<?= number_format($sub, 2) ?></td>
       <?php endif; ?>
     </tr>
     <?php endforeach; ?>
-    <tr class="subtot"><td class="right">Subtotal:</td><td class="right"><?= number_format($vsHours, 2) ?></td>
+    <?php if ($showHours || $showMoney): ?>
+    <tr class="subtot"><td class="right">Subtotal:</td>
+      <?php if ($showHours): ?><td class="right"><?= number_format($vsHours, 2) ?></td><?php endif; ?>
       <?php if ($showMoney): ?><td></td><td class="right">$<?= number_format($vsSub, 2) ?></td><?php endif; ?>
     </tr>
+    <?php endif; ?>
     <?php $vHours += $vsHours; $vSub += $vsSub; endforeach; ?>
   </table>
   <?php endif; ?>
@@ -642,14 +667,17 @@ if ($isClientDocument && $showMoney): ?>
 </ol>
 </div>
 <?php endif; /* end $isClientDocument wrapper around sig + T&C blocks */ ?>
-<?php else: /* hours-only / checklist mode (no per-row money) */ ?>
+<?php else: /* hours-only / tasks-only / checklist mode (no per-row money) */ ?>
 <table class="totals">
-<tr class="grand"><td class="label">Total Estimated Hours:</td><td class="right"><?= number_format($grandHours, 2) ?> hrs</td></tr>
+<?php if ($showHours): ?>
+  <tr class="grand"><td class="label">Total Estimated Hours:</td><td class="right"><?= number_format($grandHours, 2) ?> hrs</td></tr>
+<?php endif; ?>
 <?php
     // For fixed-price projects, ALWAYS show the fixed-price + GST + grand
     // total here regardless of audience — the client needs to see the
     // price somewhere even when individual rates are hidden, and Erik
-    // wants the same on his internal hours-only view as a sanity check.
+    // wants the same on his internal hours-only / tasks-only view as a
+    // sanity check.
     if ($isFixedPrice && $fixedPrice > 0):
         $fpMarked = $fixedPrice * (1 + $fixedMargin/100);
         $fpGst    = $fpMarked * 0.15;

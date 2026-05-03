@@ -329,8 +329,10 @@ ob_start();
     </div>
     <div style="margin-top:6px;font-size:11px">
       <strong style="color:#246">Client-facing breakdown:</strong>
+      <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=tasks&audience=client" target="_blank"
+         style="background:#246;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:6px">Tasks + fixed price</a>
       <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=hours&audience=client" target="_blank"
-         style="background:#246;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:6px">Hours only (with fixed price)</a>
+         style="background:#246;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:4px">Hours only (with fixed price)</a>
       <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=full&audience=client" target="_blank"
          style="background:#246;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:4px">Hours + prices</a>
       <span style="color:#666">&nbsp;(includes T&amp;Cs / signature; happy-to-share with select clients)</span>
