@@ -72,7 +72,7 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     $textBody  = "Dear {$greetName},\r\n\r\n";
     $textBody .= "Please find attached invoice {$invNumStr} from CADViz Limited for $" . number_format($totalIncTax, 2) . " (incl. GST).\r\n\r\n";
     if ($payBy)     $textBody .= "Payment due: {$payBy}\r\n\r\n";
-    if ($onlineUrl) $textBody .= "View / pay online: {$onlineUrl}\r\n\r\n";
+    if ($onlineUrl) $textBody .= "View online: {$onlineUrl}\r\n\r\n";
     $textBody .= "If you have already paid this invoice, please disregard this email — our records simply haven't caught up with your payment yet.\r\n\r\n";
     $textBody .= "If you have any other queries please reply to this email.\r\n\r\n";
     $textBody .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
@@ -80,8 +80,8 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     $htmlBody  = '<p>Dear ' . htmlspecialchars($greetName) . ',</p>';
     $htmlBody .= '<p>Please find attached invoice <strong>' . $invNumStr . '</strong> from CADViz Limited for <strong>$' . number_format($totalIncTax, 2) . '</strong> (incl. GST).</p>';
     if ($payBy)     $htmlBody .= '<p><strong>Payment due:</strong> ' . htmlspecialchars($payBy) . '</p>';
-    if ($onlineUrl) $htmlBody .= '<p><a href="' . htmlspecialchars($onlineUrl) . '">View / pay invoice online</a></p>';
-    $htmlBody .= '<p style="color:#666"><em>If you have already paid this invoice, please disregard this email &mdash; our records simply haven\'t caught up with your payment yet.</em></p>';
+    if ($onlineUrl) $htmlBody .= '<p><a href="' . htmlspecialchars($onlineUrl) . '">View online</a></p>';
+    $htmlBody .= '<p style="color:#666"><em>If you have already paid this invoice, please disregard this email, our records simply haven\'t caught up with your payment yet.</em></p>';
     $htmlBody .= '<p>If you have any other queries please reply to this email.</p>';
     $htmlBody .= '<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>';
 

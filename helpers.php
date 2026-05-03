@@ -172,20 +172,16 @@ function clients_has_contact(PDO $pdo): bool {
 }
 
 /**
- * Pull a salutation first name out of the Clients.Contact column.
- * Splits on the first whitespace, comma, slash, or ampersand so values like
- * "John Smith", "John, Sales Manager", or "John & Jane Smith" all yield
- * "John". Returns the fallback ("Valued Customer") when Contact is empty —
- * reads naturally on an invoice ("Dear Valued Customer,") whereas the
- * casual "there" fallback would be jarring on a billing document.
+ * Salutation name for invoice / statement / reminder emails. Returns the
+ * Clients.Contact value verbatim (just trimmed) so admins keep full control
+ * over how recipients are addressed — "John", "John Smith", "John & Jane",
+ * "Mr. Patel" all pass through unchanged. Falls back to "Valued Customer"
+ * when Contact is empty so the greeting still reads naturally on a billing
+ * document.
  */
 function client_first_name($contact, string $fallback = 'Valued Customer'): string {
     $c = trim((string)($contact ?? ''));
-    if ($c === '') return $fallback;
-    // Split on the first delimiter — whitespace, comma, slash, ampersand.
-    $parts = preg_split('/[\s,\/&]+/u', $c, 2);
-    $first = trim($parts[0] ?? '');
-    return $first !== '' ? $first : $fallback;
+    return $c !== '' ? $c : $fallback;
 }
 
 /**

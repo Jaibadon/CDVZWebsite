@@ -130,13 +130,21 @@ try {
     $greetName  = client_first_name($cli['Contact'] ?? null);
     $clientName = trim($cli['Client_Name'] ?: '');
 
+    // Show one of the actual invoice numbers in the "use this as your bank
+    // reference" line (rather than a hard-coded CAD-09489), so the recipient
+    // sees a number that's actually on their statement.
+    $exampleRef = 'CAD-' . str_pad((string)($invoices[0]['Invoice_No'] ?? 0), 5, '0', STR_PAD_LEFT);
+
     $textBody  = "Dear {$greetName},\r\n\r\n";
     $textBody .= "Please find attached a statement of outstanding invoices from CADViz Limited (" . count($invoices) . " invoice(s)).\r\n\r\n";
     $textBody .= "If you have already paid any of the invoices listed below, please disregard this statement for those — our records simply haven't caught up with your payment(s) yet.\r\n\r\n";
     $textBody .= "Outstanding balance: $" . number_format($totalForDisplay, 2) . "\r\n\r\n";
     $textBody .= "Outstanding invoices:\r\n" . implode("\r\n", $linesText) . "\r\n\r\n";
-    $textBody .= "IMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. CAD-09489) as the bank-transfer reference, so we can match each payment to the correct invoice.\r\n\r\n";
-    $textBody .= "Internet Bank Transfer: 03 0275 0551274 00\r\n\r\n";
+    $textBody .= "IMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. {$exampleRef}) as the bank-transfer reference, so we can match each payment to the correct invoice.\r\n\r\n";
+    $textBody .= "Internet Bank Transfer\r\n\r\n";
+    $textBody .= "Account Name: CADViz Limited\r\n\r\n";
+    $textBody .= "Account Number: 03-0275-0551274-000\r\n\r\n";
+
     if (!empty($missingPdf)) {
         $textBody .= "(PDF attachments could not be retrieved for: CAD-" . implode(', CAD-', array_map(fn($n) => str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf)) . ". Please contact us if you need copies.)\r\n\r\n";
     }
@@ -157,7 +165,7 @@ try {
               .  '</tr></thead><tbody>';
     $htmlBody .= implode('', $linesHtml);
     $htmlBody .= '</tbody></table>';
-    $htmlBody .= '<p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice\'s reference (e.g. <strong>CAD-09489</strong>) on your bank transfer so we can match each payment to the correct invoice.</p>';
+    $htmlBody .= '<p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice\'s reference (e.g. <strong>' . htmlspecialchars($exampleRef) . '</strong>) on your bank transfer so we can match each payment to the correct invoice.</p>';
     $htmlBody .= '<p>Internet Bank Transfer: <strong>03 0275 0551274 00</strong></p>';
     if (!empty($missingPdf)) {
         $htmlBody .= '<p style="color:#a00">PDF attachments could not be retrieved for: '
