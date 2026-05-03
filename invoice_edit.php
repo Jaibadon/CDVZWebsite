@@ -51,6 +51,7 @@ if (!$rs) {
 
 $sql2 = "SELECT Timesheets.TS_ID       AS TS_ID,
                 Timesheets.TS_DATE     AS TS_DATE,
+                Timesheets.Invoice_No  AS Invoice_No,
                 Timesheets.proj_id     AS proj_id,
                 Timesheets.Task        AS Task,
                 Timesheets.Hours       AS Hours,
@@ -68,6 +69,15 @@ $timesheets = $stmt2->fetchAll(PDO::FETCH_ASSOC);
 
 $Billto = $rs['Billing_Email'] ?? '-';
 if ($Billto === '') $Billto = '-';
+
+// Format a stored date safely for the d/m/Y inputs. strtotime(null) returns
+// false → date('d/m/Y', false) prints 01/01/1970, which is what was showing
+// up across this page. Treat empty/null/zero-date as blank.
+function fmt_date_safe($v) {
+    if ($v === null || $v === '' || $v === '0000-00-00' || $v === '0000-00-00 00:00:00') return '';
+    $t = strtotime((string)$v);
+    return $t ? date('d/m/Y', $t) : '';
+}
 
 // Helper function to print a dropdown box from a table
 function print_dd_box($pdo, $table_name, $index_name, $display_name, $default_value, $obj_name) {
@@ -163,7 +173,7 @@ function print_dd_box($pdo, $table_name, $index_name, $display_name, $default_va
       <td>&nbsp;</td>
       <td valign="top">Date:&nbsp;</td>
       <td valign="top" align="right">
-      <input size="7" name="INV_DATE" value="<?= htmlspecialchars(date('d/m/Y', strtotime($rs['DATE']))) ?>">
+      <input size="7" name="INV_DATE" value="<?= htmlspecialchars(fmt_date_safe($rs['Date'] ?? null)) ?>">
     </tr>
     <tr>
       <td>Project:</td>
@@ -172,7 +182,7 @@ function print_dd_box($pdo, $table_name, $index_name, $display_name, $default_va
       <td>Order No:</td>
       <td><div align="right">
         <?= htmlspecialchars($rs['Order_No']) ?>
-        <input size="12" name="ORDER_NO_INV" value="<?= htmlspecialchars($rs['ORDER_NO_INV']) ?>">
+        <input size="12" name="ORDER_NO_INV" value="<?= htmlspecialchars((string)($rs['Order_No_INV'] ?? '')) ?>">
       </div></td>
     </tr>
     <tr>
@@ -181,7 +191,8 @@ function print_dd_box($pdo, $table_name, $index_name, $display_name, $default_va
 <?php
 if ($rs['Sent'] != 0) {
     echo "<input type='checkbox' name='SENT' value='ON' checked>";
-    echo "&nbsp;&nbsp;" . htmlspecialchars(date('d/m/Y', strtotime($rs['Date_sent'])));
+    $dateSentFmt = fmt_date_safe($rs['date_sent'] ?? null);
+    if ($dateSentFmt !== '') echo "&nbsp;&nbsp;" . htmlspecialchars($dateSentFmt);
 } else {
     echo "<input type='checkbox' name='SENT' value='ON'>";
 }
@@ -197,7 +208,8 @@ if ($rs['Sent'] != 0) {
 <?php
 if ($rs['Paid'] != 0) {
     echo "<input type='checkbox' name='PAID' value='ON' checked>";
-    echo "&nbsp;&nbsp;" . htmlspecialchars(date('d/m/Y', strtotime($rs['DATEPAID'])));
+    $datePaidFmt = fmt_date_safe($rs['DatePaid'] ?? null);
+    if ($datePaidFmt !== '') echo "&nbsp;&nbsp;" . htmlspecialchars($datePaidFmt);
 } else {
     echo "<input type='checkbox' name='PAID' value='ON'>";
 }
@@ -268,18 +280,18 @@ $a = 0;
 foreach ($timesheets as $ts) {
     $a++;
     echo "<tr>";
-    echo "<td width='88'><input size='5' name='TS_Date_box" . $a . "' value='" . htmlspecialchars(date('d/m/Y', strtotime($ts['TS_Date']))) . "'></td>";
+    echo "<td width='88'><input size='5' name='TS_Date_box" . $a . "' value='" . htmlspecialchars(fmt_date_safe($ts['TS_DATE'] ?? null)) . "'></td>";
     echo "<td width='40'>";
-    echo "<input size='5' type='hidden' name='TS_ID_" . $a . "' value='" . htmlspecialchars($ts['TS_ID']) . "'>";
-    echo "<input size='5' name='TS_Inv_box" . $a . "' value='" . htmlspecialchars($ts['Invoice_No']) . "'>";
+    echo "<input size='5' type='hidden' name='TS_ID_" . $a . "' value='" . htmlspecialchars((string)$ts['TS_ID']) . "'>";
+    echo "<input size='5' name='TS_Inv_box" . $a . "' value='" . htmlspecialchars((string)($ts['Invoice_No'] ?? '')) . "'>";
     echo "</td>";
     echo "<td width='50'>";
-    echo "<input size='5' type='hidden' name='Project_box" . $a . "' value='" . htmlspecialchars($ts['proj_id']) . "'>";
+    echo "<input size='5' type='hidden' name='Project_box" . $a . "' value='" . htmlspecialchars((string)$ts['proj_id']) . "'>";
     echo "</td>";
     echo "<td width='50'>";
     print_dd_box($pdo, 'Staff', 'Employee_id', 'Login', $ts['Employee_id'], 'staff_box' . $a);
     echo "</td>";
-    echo "<td><input size='35' name='desc_box" . $a . "' value='" . htmlspecialchars($ts['task']) . "'></td>";
+    echo "<td><input size='35' name='desc_box" . $a . "' value='" . htmlspecialchars((string)$ts['Task']) . "'></td>";
     echo "<td width='60' align='Right'><input size='5' name='TS_HOURS" . $a . "' value='" . htmlspecialchars($ts['Hours']) . "'></td>";
     echo "<td width='60' align='Right'><input size='5' name='TS_RATE" . $a . "' value='" . htmlspecialchars($ts['Rate']) . "'></td>";
     echo "<td width='70' align='Right'>" . '$' . number_format((float)$ts['amt'], 2) . "</td>";

@@ -44,6 +44,15 @@ try {
     $head = $h->fetch();
     if (!$head) throw new Exception("Invoice #$invoiceNo not found locally.");
 
+    // Status_INV = 0 ("Not Checked") means the invoice hasn't been reviewed
+    // and must not be pushed to Xero or emailed. Bump it to "Ready to Send"
+    // (1) on the edit screen first.
+    $statusInvCheck = $pdo->prepare("SELECT Status_INV FROM Invoices WHERE Invoice_No = ?");
+    $statusInvCheck->execute([$invoiceNo]);
+    if ((int)$statusInvCheck->fetchColumn() === 0) {
+        throw new Exception("Invoice #$invoiceNo is still marked Not Checked (Status_INV=0). Set it to Ready to Send before pushing to Xero.");
+    }
+
     // Pull line items from the Timesheets that belong to this invoice. We
     // collapse by (proj, task) so the Xero invoice isn't a wall of rows.
     $lines = $pdo->prepare(

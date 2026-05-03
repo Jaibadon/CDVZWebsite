@@ -1,6 +1,16 @@
 <?php
 session_start();
 require_once 'db_connect.php';
+
+if (empty($_SESSION['UserID'])) {
+    echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
+    exit;
+}
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403);
+    echo '<p>Admin only. <a href="menu.php">Back to menu</a></p>';
+    exit;
+}
 ?>
 <script language="Javascript">
 	document.onkeydown = function() {
@@ -22,13 +32,18 @@ require_once 'db_connect.php';
 .style1 { background-color: #9B9B1B; }
 </style>
 </head>
-<?php
-if (empty($_SESSION['UserID'])) {
-    echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
-    exit;
-}
-?>
 <body bgcolor="#EBEBEB" text="black">
+
+<?php
+$flash    = $_SESSION['xero_flash']     ?? '';
+$flashErr = $_SESSION['xero_flash_err'] ?? '';
+unset($_SESSION['xero_flash'], $_SESSION['xero_flash_err']);
+if ($flash):
+?>
+  <div style="max-width:900px;margin:10px auto;padding:8px 12px;background:#d6f5d6;color:#1a6b1a;border-radius:4px"><?= htmlspecialchars($flash) ?></div>
+<?php endif; if ($flashErr): ?>
+  <div style="max-width:900px;margin:10px auto;padding:8px 12px;background:#ffd6d6;color:#a00;border-radius:4px"><?= htmlspecialchars($flashErr) ?></div>
+<?php endif; ?>
 
     <table width="600" border="0" cellspacing="0" cellpadding="0" bgcolor="#EBEBEB" id="table8">
       <tr>
@@ -95,6 +110,8 @@ $sql = "SELECT Invoices.Invoice_No   AS Invoice_No,
                Invoices.Subtotal     AS Subtotal,
                Invoices.Tax_Rate     AS Tax_Rate,
                Invoices.Status_INV   AS Status_INV,
+               Invoices.Sent         AS Sent,
+               Invoices.Client_ID    AS Client_ID,
                Invoices.Proj_ID      AS Proj_ID,
                Invoices.Xero_InvoiceID AS Xero_InvoiceID,
                Invoices.Xero_Status   AS Xero_Status,
@@ -107,6 +124,13 @@ $sql = "SELECT Invoices.Invoice_No   AS Invoice_No,
          WHERE Invoices.Paid = 0
          ORDER BY Invoices.Invoice_No DESC";
 $stmt = $pdo->query($sql);
+
+// Pre-compute count of unpaid invoices per client so we can show a
+// "Send Statement" button only when there's >1 outstanding invoice.
+$unpaidPerClient = [];
+foreach ($pdo->query("SELECT Client_ID, COUNT(*) AS n FROM Invoices WHERE Paid = 0 AND Client_ID IS NOT NULL GROUP BY Client_ID")->fetchAll(PDO::FETCH_ASSOC) as $row) {
+    $unpaidPerClient[(int)$row['Client_ID']] = (int)$row['n'];
+}
 
 $count = 0;
 while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
@@ -154,27 +178,51 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
         echo "<font size=4>***SENT - everything is awesome!</font>";
     }
 
-    // ── Xero status badge + push / email buttons ─────────────────────────
+    // ── Xero status badge + push / email / statement buttons ─────────────
     // Push: uploads to Xero (creates AUTHORISED invoice + PDF). No email.
     // Email: fetches PDF from Xero and sends from accounts@cadviz.co.nz
     //        (NOT through Xero — Xero's mailer uses a Xero-controlled
     //         From: address that hits client spam folders).
-    $xs = $rs['Xero_Status'] ?? null;
+    // Status_INV must be != 0 (i.e. invoice is at least "Ready to Send")
+    // before push or email is allowed — keeps not-yet-checked invoices safe.
+    $xs        = $rs['Xero_Status'] ?? null;
+    $sentFlag  = (int)($rs['Sent']       ?? 0);
+    $statusInv = (int)($rs['Status_INV'] ?? 0);
+    $clientId  = (int)($rs['Client_ID']  ?? 0);
+    $checked   = $statusInv !== 0;
+
     if ($xs) {
         $badgeColor = ($xs === 'PAID') ? '#1a6b1a' : (($xs === 'AUTHORISED') ? '#5577aa' : '#999');
         echo " <span style=\"background:$badgeColor;color:#fff;padding:2px 6px;border-radius:8px;font-size:11px;margin-left:6px\">Xero: " . htmlspecialchars($xs) . "</span>";
         if (!empty($rs['Xero_OnlineUrl'])) {
             echo " <a href=\"" . htmlspecialchars($rs['Xero_OnlineUrl']) . "\" target=\"_blank\" style=\"font-size:11px\">view in Xero</a>";
         }
-        // Once it's in Xero we can email it from accounts@cadviz.co.nz
-        echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client from accounts@cadviz.co.nz?');\">"
-           . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
-           . "<input type=\"submit\" value=\"✉ Email from CADViz\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
-           . "</form>";
+        // Hide "Email from CADViz" once it has been sent (Sent = 1).
+        // Also block emailing while Status_INV is "Not Checked" (0).
+        if ($sentFlag === 0 && $checked) {
+            echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client from accounts@cadviz.co.nz?');\">"
+               . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
+               . "<input type=\"submit\" value=\"&#9993; Email from CADViz\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
+               . "</form>";
+        } elseif ($sentFlag !== 0) {
+            echo " <span style=\"color:#1a6b1a;font-size:11px;margin-left:6px\">&#9993; Sent</span>";
+        }
     } else {
-        echo " <form method=\"post\" action=\"xero_invoice_push.php\" style=\"display:inline\" onsubmit=\"return confirm('Push invoice #$invNo to Xero (creates the invoice; does NOT send the email yet)?');\">"
-           . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
-           . "<input type=\"submit\" value=\"➜ Push to Xero\" style=\"background:#13B5EA;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
+        if ($checked) {
+            echo " <form method=\"post\" action=\"xero_invoice_push.php\" style=\"display:inline\" onsubmit=\"return confirm('Push invoice #$invNo to Xero (creates the invoice; does NOT send the email yet)?');\">"
+               . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
+               . "<input type=\"submit\" value=\"&#10140; Push to Xero\" style=\"background:#13B5EA;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
+               . "</form>";
+        } else {
+            echo " <span style=\"color:#888;font-size:11px;margin-left:6px\">(set status to Ready to Send before pushing)</span>";
+        }
+    }
+
+    // Statement button — only if this client has more than one unpaid invoice.
+    if ($clientId > 0 && ($unpaidPerClient[$clientId] ?? 0) > 1) {
+        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Email a statement plus PDFs of every unpaid invoice for this client?');\">"
+           . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
+           . "<input type=\"submit\" value=\"&#9993; Send Statement\" style=\"background:#5d3a9b;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
            . "</form>";
     }
 }

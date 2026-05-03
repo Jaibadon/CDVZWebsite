@@ -241,6 +241,45 @@ class XeroClient
     }
 
     /**
+     * Find a Xero contact by name without creating it. Returns the full
+     * Contact payload (including Balances.AccountsReceivable.Outstanding
+     * once you fetch the single record by ID), or null if not found.
+     *
+     * Used by statement.php to display the authoritative outstanding balance
+     * Xero has on file for this client (matches what shows in the Xero UI).
+     */
+    public function findContactByName(string $name): ?array
+    {
+        $where = 'Name=="' . str_replace('"', '\"', $name) . '"';
+        $resp  = $this->apiCall('GET', '/Contacts?' . http_build_query(['where' => $where]));
+        $list  = $resp['Contacts'] ?? [];
+        if (empty($list)) return null;
+        // The list-Contacts endpoint omits the Balances object; re-fetch by
+        // ID so callers always see Balances.AccountsReceivable.Outstanding.
+        $id = $list[0]['ContactID'] ?? null;
+        if (!$id) return $list[0];
+        try {
+            $detail = $this->apiCall('GET', '/Contacts/' . urlencode($id));
+            return $detail['Contacts'][0] ?? $list[0];
+        } catch (Exception $e) {
+            return $list[0];
+        }
+    }
+
+    /**
+     * Convenience: outstanding (unpaid) AR balance for the named contact, in
+     * dollars. Returns null when the contact doesn't exist or Xero hasn't
+     * computed a balance yet.
+     */
+    public function getContactOutstanding(string $name): ?float
+    {
+        $c = $this->findContactByName($name);
+        if (!$c) return null;
+        $out = $c['Balances']['AccountsReceivable']['Outstanding'] ?? null;
+        return $out === null ? null : (float)$out;
+    }
+
+    /**
      * Look up (or create) a Xero contact for the given client name.
      * Returns the ContactID GUID. We avoid creating duplicates by searching
      * Name first.

@@ -49,6 +49,7 @@ try {
     // ── Pull invoice + client + Xero ID ───────────────────────────────────
     $h = $pdo->prepare(
         "SELECT i.Invoice_No, i.Subtotal, i.Tax_Rate, i.PayBy, i.Date,
+                i.Status_INV,
                 i.Xero_InvoiceID, i.Xero_OnlineUrl,
                 c.Client_Name, c.billing_email
            FROM Invoices i
@@ -58,6 +59,9 @@ try {
     $h->execute([$invoiceNo]);
     $row = $h->fetch();
     if (!$row) throw new Exception("Invoice #$invoiceNo not found.");
+    if ((int)($row['Status_INV'] ?? 0) === 0) {
+        throw new Exception("Invoice #$invoiceNo is still marked Not Checked (Status_INV=0). Set it to Ready to Send before emailing.");
+    }
     if (empty($row['Xero_InvoiceID'])) throw new Exception("Invoice #$invoiceNo hasn't been pushed to Xero yet — push first.");
     if (empty($row['billing_email'])) throw new Exception("Client has no billing_email set — fill it on the Client page first.");
 

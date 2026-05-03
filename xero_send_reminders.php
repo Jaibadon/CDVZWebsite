@@ -33,6 +33,10 @@ require_once __DIR__ . '/db_connect.php';
 require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/smtp_mailer.php';
 require_once __DIR__ . '/xero_client.php';
+// Pull xero_sync.php as a library (defines run_xero_sync) without
+// triggering its own auth/CLI handling.
+define('XERO_SYNC_LIBRARY_ONLY', true);
+require_once __DIR__ . '/xero_sync.php';
 
 // CLI vs web: CLI doesn't go through auth_check.php
 $isCli = (php_sapi_name() === 'cli');
@@ -47,6 +51,11 @@ if (!$isCli) {
 $pdo     = get_db();
 $dryRun  = $isCli ? in_array('dry-run', $argv, true) : !empty($_GET['dry_run']);
 $singleInvoice = (int)($_GET['invoice_no'] ?? 0);
+
+// Always sync from Xero before deciding who to remind, so that invoices
+// paid since the last sync don't get a reminder. Errors are non-fatal —
+// fall through to the existing local view if Xero is unreachable.
+$syncResult = run_xero_sync($pdo);
 
 // ── Reminder schedule: days-overdue → reminder index ──────────────────────
 $reminderStages = [7, 14, 30];      // also resends on +30 increments after that
@@ -158,6 +167,9 @@ function sendReminder(PDO $pdo, array $r): void {
 // ── Output ────────────────────────────────────────────────────────────────
 if ($isCli) {
     echo "Reminders run @ " . date('c') . ($dryRun ? ' (DRY RUN)' : '') . "\n";
+    echo "  xero sync: updated=" . (int)($syncResult['updated'] ?? 0)
+       . ", paid_marked=" . (int)($syncResult['paid_marked'] ?? 0) . "\n";
+    foreach (($syncResult['errors'] ?? []) as $e) echo "    SYNC ERROR: $e\n";
     echo "  sent:    " . count($sent)    . "\n";
     foreach ($sent    as $no => $msg) echo "    INV $no — $msg\n";
     echo "  skipped: " . count($skipped) . "\n";
@@ -169,6 +181,11 @@ if ($isCli) {
 <html><head><meta charset="utf-8"><link href="site.css" rel="stylesheet"><title>Send reminders</title></head>
 <body><div class="page"><div class="card">
   <h2>Overdue reminders<?= $dryRun ? ' — DRY RUN' : '' ?></h2>
+  <p style="color:#246">Xero sync: <strong><?= (int)($syncResult['updated'] ?? 0) ?></strong> invoices refreshed,
+     <strong><?= (int)($syncResult['paid_marked'] ?? 0) ?></strong> auto-marked PAID before this run.</p>
+  <?php foreach (($syncResult['errors'] ?? []) as $e): ?>
+    <p style="color:#c33">Sync warning: <?= htmlspecialchars($e) ?></p>
+  <?php endforeach; ?>
   <p><strong><?= count($sent) ?> sent</strong>, <strong><?= count($skipped) ?> skipped</strong>.</p>
   <ul>
     <?php foreach ($sent as $no => $msg): ?>

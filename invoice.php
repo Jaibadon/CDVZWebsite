@@ -6,6 +6,11 @@ if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
     exit;
 }
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403);
+    echo '<p>Admin only. <a href="menu.php">Back to menu</a></p>';
+    exit;
+}
 
 $pdo = get_db();
 
@@ -154,8 +159,8 @@ echo '</a>';
       <td width="69">Invoice No:&nbsp;</td>
       <td width="96"><div align="right">
 <?php
-echo '<a href="invoice_edit.php?invoice_no=' . htmlspecialchars($rs['invoice_no']) . '">';
-echo htmlspecialchars($rs['Invoice_No']);
+echo '<a href="invoice_edit.php?Invoice_No=' . htmlspecialchars((string)$rs['Invoice_No']) . '">';
+echo htmlspecialchars((string)$rs['Invoice_No']);
 echo '</a>';
 ?>
       </div></td>
@@ -222,7 +227,7 @@ if ($subtot >= 0) {
     echo '$' . number_format((float)$rs['Subtotal'], 2);
 } else {
     echo "REDIRECTING TO CREDIT NOTICE...";
-    header('Location: credit_notice.php?invoice_no=' . $rs['invoice_no']);
+    header('Location: credit_notice.php?invoice_no=' . (int)$invoice_no);
     exit;
 }
 ?>
@@ -299,8 +304,13 @@ if ($baseTs) {
     <td>Internet Bank Transfer:</td>
     <td><strong> 03 0275 0551274 00</strong></td>
     <td>Reference:</td>
-    <td><div align="right"><?= htmlspecialchars($rs['Invoice_No']) ?></div></td>
+    <td><div align="right"><strong><?= htmlspecialchars('CAD-' . str_pad((string)$rs['Invoice_No'], 5, '0', STR_PAD_LEFT)) ?></strong></div></td>
   </tr>
+  <tr>
+    <td>&nbsp;</td>
+    <td colspan="4"><font color="#a00000"><strong>Important:</strong> Please use <strong><?= htmlspecialchars('CAD-' . str_pad((string)$rs['Invoice_No'], 5, '0', STR_PAD_LEFT)) ?></strong> as the reference on your bank transfer so we can match your payment to this invoice.</font></td>
+  </tr>
+  <tr>
     <td>&nbsp;</td>
     <td colspan="3">Please email any queries to:&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<a href="mailto:accounts@cadviz.co.nz">accounts@cadviz.co.nz</a></td>
     <td>&nbsp;</td>
