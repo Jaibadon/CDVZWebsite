@@ -98,8 +98,35 @@ if ($_SESSION['UserID'] == "erik") {
     $stmt = $pdo->query($strSQL);
 } else {
     $emp_id = (int)($_SESSION['Employee_id'] ?? 0);
-    $stmt = $pdo->prepare("SELECT * FROM Projects WHERE (Active <> 0 AND Client_ID <> 195) AND (Manager = ? OR DP1 = ? OR DP2 = ? OR DP3 = ?) ORDER BY JobName");
-    $stmt->execute([$emp_id, $emp_id, $emp_id, $emp_id]);
+    // Visibility:
+    //   1. Manager / DP1 / DP2 / DP3 directly on Projects (legacy rule).
+    //   2. NEW: assigned to any task in an *accepted* quote on this
+    //      project — i.e. once the quote is locked, anyone Erik assigned
+    //      a task to can see the project too. Gated on the quote being
+    //      accepted so draft-stage scribbles don't leak the project early.
+    //      Falls back gracefully when Quote_Status column doesn't exist.
+    $hasQuoteStatus = false;
+    try { $hasQuoteStatus = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Quote_Status'")->fetch(); } catch (Exception $e) {}
+    $hasIsRemoved = false;
+    try { $hasIsRemoved = (bool)$pdo->query("SHOW COLUMNS FROM Project_Tasks LIKE 'Is_Removed'")->fetch(); } catch (Exception $e) {}
+    $removedFilter = $hasIsRemoved ? "AND COALESCE(pt.Is_Removed, 0) = 0" : "";
+    $assignedClause = $hasQuoteStatus
+        ? "OR EXISTS (
+              SELECT 1 FROM Project_Tasks pt
+              JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
+             WHERE ps.Proj_ID = Projects.proj_id
+               AND pt.Assigned_To = ?
+               $removedFilter
+           ) AND Projects.Quote_Status = 'accepted'"
+        : "";
+    $sql = "SELECT * FROM Projects
+             WHERE (Active <> 0 AND Client_ID <> 195)
+               AND (Manager = ? OR DP1 = ? OR DP2 = ? OR DP3 = ? $assignedClause)
+             ORDER BY JobName";
+    $stmt = $pdo->prepare($sql);
+    $params = [$emp_id, $emp_id, $emp_id, $emp_id];
+    if ($hasQuoteStatus) $params[] = $emp_id;  // for the EXISTS subquery
+    $stmt->execute($params);
 }
 
 $shown = 0;

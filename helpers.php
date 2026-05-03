@@ -286,6 +286,14 @@ function display_date($input, string $fmt = 'd/m/Y'): string {
  */
 const EMPLOYED_STAFF = ['dmitriyp', 'hannah'];
 
+/**
+ * The pseudo-project ID used for ANNUAL LEAVE timesheet entries.
+ * Future-dated rows on this project are flagged Leave_Approved=0 (pending
+ * Erik's approval) by submit.php, painted red on main.php, and listed on
+ * Erik's menu.php with an Approve button.
+ */
+const LEAVE_PROJECT_ID = 1435;
+
 function is_employed_staff(?string $userId): bool {
     if ($userId === null || $userId === '') return false;
     return in_array(strtolower($userId), EMPLOYED_STAFF, true);

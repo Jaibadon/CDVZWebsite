@@ -32,10 +32,30 @@ $ptFilter = $hasVariations ? "AND COALESCE(pt.Is_Removed, 0) = 0" : '';
 // staff member to have a connection to it — admins bypass the connection check).
 $isAdminUser = in_array($user, ['erik','jen'], true);
 $projFilterSql = $singleProjId > 0 ? " AND p.proj_id = :pid" : '';
+
+// Quote_Status detection — older installs don't have the column; the
+// "assigned to a task in an accepted quote" rule degrades to a no-op.
+$hasQuoteStatus = false;
+try { $hasQuoteStatus = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Quote_Status'")->fetch(); } catch (Exception $e) {}
+$ptRemovedFilter = $hasVariations ? "AND COALESCE(pt.Is_Removed, 0) = 0" : '';
+$assignedClause = $hasQuoteStatus
+    ? "OR (
+          p.Quote_Status = 'accepted'
+          AND EXISTS (
+              SELECT 1 FROM Project_Tasks pt
+              JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
+             WHERE ps.Proj_ID = p.proj_id
+               AND pt.Assigned_To = :e
+               $ptRemovedFilter
+          )
+       )"
+    : '';
+
 $peopleFilter = $isAdminUser
     ? ''  // admins see any project
     : "AND (p.Manager = :e OR p.DP1 = :e OR p.DP2 = :e OR p.DP3 = :e
-           OR p.proj_id IN (SELECT proj_id FROM Timesheets WHERE Employee_id = :e))";
+           OR p.proj_id IN (SELECT proj_id FROM Timesheets WHERE Employee_id = :e)
+           $assignedClause)";
 $activeFilter = $singleProjId > 0 ? '' : 'AND p.Active <> 0';  // single-project view shows even inactive
 
 $projsStmt = $pdo->prepare(

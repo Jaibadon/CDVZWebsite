@@ -18,11 +18,28 @@ if ($proj_id <= 0) die('Missing proj_id');
 //                      on fixed-price projects, a margin-vs-estimate panel.
 //   (unset)          → existing behaviour: lump-sum line for fixed-price,
 //                      full estimate breakdown otherwise.
+//
+// audience= internal (default for breakdown views) | client
+//   Internal: shows the red "DO NOT SEND" warning, hides T&Cs/sig (it's a
+//             CADViz-only review).
+//   Client  : softens the warning, keeps T&Cs/sig, still shows the
+//             margin/comparison numbers (Erik is happy to share these
+//             with select clients). Hours-only client view also shows the
+//             fixed price + GST at the end so the client sees the price.
 $breakdown      = $_GET['breakdown'] ?? '';
 $forceBreakdown = ($breakdown === 'hours' || $breakdown === 'full');
-$internalView   = $forceBreakdown;          // CADViz-only review — hides T&Cs/sig
+$audience       = (($_GET['audience'] ?? '') === 'client') ? 'client' : 'internal';
+$internalView   = $forceBreakdown && $audience !== 'client';
 $showMoney      = !isset($_GET['nomoney']) && $breakdown !== 'hours';
 $originalOnly = !empty($_GET['original_only']);  // hide variations section
+
+// "Is this a real document we'd send to a client?" — controls notes,
+// signature block, and Terms & Conditions:
+//   - default fee proposal / fixed-price quote → yes
+//   - client-facing breakdown views            → yes
+//   - internal breakdown views                 → no (CADViz review only)
+//   - ?nomoney=1 alone (checklist.php)         → no (per-project task list)
+$isClientDocument = !$internalView && ($showMoney || $forceBreakdown);
 
 // Detect fixed-price columns
 $hasFixedPrice = false;
@@ -190,12 +207,32 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 <body>
 <div class="print-bar">
   <?php
-    if ($internalView)            echo 'Internal breakdown — ' . ($breakdown === 'hours' ? 'hours only' : 'hours + prices + margin');
+    if ($forceBreakdown)          echo ($audience === 'client' ? 'Client-facing breakdown — ' : 'Internal breakdown — ')
+                                       . ($breakdown === 'hours' ? 'hours only' : 'hours + prices');
     elseif (!$showMoney)          echo 'Project Checklist (no rates)';
     else                          echo 'Fee Proposal / Estimate of Costs';
   ?>
   <button onclick="window.print()">Print / Save as PDF</button>
   <a href="project_stages.php?proj_id=<?= $proj_id ?>">Back to project stages</a>
+  <?php if ($forceBreakdown): ?>
+    <!-- Internal vs client toggle. Re-navigates with audience=client/internal. -->
+    <label style="margin-left:10px">
+      <input type="checkbox" id="audience-toggle" <?= $audience === 'client' ? 'checked' : '' ?>>
+      Client-facing version
+    </label>
+    <script>
+      (function(){
+        var t = document.getElementById('audience-toggle');
+        if (!t) return;
+        t.addEventListener('change', function() {
+          var u = new URL(window.location.href);
+          if (t.checked) u.searchParams.set('audience', 'client');
+          else           u.searchParams.delete('audience');
+          window.location.href = u.toString();
+        });
+      })();
+    </script>
+  <?php endif; ?>
 </div>
 
 <div class="header">
@@ -218,8 +255,9 @@ table.items td { padding:4px 8px; border-bottom:1px solid #eee; }
 <?php endif; ?>
 
 <h1><?php
-    if ($internalView) {
-        echo 'Internal Project Breakdown' . ($breakdown === 'hours' ? ' — Hours' : ' — Hours + Prices');
+    if ($forceBreakdown) {
+        $label = $breakdown === 'hours' ? 'Hours' : 'Hours + Prices';
+        echo ($audience === 'client' ? 'Project Breakdown — ' : 'Internal Project Breakdown — ') . $label;
     } else {
         echo $showMoney
             ? ($isFixedPrice ? 'Fee Proposal / Fixed-Price Quote' : 'Fee Proposal / Estimate of Costs')
@@ -423,27 +461,42 @@ endif; /* variations */ ?>
     $deltaAbs      = abs($delta);
     $deltaColor    = $delta >= 0 ? '#1a6b1a' : '#a00';
 ?>
+<?php $panelLabel = $audience === 'client'
+    ? 'Bottom-up breakdown vs. fixed-price quote'
+    : 'Fixed-price vs. estimate (internal)'; ?>
 <table class="totals" style="margin-top:6px;width:60%;margin-left:40%;background:#fffaf0;border:1px solid #c8a52e">
-  <tr><td colspan="2" style="background:#fff3cd;padding:6px 10px;font-weight:bold;color:#7a5a00">Fixed-price vs. estimate (internal)</td></tr>
-  <tr><td class="label">Estimate subtotal (sum of tasks):</td><td class="right">$<?= number_format($estSubtotal, 2) ?></td></tr>
-  <tr><td class="label">Fixed price (excl. GST, before safety margin):</td><td class="right">$<?= number_format($fpExGst, 2) ?></td></tr>
-  <tr><td class="label">Safety margin applied (<?= number_format($fixedMargin, 2) ?>%):</td><td class="right">$<?= number_format($fpMarkedExGst - $fpExGst, 2) ?></td></tr>
-  <tr><td class="label"><strong>Fixed price quoted to client (excl. GST):</strong></td><td class="right"><strong>$<?= number_format($fpMarkedExGst, 2) ?></strong></td></tr>
-  <tr><td class="label" style="color:<?= $deltaColor ?>"><strong>Delta vs estimate:</strong></td>
+  <tr><td colspan="2" style="background:#fff3cd;padding:6px 10px;font-weight:bold;color:#7a5a00"><?= htmlspecialchars($panelLabel) ?></td></tr>
+  <tr><td class="label">Bottom-up estimate (sum of tasks above):</td><td class="right">$<?= number_format($estSubtotal, 2) ?></td></tr>
+  <tr><td class="label">Fixed price quoted (excl. GST):</td><td class="right">$<?= number_format($fpMarkedExGst, 2) ?></td></tr>
+  <?php if ($audience !== 'client'): ?>
+    <tr><td class="label" style="color:#666;font-size:10px">  &nbsp; before <?= number_format($fixedMargin, 2) ?>% safety margin: $<?= number_format($fpExGst, 2) ?> &nbsp;·&nbsp; margin amount: $<?= number_format($fpMarkedExGst - $fpExGst, 2) ?></td><td></td></tr>
+  <?php endif; ?>
+  <tr><td class="label" style="color:<?= $deltaColor ?>"><strong>Difference:</strong></td>
       <td class="right" style="color:<?= $deltaColor ?>"><strong><?= $deltaSign ?>$<?= number_format($deltaAbs, 2) ?> (<?= $deltaSign ?><?= number_format(abs($deltaPct), 1) ?>%)</strong></td></tr>
 </table>
 <p style="font-size:10px;color:#7a5a00;margin-top:6px">
+<?php if ($audience === 'client'): ?>
+  We've put together a bottom-up estimate of the tasks involved in this project (above), and quoted you a single fixed price for the whole scope (right). If the difference is positive the fixed price is slightly above the bottom-up estimate (it builds in a small safety margin so you have certainty about the final cost). If it's negative, the fixed price is below the estimate &mdash; you're getting a saving.
+<?php else: ?>
   Positive delta = the fixed price (with safety margin) is <em>above</em> the bottom-up estimate (we're protected).
-  Negative delta = the fixed price is <em>below</em> the estimate (we'd be working at a loss vs. the rates above — review margin or scope).
+  Negative delta = the fixed price is <em>below</em> the estimate (we'd be working at a loss vs. the rates above &mdash; review margin or scope).
+<?php endif; ?>
 </p>
 <?php endif; ?>
 
-<?php if (!$internalView): ?>
+<?php
+// Rates note only makes sense when per-line rates are visible. The sig/T&C
+// blocks below apply to any client-facing document (client breakdowns
+// included), and were lifted out of the original $showMoney/!$internalView
+// nesting so they can render alongside the hours-only client view too.
+if ($isClientDocument && $showMoney): ?>
 <div class="notes">
   <p>Please note that the rates listed are a combination of "base" rate and the principle's / director's rate for some tasks. The base rate represents the average of the staff's actually billable rate. The billable rates are tuned based on staff efficiency so that the net invoiced is equivalent.</p>
   <p>It is possible that the "Grand Total" listed above may not be enough to complete the job if the client requires revisions or otherwise changes the scope of work. This estimate does not include any printing costs, courier fees, council fees, engineer's fees or other third party services or materials.</p>
   <p>Refer to the attached Terms and Conditions of Trade. In addition to the standard terms and conditions of trade, when work is carried out over a timeframe greater than one month, progress payments would be invoiced for monthly.</p>
-</div>
+</div><?php endif; ?>
+
+<?php if ($isClientDocument): ?>
 
 <div class="sig">
   <div>
@@ -588,10 +641,23 @@ endif; /* variations */ ?>
   </li>
 </ol>
 </div>
-<?php endif; /* end !$internalView wrapper around T&C + sig blocks */ ?>
-<?php else: /* checklist mode (no money) */ ?>
+<?php endif; /* end $isClientDocument wrapper around sig + T&C blocks */ ?>
+<?php else: /* hours-only / checklist mode (no per-row money) */ ?>
 <table class="totals">
 <tr class="grand"><td class="label">Total Estimated Hours:</td><td class="right"><?= number_format($grandHours, 2) ?> hrs</td></tr>
+<?php
+    // For fixed-price projects, ALWAYS show the fixed-price + GST + grand
+    // total here regardless of audience — the client needs to see the
+    // price somewhere even when individual rates are hidden, and Erik
+    // wants the same on his internal hours-only view as a sanity check.
+    if ($isFixedPrice && $fixedPrice > 0):
+        $fpMarked = $fixedPrice * (1 + $fixedMargin/100);
+        $fpGst    = $fpMarked * 0.15;
+?>
+  <tr><td class="label">Fixed price quoted (excl. GST):</td><td class="right">$<?= number_format($fpMarked, 2) ?></td></tr>
+  <tr><td class="label">GST (15%):</td><td class="right">$<?= number_format($fpGst, 2) ?></td></tr>
+  <tr class="grand"><td class="label">Grand Total (Inc GST):</td><td class="right">$<?= number_format($fpMarked + $fpGst, 2) ?></td></tr>
+<?php endif; ?>
 </table>
 <?php endif; ?>
 

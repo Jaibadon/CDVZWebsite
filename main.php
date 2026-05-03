@@ -19,13 +19,15 @@ $missingWeekdays = $mustFillFullWeek
 //    weeks keep the existing red-banner / red-button behavior.
 $today              = date('Y-m-d');
 $todayDow           = (int)date('N');                                 // 1=Mon … 7=Sun
-$currentWeekMonday  = date('Y-m-d', strtotime('monday this week'));
+$currentWeekMonday  = $_todaysMonday;
 $isViewingCurrentWeek = ($weekStart === $currentWeekMonday);
 
 $missingPrevWeeks = [];
 $missingCurrWeek  = [];
 foreach ($missingWeekdays as $d) {
-    $dMon = date('Y-m-d', strtotime('monday this week', strtotime($d)));
+    $dt   = new DateTime($d);
+    $dow  = (int)$dt->format('N') - 1;
+    $dMon = (clone $dt)->modify("-{$dow} days")->format('Y-m-d');
     if ($dMon === $currentWeekMonday) $missingCurrWeek[] = $d;
     else                              $missingPrevWeeks[] = $d;
 }
@@ -44,12 +46,18 @@ for ($i = 1; $i <= 5; $i++) {
 }
 
 // ── Week selection ──────────────────────────────────────────────────────────
+// Compute today's Monday once, robustly. `strtotime('monday this week')`
+// has a known PHP quirk where on a Monday it can resolve to the *previous*
+// Monday — DateTime + ISO dow is unambiguous.
+$_todayDow      = (int)(new DateTime('today'))->format('N') - 1;   // 0=Mon … 6=Sun
+$_todaysMonday  = (new DateTime('today'))->modify("-{$_todayDow} days")->format('Y-m-d');
+
 // Accept either 'week' or 'Week' (form fields posted from various pages)
 $currentWeek = $_POST['week'] ?? $_POST['Week']
             ?? $_GET['week']  ?? $_GET['Week']
-            ?? $_SESSION['Week'] ?? date('Y-m-d', strtotime('monday this week'));
+            ?? $_SESSION['Week'] ?? $_todaysMonday;
 $ts = strtotime($currentWeek);
-$currentWeek = $ts ? date('Y-m-d', $ts) : date('Y-m-d', strtotime('monday this week'));
+$currentWeek = $ts ? date('Y-m-d', $ts) : $_todaysMonday;
 $_SESSION['Week'] = $currentWeek;
 
 $weekStart = $currentWeek;
@@ -147,8 +155,15 @@ foreach ($projectTasks as $pid => $tasks) {
 $empId = $_SESSION['Employee_id'] ?? 0;
 $ttCol  = $hasTaskTypeId ? 'Task_Type_ID' : 'NULL AS Task_Type_ID';
 $ptCol  = $hasProjTaskId ? 'Proj_Task_ID' : 'NULL AS Proj_Task_ID';
+// Pull Leave_Approved when the migration has been applied so future leave
+// cells (proj 1435, TS_DATE > today, Leave_Approved=0) can be painted red.
+$hasLeaveApproved = false;
+try {
+    $hasLeaveApproved = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Leave_Approved'")->fetch();
+} catch (Exception $e) { /* ignore */ }
+$laCol = $hasLeaveApproved ? 'Leave_Approved' : 'NULL AS Leave_Approved';
 $tsStmt = $pdo->prepare(
-    "SELECT proj_id, TS_ID, TS_DATE, Task, $ttCol, $ptCol, Hours, Invoice_No
+    "SELECT proj_id, TS_ID, TS_DATE, Task, $ttCol, $ptCol, $laCol, Hours, Invoice_No
        FROM Timesheets
       WHERE Employee_id = ?
         AND TS_DATE BETWEEN ? AND ?
@@ -177,6 +192,9 @@ foreach ($tsRows as $r) {
             'invoice_no'   => $r['Invoice_No'],
             'ts_id'        => $r['TS_ID'],
             'days'         => array_fill(1, 7, ''),
+            // Per-day "this cell is unapproved future leave" flag — used
+            // by the render loop to paint the input red.
+            'pending_leave' => array_fill(1, 7, false),
             'tot'          => 0,
         ];
     }
@@ -185,15 +203,34 @@ foreach ($tsRows as $r) {
         ? $taskMap[$key]['days'][$dow] + $r['Hours']
         : $r['Hours'];
     $taskMap[$key]['tot'] += $r['Hours'];
+    // Flag future leave cells awaiting approval. (proj 1435, TS_DATE in
+    // the future, Leave_Approved = 0). $tday is computed below — but
+    // since we're inside the foreach, we need it now. Use today's Y-m-d.
+    $rowDate = date('Y-m-d', strtotime($r['TS_DATE']));
+    if ((int)$r['proj_id'] === LEAVE_PROJECT_ID
+        && $rowDate > date('Y-m-d')
+        && (int)($r['Leave_Approved'] ?? 0) === 0) {
+        $taskMap[$key]['pending_leave'][$dow] = true;
+    }
 }
 $taskRows = array_values($taskMap);
 
 // ── Week dropdown options ───────────────────────────────────────────────────
+// Use DateTime instead of strtotime — `strtotime('monday this week')` had a
+// quirk where on a Monday it could resolve to the *previous* Monday, which
+// made the +1-week offset land on today's week instead of next week. The
+// DateTime ISO-8601 dayOfWeek arithmetic is unambiguous.
+//
+// Range now spans -6 weeks back through +3 weeks ahead (was +1) so full-
+// time staff can enter annual-leave entries a few weeks in advance.
 $weekOptions = [];
-$refMonday   = date('Y-m-d', strtotime('monday this week'));
-for ($i = -6; $i <= 1; $i++) {
-    $d = date('Y-m-d', strtotime(($i >= 0 ? "+$i" : "$i") . ' weeks', strtotime($refMonday)));
-    $weekOptions[] = $d;
+$today      = new DateTime('today');
+$mondayDow  = (int)$today->format('N') - 1;          // 0 for Mon … 6 for Sun
+$refMondayDt = (clone $today)->modify("-{$mondayDow} days");
+$refMonday   = $refMondayDt->format('Y-m-d');
+for ($i = -6; $i <= 3; $i++) {
+    $opt = (clone $refMondayDt)->modify(($i >= 0 ? "+$i" : "$i") . ' weeks');
+    $weekOptions[] = $opt->format('Y-m-d');
 }
 
 // ── Day headings  ──────────────────────────────────────────────────────────
@@ -503,7 +540,9 @@ window.onload = function () {
 if ($mustFillFullWeek && !empty($missingPrevWeeks)):
     $byWeek = [];
     foreach ($missingPrevWeeks as $d) {
-        $mon = date('Y-m-d', strtotime('monday this week', strtotime($d)));
+        $dt2  = new DateTime($d);
+        $dow2 = (int)$dt2->format('N') - 1;
+        $mon  = (clone $dt2)->modify("-{$dow2} days")->format('Y-m-d');
         $byWeek[$mon][] = date('D j M', strtotime($d));
     }
 ?>
@@ -538,6 +577,19 @@ if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYe
     Please complete the current week before filling in earlier ones.
     &nbsp;<a href="main.php?week=<?= urlencode($currentWeekMonday) ?>" style="color:#7a4d00;text-decoration:underline;font-weight:bold">Go to current week</a>
   </div>
+</div>
+<?php endif; ?>
+
+<?php if ($mustFillFullWeek): ?>
+<!-- Annual-leave reminder for full-time staff. Project 1435 is the leave
+     project; future-dated entries get flagged red until Erik approves them
+     on the main menu. -->
+<div style="width:680px;margin:6px auto;background:#eef4ff;border:1px solid #c0d0ee;border-radius:4px;padding:8px 12px;color:#246;font-size:11px">
+  <strong>📅 Annual leave:</strong> please book your leave in advance by
+  entering your hours against project <strong>#1435 (ANNUAL LEAVE)</strong>
+  on the relevant dates. Future-dated leave entries appear red on your
+  timesheet until Erik approves them — the dropdown above now goes
+  <strong>3 weeks ahead</strong> so you can book them ahead of time.
 </div>
 <?php endif; ?>
 
@@ -597,6 +649,7 @@ for ($a = 1; $a <= 30; $a++):
     $invNo     = $tr ? $tr['invoice_no']   : 0;
     $tot       = $tr ? $tr['tot']          : 0;
     $days      = $tr ? $tr['days']         : array_fill(1, 7, '');
+    $pendingLv = $tr ? ($tr['pending_leave'] ?? array_fill(1, 7, false)) : array_fill(1, 7, false);
     $locked    = ($invNo != 0);
     // Resolve ptid from task_type_id when only the older FK is set
     if (!$taskPtid && $taskTid && $projVal !== '' && !empty($projectTasks[(int)$projVal])) {
@@ -634,11 +687,17 @@ for ($a = 1; $a <= 30; $a++):
        value="<?= htmlspecialchars($taskTxt) ?>"
        class="desc-inp" placeholder="(notes)"
        style="width:140px;font-size:11px"></td>
-  <?php for ($d = 1; $d <= 7; $d++): ?>
+  <?php for ($d = 1; $d <= 7; $d++):
+      $cellPending = !empty($pendingLv[$d]);
+      $cellStyle   = $cellPending ? 'background:#ffd6d6;border:1px solid #c33' : '';
+      $cellTitle   = $cellPending ? 'Future leave entry — pending Erik\'s approval. Will go back to normal once approved.' : '';
+  ?>
     <td><input <?= $locked ? 'disabled' : '' ?> type="text" size="3"
          id="D<?= $d ?>_<?= $a ?>" name="D<?= $d ?>_<?= $a ?>"
          value="<?= htmlspecialchars($days[$d]) ?>"
-         class="day-input"
+         class="day-input<?= $cellPending ? ' pending-leave' : '' ?>"
+         <?= $cellStyle ? 'style="' . $cellStyle . '"' : '' ?>
+         <?= $cellTitle ? 'title="' . htmlspecialchars($cellTitle) . '"' : '' ?>
          onblur="OnLostFocusTest(this)" onkeypress="OnKeyPressTest(event)"></td>
   <?php endfor; ?>
   <td><input disabled type="text" size="3" name="Total_<?= $a ?>"

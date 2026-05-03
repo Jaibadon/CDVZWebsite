@@ -39,6 +39,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'accep
     header('Location: project_stages.php?proj_id=' . $proj_id);
     exit;
 }
+// ── Staffing update (Manager / DP1 / DP2 / DP3) ────────────────────────
+// Mirrors the same fields from updateform_admin1.php so Erik can assign
+// staff straight from the quote builder. Empty value = NULL (unassigned).
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_staffing') {
+    $picks = [];
+    foreach (['Manager','DP1','DP2','DP3'] as $k) {
+        $v = $_POST[$k] ?? '';
+        $picks[$k] = ($v === '' || $v === '0') ? null : (int)$v;
+    }
+    try {
+        $pdo->prepare("UPDATE Projects SET Manager = ?, DP1 = ?, DP2 = ?, DP3 = ? WHERE proj_id = ?")
+            ->execute([$picks['Manager'], $picks['DP1'], $picks['DP2'], $picks['DP3'], $proj_id]);
+    } catch (Exception $e) { /* schema mismatch — fall through */ }
+    header('Location: project_stages.php?proj_id=' . $proj_id);
+    exit;
+}
+
 // ── Quote type / fixed price update ────────────────────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'update_quote_type') {
     $qt = ($_POST['Quote_Type'] ?? '') === 'fixed' ? 'fixed' : 'estimate';
@@ -75,10 +92,21 @@ try { $hasQuoteStatus = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Quot
 try { $hasQuoteType   = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Quote_Type'")->fetch(); } catch (Exception $e) {}
 $qsCol = $hasQuoteStatus ? ', Quote_Status' : ", NULL AS Quote_Status";
 $qtCol = $hasQuoteType   ? ', Quote_Type, Fixed_Price, Fixed_Margin_Pct' : ", NULL AS Quote_Type, NULL AS Fixed_Price, NULL AS Fixed_Margin_Pct";
-$proj = $pdo->prepare("SELECT proj_id, JobName, Project_Type, Job_Description$qsCol$qtCol FROM Projects WHERE proj_id = ?");
+$proj = $pdo->prepare("SELECT proj_id, JobName, Project_Type, Job_Description, Manager, DP1, DP2, DP3$qsCol$qtCol FROM Projects WHERE proj_id = ?");
 $proj->execute([$proj_id]);
 $proj = $proj->fetch();
 if (!$proj) die('Project not found');
+
+// Staff list for the Manager / DP picker. Active staff only on installs
+// that have an `active` column; older schemas fall back to all staff.
+$staffPick = [];
+try {
+    $hasActiveCol = (bool)$pdo->query("SHOW COLUMNS FROM Staff LIKE 'active'")->fetch();
+    $sql = $hasActiveCol
+        ? "SELECT Employee_ID, Login FROM Staff WHERE COALESCE(active,1) <> 0 ORDER BY Login"
+        : "SELECT Employee_ID, Login FROM Staff ORDER BY Login";
+    $staffPick = $pdo->query($sql)->fetchAll(PDO::FETCH_ASSOC);
+} catch (Exception $e) { /* ignore */ }
 
 // NULL or 'draft' means draft (free editing). 'accepted' means quote locked.
 $quoteStatus = ($proj['Quote_Status'] ?? null) === 'accepted' ? 'accepted' : 'draft';
@@ -155,11 +183,48 @@ ob_start();
     <input type="hidden" name="action" value="update_description">
     <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
     <strong>Project Description:</strong>
-    <textarea name="Job_Description" 
+    <textarea name="Job_Description"
               style="display:block;width:100%;min-height:80px;margin:5px 0;padding:8px;font-family:Arial,sans-serif;font-size:13px;border:1px solid #ccc;border-radius:3px;"
               placeholder="Enter project description..."><?= htmlspecialchars($proj['Job_Description'] ?? '') ?></textarea>
-    <input type="submit" value="Save Description" 
+    <input type="submit" value="Save Description"
            style="background:#555;color:#fff;border:none;padding:5px 10px;border-radius:3px;cursor:pointer">
+  </form>
+
+  <!-- Staffing — Manager + DP1/2/3. These mirror updateform_admin1.php so
+       Erik can assign drafting persons straight from the quote builder.
+       Once the quote is accepted, anyone listed as Manager/DP1/DP2/DP3
+       OR assigned to any task here will see the project on their
+       My Projects / My Project Checklist pages. -->
+  <form method="post" style="display:block;margin:10px 0;border-top:1px solid #eee;padding-top:10px">
+    <input type="hidden" name="action" value="update_staffing">
+    <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
+    <strong>Staffing:</strong>
+    <?php
+      $staffOptions = function($selected, $name) use ($staffPick) {
+          $out  = '<select name="' . htmlspecialchars($name) . '" style="margin:0 6px 0 4px">';
+          $out .= '<option value="">— unassigned —</option>';
+          foreach ($staffPick as $s) {
+              $eid = (int)$s['Employee_ID'];
+              $sel = ((int)($selected ?? 0) === $eid) ? ' selected' : '';
+              $out .= '<option value="' . $eid . '"' . $sel . '>' . htmlspecialchars($s['Login']) . '</option>';
+          }
+          $out .= '</select>';
+          return $out;
+      };
+    ?>
+    <span style="margin-left:6px;font-size:11px;color:#666">Manager:</span>
+    <?= $staffOptions($proj['Manager'] ?? null, 'Manager') ?>
+    <span style="font-size:11px;color:#666">DP1:</span>
+    <?= $staffOptions($proj['DP1']     ?? null, 'DP1') ?>
+    <span style="font-size:11px;color:#666">DP2:</span>
+    <?= $staffOptions($proj['DP2']     ?? null, 'DP2') ?>
+    <span style="font-size:11px;color:#666">DP3:</span>
+    <?= $staffOptions($proj['DP3']     ?? null, 'DP3') ?>
+    <input type="submit" value="Save Staffing"
+           style="background:#555;color:#fff;border:none;padding:4px 10px;border-radius:3px;cursor:pointer;margin-left:6px">
+    <div style="font-size:11px;color:#666;margin-top:4px">
+      DPs assigned to specific tasks below also see the project once the quote is <em>accepted</em>.
+    </div>
   </form>
 
   <!-- Templates for this project type -->
@@ -252,14 +317,23 @@ ob_start();
       📌 In Fixed-Price mode you don't need to break the project into tasks. The stage/task editor below stays available as optional internal notes
       (timesheet hours can still be logged against tasks for analytics). Variations on this project use a manual price (no margin applied).
     </div>
-    <!-- Internal breakdown views (CADViz only — never sent to the client) -->
+    <!-- Breakdown views — both internal (with margin info) and client-facing.
+         The quote.php page also has a "Client-facing version" checkbox in
+         its print bar that toggles between the two without leaving the page. -->
     <div style="margin-top:8px;font-size:11px">
-      <strong style="color:#246">Internal review:</strong>
+      <strong style="color:#246">Internal review (with margin):</strong>
       <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=hours" target="_blank"
-         style="background:#7a4d00;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:6px">Breakdown — hours only</a>
+         style="background:#7a4d00;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:6px">Hours only</a>
       <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=full" target="_blank"
-         style="background:#7a4d00;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:4px">Breakdown — hours + prices + margin</a>
-      <span style="color:#666">&nbsp;(both show the underlying tasks; "+ prices" also compares the fixed price to the estimate)</span>
+         style="background:#7a4d00;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:4px">Hours + prices</a>
+    </div>
+    <div style="margin-top:6px;font-size:11px">
+      <strong style="color:#246">Client-facing breakdown:</strong>
+      <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=hours&audience=client" target="_blank"
+         style="background:#246;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:6px">Hours only (with fixed price)</a>
+      <a href="quote.php?proj_id=<?= $proj_id ?>&breakdown=full&audience=client" target="_blank"
+         style="background:#246;color:#fff;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:4px">Hours + prices</a>
+      <span style="color:#666">&nbsp;(includes T&amp;Cs / signature; happy-to-share with select clients)</span>
     </div>
   </div>
   <?php endif; ?>

@@ -63,6 +63,28 @@ if ($locked === "true") {
     // 30 individual auto-commits, and atomic if anything fails.
     $pdo->beginTransaction();
     try {
+        // Detect Leave_Approved column up front so we can preserve any
+        // already-approved future leave entries through the delete+insert
+        // cycle (otherwise every resubmit would force Erik to re-approve).
+        $hasLeaveApproved = false;
+        try {
+            $hasLeaveApproved = (bool)$pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'Leave_Approved'")->fetch();
+        } catch (Exception $e) { /* ignore */ }
+
+        $preApprovedDates = [];
+        if ($hasLeaveApproved) {
+            try {
+                $sn = $pdo->prepare("SELECT TS_DATE FROM Timesheets
+                                      WHERE proj_id = ? AND Employee_id = ?
+                                        AND TS_DATE BETWEEN ? AND ?
+                                        AND Leave_Approved = 1");
+                $sn->execute([LEAVE_PROJECT_ID, (int)$_SESSION['Employee_id'], $weekStartISO, $weekEndISO]);
+                foreach ($sn->fetchAll(PDO::FETCH_ASSOC) as $r) {
+                    $preApprovedDates[date('Y-m-d', strtotime($r['TS_DATE']))] = true;
+                }
+            } catch (Exception $e) { /* non-fatal */ }
+        }
+
         $delStmt = $pdo->prepare("DELETE FROM Timesheets WHERE TS_DATE BETWEEN ? AND ? AND Employee_id = ? AND Invoice_No = 0");
         $delStmt->execute([$weekStartISO, $weekEndISO, (int)$_SESSION['Employee_id']]);
 
@@ -83,9 +105,10 @@ if ($locked === "true") {
 
         // Build INSERT shape based on which columns exist
         $cols = ['TS_ID','TS_DATE','Employee_id','proj_id','Task'];
-        if ($hasTaskTypeId) $cols[] = 'Task_Type_ID';
-        if ($hasVariation)  $cols[] = 'Variation_ID';
-        if ($hasProjTaskId) $cols[] = 'Proj_Task_ID';
+        if ($hasTaskTypeId)   $cols[] = 'Task_Type_ID';
+        if ($hasVariation)    $cols[] = 'Variation_ID';
+        if ($hasProjTaskId)   $cols[] = 'Proj_Task_ID';
+        if ($hasLeaveApproved) $cols[] = 'Leave_Approved';
         $cols[] = 'Hours';
         $cols[] = 'Invoice_No';
         $placeholders = array_fill(0, count($cols) - 1, '?');
@@ -155,10 +178,20 @@ if ($locked === "true") {
                 $projId = (int)$_POST['Project' . $a];
                 $empId  = (int)$_SESSION['Employee_id'];
 
+                // Future-dated leave entries (project 1435) get
+                // Leave_Approved=0 unless Erik already approved this exact
+                // date before the resubmit (preserved via $preApprovedDates).
+                // Past leave + every non-leave row stays NULL (N/A).
+                $leaveApprovedVal = null;
+                if ($hasLeaveApproved && $projId === LEAVE_PROJECT_ID && $tsDate > $tday) {
+                    $leaveApprovedVal = isset($preApprovedDates[$tsDate]) ? 1 : 0;
+                }
+
                 $params = [$nextTsId, $tsDate, $empId, $projId, $desc];
-                if ($hasTaskTypeId) $params[] = $taskTypeId;
-                if ($hasVariation)  $params[] = $variationId;
-                if ($hasProjTaskId) $params[] = $projTaskId;
+                if ($hasTaskTypeId)    $params[] = $taskTypeId;
+                if ($hasVariation)     $params[] = $variationId;
+                if ($hasProjTaskId)    $params[] = $projTaskId;
+                if ($hasLeaveApproved) $params[] = $leaveApprovedVal;
                 $params[] = $hours;
                 $insStmt->execute($params);
                 $nextTsId++;

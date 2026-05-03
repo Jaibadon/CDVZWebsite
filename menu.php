@@ -48,6 +48,31 @@ if ($isAdmin) {
         $pendingVariations = $st->fetchAll();
     } catch (Exception $e) { /* table may not exist if migration not run */ }
 }
+
+// Pending future leave entries (Erik approves these). Only loaded for Erik —
+// other admins don't see this list.
+$pendingLeave = [];
+if (($_SESSION['UserID'] ?? '') === 'erik') {
+    try {
+        $pdo = get_db();
+        $st = $pdo->prepare(
+            "SELECT t.TS_ID, t.TS_DATE, t.Hours, t.Task,
+                    s.Login AS StaffLogin, s.`First Name` AS StaffFirstName
+               FROM Timesheets t
+               LEFT JOIN Staff s ON t.Employee_id = s.Employee_ID
+              WHERE t.proj_id        = ?
+                AND t.TS_DATE        > CURDATE()
+                AND t.Leave_Approved = 0
+              ORDER BY t.TS_DATE, s.Login"
+        );
+        $st->execute([LEAVE_PROJECT_ID]);
+        $pendingLeave = $st->fetchAll();
+    } catch (Exception $e) { /* migration may not be applied yet */ }
+}
+
+$leaveFlash    = $_SESSION['leave_flash']     ?? '';
+$leaveFlashErr = $_SESSION['leave_flash_err'] ?? '';
+unset($_SESSION['leave_flash'], $_SESSION['leave_flash_err']);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -100,6 +125,58 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
         Dormancy sweep ran today: deactivated <strong><?= (int)$dormancyResult['projects'] ?></strong> projects and <strong><?= (int)$dormancyResult['clients'] ?></strong> clients with no activity in the last 5 years.
         <a href="dormancy_sweep.php?undo=1">Review / undo</a>
       </div>
+    <?php endif; ?>
+
+    <?php if ($leaveFlash): ?>
+      <div style="background:#d6f5d6;border:1px solid #1a6b1a;color:#1a6b1a;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($leaveFlash) ?></div>
+    <?php endif; ?>
+    <?php if ($leaveFlashErr): ?>
+      <div style="background:#ffd6d6;border:1px solid #c33;color:#a00;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($leaveFlashErr) ?></div>
+    <?php endif; ?>
+
+    <?php if (!empty($pendingLeave)):
+        // Group consecutive rows for the same staff member into one bulk
+        // approve form so Erik can OK a whole stretch of leave in one click.
+        $groupedLeave = [];
+        foreach ($pendingLeave as $pl) {
+            $login = $pl['StaffLogin'] ?? '?';
+            $groupedLeave[$login][] = $pl;
+        }
+    ?>
+    <div style="background:#fff3cd;border:2px solid #c8a52e;border-radius:4px;padding:12px 16px;margin-bottom:16px">
+      <h3 style="margin:0 0 6px;color:#7a5a00;border:none">
+        ⚠ <?= count($pendingLeave) ?> future leave day<?= count($pendingLeave) === 1 ? '' : 's' ?> waiting for approval
+      </h3>
+      <p style="margin:0 0 6px;font-size:11px;color:#7a5a00">Project #<?= LEAVE_PROJECT_ID ?> — annual leave / sick. Future dates show red on the staff member's timesheet until approved.</p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px">
+        <?php foreach ($groupedLeave as $login => $entries):
+            $tsIds = array_map(fn($e) => (int)$e['TS_ID'], $entries);
+            $first = $entries[0];
+            $name  = trim((string)($first['StaffFirstName'] ?? '')) ?: $login;
+            $totalHours = array_sum(array_column($entries, 'Hours'));
+        ?>
+          <tr style="border-bottom:1px solid #eee">
+            <td style="padding:6px 4px;vertical-align:top">
+              <strong><?= htmlspecialchars($name) ?></strong>
+              <span style="color:#666;font-size:11px"> (<?= htmlspecialchars($login) ?>)</span>
+            </td>
+            <td style="padding:6px 4px;vertical-align:top;font-size:11px">
+              <?= count($entries) ?> day<?= count($entries) === 1 ? '' : 's' ?> &middot; <?= number_format((float)$totalHours, 1) ?>h total<br>
+              <?php
+                $dateLabels = array_map(fn($e) => date('D j M', strtotime($e['TS_DATE'])), $entries);
+                echo htmlspecialchars(implode(', ', $dateLabels));
+              ?>
+            </td>
+            <td style="padding:6px 4px;vertical-align:top;text-align:right">
+              <form method="post" action="approve_leave.php" style="display:inline" onsubmit="return confirm('Approve all <?= count($entries) ?> leave day(s) for <?= htmlspecialchars(addslashes($name)) ?>?');">
+                <input type="hidden" name="ts_ids" value="<?= htmlspecialchars(implode(',', $tsIds)) ?>">
+                <input type="submit" value="✓ Approve" style="background:#1a6b1a;color:#fff;border:none;padding:4px 10px;border-radius:3px;cursor:pointer;font-size:12px">
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </table>
+    </div>
     <?php endif; ?>
 
     <?php if ($isAdmin && !empty($pendingVariations)): ?>
