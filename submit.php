@@ -88,10 +88,29 @@ if ($locked === "true") {
         $delStmt = $pdo->prepare("DELETE FROM Timesheets WHERE TS_DATE BETWEEN ? AND ? AND Employee_id = ? AND Invoice_No = 0");
         $delStmt->execute([$weekStartISO, $weekEndISO, (int)$_SESSION['Employee_id']]);
 
-        // Compute next TS_ID once. If the column is now AUTO_INCREMENT this is
-        // still safe — MySQL will use whichever is higher.
-        $nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
-        $nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+        // ── Determine how to assign TS_ID on each insert ───────────────────
+        // schema_upgrades.sql turns TS_ID into AUTO_INCREMENT; once that's
+        // applied we should let MySQL pick the next ID and OMIT the column
+        // from our INSERT entirely. The previous "MAX(TS_ID)+1 then ++"
+        // approach raced with concurrent submits (and any stale row at
+        // TS_ID=0) and was producing the user-facing error
+        // "Duplicate entry '0' for key 'PRIMARY'" when filling missing
+        // weekdays. Feature-detect AUTO_INCREMENT and branch.
+        $tsIdAutoInc = false;
+        try {
+            $col = $pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'TS_ID'")->fetch(PDO::FETCH_ASSOC);
+            if ($col && stripos((string)($col['Extra'] ?? ''), 'auto_increment') !== false) {
+                $tsIdAutoInc = true;
+            }
+        } catch (Exception $e) { /* ignore — fall back to manual ID */ }
+
+        // Manual-ID fallback (only used when TS_ID is NOT auto-increment).
+        $nextTsId = 0;
+        if (!$tsIdAutoInc) {
+            $nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
+            $nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+            if ($nextTsId < 1) $nextTsId = 1; // belt-and-braces against 0
+        }
 
         // Detect new schema columns. Each falls back gracefully if missing.
         $hasTaskTypeId = false;
@@ -104,7 +123,12 @@ if ($locked === "true") {
         } catch (Exception $e) { /* ignore */ }
 
         // Build INSERT shape based on which columns exist
-        $cols = ['TS_ID','TS_DATE','Employee_id','proj_id','Task'];
+        $cols = [];
+        if (!$tsIdAutoInc)    $cols[] = 'TS_ID';     // omit on AUTO_INCREMENT
+        $cols[] = 'TS_DATE';
+        $cols[] = 'Employee_id';
+        $cols[] = 'proj_id';
+        $cols[] = 'Task';
         if ($hasTaskTypeId)   $cols[] = 'Task_Type_ID';
         if ($hasVariation)    $cols[] = 'Variation_ID';
         if ($hasProjTaskId)   $cols[] = 'Proj_Task_ID';
@@ -187,14 +211,19 @@ if ($locked === "true") {
                     $leaveApprovedVal = isset($preApprovedDates[$tsDate]) ? 1 : 0;
                 }
 
-                $params = [$nextTsId, $tsDate, $empId, $projId, $desc];
+                $params = [];
+                if (!$tsIdAutoInc) $params[] = $nextTsId;   // only when we're managing the PK ourselves
+                $params[] = $tsDate;
+                $params[] = $empId;
+                $params[] = $projId;
+                $params[] = $desc;
                 if ($hasTaskTypeId)    $params[] = $taskTypeId;
                 if ($hasVariation)     $params[] = $variationId;
                 if ($hasProjTaskId)    $params[] = $projTaskId;
                 if ($hasLeaveApproved) $params[] = $leaveApprovedVal;
                 $params[] = $hours;
                 $insStmt->execute($params);
-                $nextTsId++;
+                if (!$tsIdAutoInc) $nextTsId++;
             }
         }
         $pdo->commit();

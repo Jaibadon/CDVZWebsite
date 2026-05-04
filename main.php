@@ -390,26 +390,14 @@ document.addEventListener('DOMContentLoaded', function() {
     if (!f) return;
     f.addEventListener('submit', function(e) {
         if (!window.IS_FULLTIME) return;
-        if (window.IS_CURRENT_WEEK) {
-            recomputeCurrentWeekGap(); // sync with the latest edits
-            var miss = window.__currentWeekMissingDows || [];
-            if (miss.length > 0) {
-                if (!confirm('⚠ You haven’t logged ' + miss.join(', ') +
-                             ' yet this week.\n\nFull-time staff must log every weekday before ' +
-                             'today (project hours OR a leave/sick entry).\n\nSubmit anyway?')) {
-                    e.preventDefault();
-                }
-            }
-        } else if (!window.IS_FUTURE_WEEK && window.MISSING_LAST4_COUNT > 0) {
-            // Past-weeks nag fires when submitting a previous week with
-            // historic gaps. Future weeks (booking leave in advance)
-            // skip this — there's nothing to nag the user about yet.
-            if (!confirm('⚠ You still have ' + window.MISSING_LAST4_COUNT +
-                         ' missing weekday(s) in the past 4 weeks.\n\n' +
-                         'This week will be saved, but the gap remains until you fill those days ' +
-                         'too.\n\nSubmit anyway?')) {
-                e.preventDefault();
-            }
+        if (!window.IS_CURRENT_WEEK) return;   // backfilling / future week → no nag
+        recomputeCurrentWeekGap();             // sync with the latest edits
+        var miss = window.__currentWeekMissingDows || [];
+        if (miss.length === 0) return;
+        if (!confirm('⚠ You haven’t logged ' + miss.join(', ') +
+                     ' yet this week.\n\nFull-time staff must log every weekday before ' +
+                     'today (project hours OR an annual-leave entry).\n\nSubmit anyway?')) {
+            e.preventDefault();
         }
     });
 });
@@ -547,10 +535,12 @@ window.onload = function () {
 </div>
 
 <?php
-// Banner #1 (existing behavior, narrowed scope) — list missing weekdays in
-// previous weeks. The current week is handled separately by the live
-// JS-driven hint next to the submit button.
-if ($mustFillFullWeek && !empty($missingPrevWeeks)):
+// Banner #1 — list missing weekdays in previous weeks. Only shown on the
+// CURRENT week, where it acts as a "go back and fill these" call-to-action.
+// When the staff member is already on a previous week (i.e. backfilling),
+// they're presumably already doing what the alert would ask, so the banner
+// stays out of their way. Future weeks suppress it for the same reason.
+if ($mustFillFullWeek && $isViewingCurrentWeek && !empty($missingPrevWeeks)):
     $byWeek = [];
     foreach ($missingPrevWeeks as $d) {
         $dt2  = new DateTime($d);
@@ -608,16 +598,14 @@ if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYe
 
 <!-- ── Submit form ───────────────────────────────────────────────────────── -->
 <?php
-    // Initial state. On the current week, the JS recomputes this on every
-    // keystroke (so the button flips back to normal once Mon→yesterday is
-    // filled). On previous weeks we keep the original "any missing day in
-    // the last 4 weeks" rule so the historic banner & button stay aligned.
-    // On FUTURE weeks the gap nag never fires — the user is filling those
-    // in advance for annual leave, the past-weeks counter is irrelevant.
-    if (!$mustFillFullWeek)             $initialHasGap = false;
-    elseif ($isViewingCurrentWeek)      $initialHasGap = !empty($missingCurrWeekUpToYesterday);
-    elseif ($weekIsFuture)              $initialHasGap = false;
-    else                                $initialHasGap = !empty($missingWeekdays);
+    // Initial state. The red-button gap nag now ONLY fires on the current
+    // week (where the JS recomputes it on every keystroke based on
+    // Mon→yesterday). On previous weeks (backfilling) and future weeks
+    // (booking leave in advance) the button stays normal — the user is
+    // already doing the right thing and doesn't need the nag.
+    $initialHasGap = $mustFillFullWeek
+                  && $isViewingCurrentWeek
+                  && !empty($missingCurrWeekUpToYesterday);
 ?>
 <form action="submit.php" id="submit_form" name="submit_form" method="post" style="width:680px;margin:0 auto">
 <input type="hidden" name="hidden_week" value="<?= htmlspecialchars($weekStart) ?>">
@@ -626,10 +614,8 @@ if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYe
          value="<?= $initialHasGap ? '⚠ Submit (you have missing days)' : 'Submit Timesheet' ?>"
          style="padding:6px 16px;background:<?= $initialHasGap ? '#c33' : '#9B9B1B' ?>;color:#fff;border:none;cursor:pointer;border-radius:3px;font-weight:<?= $initialHasGap ? 'bold' : 'normal' ?>;<?= $initialHasGap ? 'box-shadow:0 0 0 2px #fff3cd inset;' : '' ?>">
   <span id="submit-hint" style="color:#a00;font-size:11px;margin-left:8px;<?= $initialHasGap ? '' : 'display:none' ?>">
-    <?php if ($initialHasGap && $isViewingCurrentWeek): ?>
+    <?php if ($initialHasGap): /* always current-week now — past/future weeks don't trigger the gap nag */ ?>
       <?= count($missingCurrWeekUpToYesterday) ?> weekday(s) missing this week — fill every weekday before today, then the button will go back to normal.
-    <?php elseif ($initialHasGap): ?>
-      <?= count($missingWeekdays) ?> missing weekday(s) in the past 4 weeks — submit will save what you've entered, but please go back and fill those too.
     <?php endif; ?>
   </span>
 </div>
