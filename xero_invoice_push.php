@@ -1,31 +1,40 @@
 <?php
 /**
- * Push a CADViz invoice to Xero (creates AUTHORISED invoice + optional email).
+ * Push a CADViz invoice to Xero (creates / updates AUTHORISED invoice).
  *
- * POST params:
+ * Two entry points:
+ *   1. POST handler (the "Push to Xero" / "Push + Email" buttons) — falls
+ *      through this file end to end and renders an HTML success page.
+ *   2. As a library — `require_once` this file with the
+ *      XERO_INVOICE_PUSH_LIBRARY_ONLY constant defined to expose
+ *      `push_invoice_to_xero(PDO, int): array` without running the
+ *      script. Used by lib_invoice_email.php so every "Email" click
+ *      pushes the invoice fresh first (so the attached PDF and email
+ *      body always match the latest local data).
+ *
+ * POST params (script mode):
  *   Invoice_No (required)  — local invoice number to push
- *   email      (optional)  — '1' to also trigger email send via Xero
+ *   email      (optional)  — '1' to also email the client after pushing
  */
-require_once 'auth_check.php';
-require_once 'db_connect.php';
-require_once 'helpers.php';
-require_once 'xero_client.php';
-require_once 'lib_invoice_email.php';
+require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/xero_client.php';
 
-if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
-    http_response_code(403); die('Admin only.');
-}
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405); die('POST only.');
-}
+/**
+ * Push (or re-push) a CADViz invoice to Xero. Throws on failure. Returns:
+ *   [
+ *     'xero_id'     => 'GUID',
+ *     'status'      => 'AUTHORISED' | 'PAID' | ...,
+ *     'amount_due'  => float,
+ *     'amount_paid' => float,
+ *     'due_date'    => 'YYYY-MM-DD',
+ *     'online_url'  => 'https://...' | '',
+ *   ]
+ */
+function push_invoice_to_xero(PDO $pdo, int $invoiceNo): array
+{
+    if ($invoiceNo <= 0) throw new Exception('Missing Invoice_No.');
 
-$invoiceNo = (int)($_POST['Invoice_No'] ?? 0);
-$alsoEmail = !empty($_POST['email']);
-if ($invoiceNo <= 0) die('Missing Invoice_No.');
-
-$pdo = get_db();
-
-try {
     $xc = new XeroClient($pdo);
 
     // Pull invoice header + client. Schema:
@@ -91,12 +100,26 @@ try {
     $multiplier = (float)($head['Multiplier'] ?? 1) ?: 1;
     $baseRate   = 90.00;
 
+    // NOTE on the multiplier: invoice_gen.php already bakes the client
+    // Multiplier into Timesheets.Rate when it generates the invoice
+    // (Rate = BILLING_RATE × Multiplier). Re-multiplying here would
+    // apply the discount/markup TWICE, which was the user-reported
+    // "doubling 10% discount" bug. We only multiply by $multiplier when
+    // we fall back to the base rate (since that path hasn't been touched
+    // by invoice_gen).
+
     $xeroLines = [];
     foreach ($items as $li) {
         $hrs  = (float)$li['Hours'];
         $rate = (float)$li['Rate'];
-        if ($rate <= 0) $rate = $baseRate;
-        $rate *= $multiplier;
+        if ($rate <= 0) {
+            // Fallback: legacy / fixed-cost timesheet rows where Rate
+            // wasn't set by invoice_gen.php. Apply the multiplier here
+            // because it never had a chance to be applied earlier.
+            $rate = $baseRate * $multiplier;
+        }
+        // else: $rate already includes the multiplier (baked in by
+        // invoice_gen.php) — DO NOT multiply again.
 
         $job        = trim((string)($li['JobName']    ?? ''));
         $task       = trim((string)($li['Task']       ?? ''));
@@ -193,20 +216,7 @@ try {
         $invoiceNo,
     ]);
 
-    // Optional: email the client. Routes through accounts@cadviz.co.nz
-    // (NOT Xero's mailer — Xero sends from a Xero-controlled From: address
-    // that hits client spam folders). lib_invoice_email.php is the single
-    // source of truth so this matches the Email-from-CADViz button exactly.
-    $emailedNote = '';
-    if ($alsoEmail) {
-        try {
-            $emailedNote = ' ' . send_invoice_email_via_smtp($pdo, $invoiceNo, false);
-        } catch (Exception $em) {
-            $emailedNote = ' WARNING: invoice created but email failed: ' . $em->getMessage();
-        }
-    }
-
-    // Online URL (handy for Erik to copy)
+    // Online URL (handy for the email body and the admin to copy)
     $onlineUrl = '';
     try {
         $onlineUrl = $xc->getOnlineInvoiceUrl($xeroId) ?? '';
@@ -216,14 +226,64 @@ try {
         }
     } catch (Exception $u) { /* non-fatal */ }
 
+    return [
+        'xero_id'     => $xeroId,
+        'status'      => $xeroResp['Status']     ?? 'AUTHORISED',
+        'amount_due'  => (float)($xeroResp['AmountDue']  ?? 0),
+        'amount_paid' => (float)($xeroResp['AmountPaid'] ?? 0),
+        'due_date'    => $invoiceBody['DueDate'],
+        'online_url'  => (string)$onlineUrl,
+    ];
+}
+
+// ── Library mode: stop here when the file is required just to expose
+//    the push_invoice_to_xero() function. lib_invoice_email.php sets
+//    XERO_INVOICE_PUSH_LIBRARY_ONLY before requiring so the script body
+//    below never fires from inside the email path.
+if (defined('XERO_INVOICE_PUSH_LIBRARY_ONLY')) return;
+
+// ── Script mode: POST handler for the "Push to Xero" / "Push + Email" buttons.
+require_once __DIR__ . '/auth_check.php';
+require_once __DIR__ . '/lib_invoice_email.php';
+
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403); die('Admin only.');
+}
+if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+    http_response_code(405); die('POST only.');
+}
+
+$invoiceNo = (int)($_POST['Invoice_No'] ?? 0);
+$alsoEmail = !empty($_POST['email']);
+if ($invoiceNo <= 0) die('Missing Invoice_No.');
+
+$pdo = get_db();
+
+try {
+    $result = push_invoice_to_xero($pdo, $invoiceNo);
+
+    // Optional: email the client. Routes through accounts@cadviz.co.nz
+    // (NOT Xero's mailer — Xero sends from a Xero-controlled From: address
+    // that hits client spam folders). Pass skipPush=true so the email
+    // helper doesn't push AGAIN — we just did it ourselves above.
+    $emailedNote = '';
+    if ($alsoEmail) {
+        try {
+            $emailedNote = ' ' . send_invoice_email_via_smtp($pdo, $invoiceNo, false, true);
+        } catch (Exception $em) {
+            $emailedNote = ' WARNING: invoice created but email failed: ' . $em->getMessage();
+        }
+    }
     ?>
     <!DOCTYPE html><html><head><meta charset="utf-8"><link href="site.css" rel="stylesheet"></head><body>
     <div class="page"><div class="card" style="background:#d6f5d6;border:2px solid #1a6b1a">
-      <h2 style="margin-top:0;color:#1a6b1a">✓ Invoice #<?= $invoiceNo ?> pushed to Xero</h2>
-      <p>Status: <strong><?= htmlspecialchars($xeroResp['Status'] ?? '?') ?></strong>
-         &middot; Xero InvoiceID: <code><?= htmlspecialchars($xeroId) ?></code></p>
+      <h2 style="margin-top:0;color:#1a6b1a">&#10003; Invoice #<?= $invoiceNo ?> pushed to Xero</h2>
+      <p>Status: <strong><?= htmlspecialchars($result['status']) ?></strong>
+         &middot; Xero InvoiceID: <code><?= htmlspecialchars($result['xero_id']) ?></code></p>
       <?php if ($emailedNote): ?><p><?= htmlspecialchars($emailedNote) ?></p><?php endif; ?>
-      <?php if ($onlineUrl): ?><p>Online invoice URL: <a href="<?= htmlspecialchars($onlineUrl) ?>" target="_blank"><?= htmlspecialchars($onlineUrl) ?></a></p><?php endif; ?>
+      <?php if (!empty($result['online_url'])): ?>
+        <p>Online invoice URL: <a href="<?= htmlspecialchars($result['online_url']) ?>" target="_blank"><?= htmlspecialchars($result['online_url']) ?></a></p>
+      <?php endif; ?>
       <p><a href="invoice.php?Invoice_No=<?= $invoiceNo ?>" class="btn-primary">Back to invoice</a> &nbsp; <a href="invoice_list.php">Invoice list</a></p>
     </div></div></body></html>
     <?php
@@ -231,7 +291,7 @@ try {
     ?>
     <!DOCTYPE html><html><head><meta charset="utf-8"><link href="site.css" rel="stylesheet"></head><body>
     <div class="page"><div class="card" style="background:#ffd6d6;border:2px solid #c33;color:#a00">
-      <h2 style="margin-top:0;color:#a00">✗ Push to Xero failed</h2>
+      <h2 style="margin-top:0;color:#a00">&#10007; Push to Xero failed</h2>
       <pre><?= htmlspecialchars($e->getMessage()) ?></pre>
       <p><a href="invoice.php?Invoice_No=<?= $invoiceNo ?>">Back</a></p>
     </div></div></body></html>
