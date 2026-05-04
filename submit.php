@@ -88,29 +88,25 @@ if ($locked === "true") {
         $delStmt = $pdo->prepare("DELETE FROM Timesheets WHERE TS_DATE BETWEEN ? AND ? AND Employee_id = ? AND Invoice_No = 0");
         $delStmt->execute([$weekStartISO, $weekEndISO, (int)$_SESSION['Employee_id']]);
 
-        // ── Determine how to assign TS_ID on each insert ───────────────────
-        // schema_upgrades.sql turns TS_ID into AUTO_INCREMENT; once that's
-        // applied we should let MySQL pick the next ID and OMIT the column
-        // from our INSERT entirely. The previous "MAX(TS_ID)+1 then ++"
-        // approach raced with concurrent submits (and any stale row at
-        // TS_ID=0) and was producing the user-facing error
-        // "Duplicate entry '0' for key 'PRIMARY'" when filling missing
-        // weekdays. Feature-detect AUTO_INCREMENT and branch.
-        $tsIdAutoInc = false;
-        try {
-            $col = $pdo->query("SHOW COLUMNS FROM Timesheets LIKE 'TS_ID'")->fetch(PDO::FETCH_ASSOC);
-            if ($col && stripos((string)($col['Extra'] ?? ''), 'auto_increment') !== false) {
-                $tsIdAutoInc = true;
-            }
-        } catch (Exception $e) { /* ignore — fall back to manual ID */ }
+        // ── TS_ID assignment ──────────────────────────────────────────────
+        // We've seen intermittent "Duplicate entry '0' for key 'PRIMARY'"
+        // failures from a few different sources:
+        //   • stale TS_ID=0 row left over from legacy data — undeleteable
+        //     by the per-week DELETE above because its TS_DATE is NULL or
+        //     out of range
+        //   • schema where the column has DEFAULT 0 but AUTO_INCREMENT
+        //     either isn't applied or isn't kicking in
+        //   • two concurrent submits racing on MAX(TS_ID)+1
+        //
+        // Bulletproof approach: zap any TS_ID=0 zombie up front, ALWAYS
+        // pass an explicit MAX+1 (MySQL accepts that on AUTO_INCREMENT
+        // columns and advances its counter), and retry inserts on
+        // duplicate-key with a fresh MAX+1 if a race ever sneaks one in.
+        try { $pdo->exec("DELETE FROM Timesheets WHERE TS_ID = 0"); } catch (Exception $e) { /* non-fatal */ }
 
-        // Manual-ID fallback (only used when TS_ID is NOT auto-increment).
-        $nextTsId = 0;
-        if (!$tsIdAutoInc) {
-            $nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
-            $nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
-            if ($nextTsId < 1) $nextTsId = 1; // belt-and-braces against 0
-        }
+        $nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
+        $nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+        if ($nextTsId < 1) $nextTsId = 1;
 
         // Detect new schema columns. Each falls back gracefully if missing.
         $hasTaskTypeId = false;
@@ -123,12 +119,7 @@ if ($locked === "true") {
         } catch (Exception $e) { /* ignore */ }
 
         // Build INSERT shape based on which columns exist
-        $cols = [];
-        if (!$tsIdAutoInc)    $cols[] = 'TS_ID';     // omit on AUTO_INCREMENT
-        $cols[] = 'TS_DATE';
-        $cols[] = 'Employee_id';
-        $cols[] = 'proj_id';
-        $cols[] = 'Task';
+        $cols = ['TS_ID','TS_DATE','Employee_id','proj_id','Task'];
         if ($hasTaskTypeId)   $cols[] = 'Task_Type_ID';
         if ($hasVariation)    $cols[] = 'Variation_ID';
         if ($hasProjTaskId)   $cols[] = 'Proj_Task_ID';
@@ -211,19 +202,32 @@ if ($locked === "true") {
                     $leaveApprovedVal = isset($preApprovedDates[$tsDate]) ? 1 : 0;
                 }
 
-                $params = [];
-                if (!$tsIdAutoInc) $params[] = $nextTsId;   // only when we're managing the PK ourselves
-                $params[] = $tsDate;
-                $params[] = $empId;
-                $params[] = $projId;
-                $params[] = $desc;
+                $params = [$nextTsId, $tsDate, $empId, $projId, $desc];
                 if ($hasTaskTypeId)    $params[] = $taskTypeId;
                 if ($hasVariation)     $params[] = $variationId;
                 if ($hasProjTaskId)    $params[] = $projTaskId;
                 if ($hasLeaveApproved) $params[] = $leaveApprovedVal;
                 $params[] = $hours;
-                $insStmt->execute($params);
-                if (!$tsIdAutoInc) $nextTsId++;
+
+                // Retry-on-duplicate: a stale row, race, or weird default
+                // can leave the candidate TS_ID already taken. Refetch
+                // MAX+1 and bump $nextTsId; cap at 5 attempts to avoid an
+                // infinite loop if something is genuinely wrong.
+                $attempts = 0;
+                while (true) {
+                    try {
+                        $insStmt->execute($params);
+                        break;
+                    } catch (PDOException $insErr) {
+                        $isDupe = ($insErr->getCode() === '23000' || strpos($insErr->getMessage(), '1062') !== false);
+                        if (!$isDupe || ++$attempts >= 5) throw $insErr;
+                        $r = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
+                        $fresh = (int)$r->fetch(PDO::FETCH_ASSOC)['nxt'];
+                        $nextTsId = max($fresh, $nextTsId + 1, 1);
+                        $params[0] = $nextTsId;   // TS_ID is always the first param
+                    }
+                }
+                $nextTsId++;
             }
         }
         $pdo->commit();
