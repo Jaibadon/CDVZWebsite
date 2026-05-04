@@ -100,11 +100,30 @@ $subtot = 0;
 foreach ($timesheets as $ts) {
     $subtot += (float)$ts['amt'];
 }
+
+// "TAX INVOICE" vs "CREDIT NOTICE" — anything with a negative subtotal
+// (computed-from-timesheets OR stored) is a credit note. We just retitle
+// the same page instead of redirecting to a separate credit_notice.php
+// (the old redirect ran after HTML had already started — the header()
+// call silently failed and you got stuck on a half-rendered page).
+$storedSub = $rs['Subtotal'] !== null ? (float)$rs['Subtotal'] : null;
+$isCredit  = ($subtot < 0) || ($storedSub !== null && $storedSub < 0);
+$docLabel  = $isCredit ? 'CREDIT NOTICE' : 'TAX INVOICE';
+
+// Enter-key target. Send the user back to wherever they came from
+// (invoice_list.php?client=950, monthly_invoicing.php, etc.) instead of
+// always the global invoice list. Falls back to invoice_list.php when
+// referer is missing or would bounce back to this same page.
+$enterTarget = $_SERVER['HTTP_REFERER'] ?? '';
+$selfPath    = $_SERVER['REQUEST_URI'] ?? '';
+if ($enterTarget === '' || ($selfPath !== '' && strpos($enterTarget, basename($selfPath)) !== false)) {
+    $enterTarget = 'invoice_list.php';
+}
 ?>
 <script language="Javascript">
 	document.onkeydown = function() {
 		if (event.keyCode == 13) {
-			window.location="invoice_list.php"
+			window.location = <?= json_encode($enterTarget) ?>;
 		}
 	}
 </script>
@@ -116,7 +135,7 @@ foreach ($timesheets as $ts) {
 <!-- style sheet -->
 <link href="site.css" rel="stylesheet">
 <link href="invoice.css" rel="stylesheet" type="text/css" />
-<title>CADviz_INV<?= htmlspecialchars($rs['Invoice_No']) ?></title>
+<title>CADViz <?= $isCredit ? 'CN' : 'INV' ?>-<?= htmlspecialchars((string)$rs['Invoice_No']) ?></title>
 <basefont face="arial" size="2">
 <style type="text/css">
 .style1 { text-align: left; }
@@ -139,7 +158,7 @@ foreach ($timesheets as $ts) {
 <table width="653" border="0">
       <tr class="style3">
         <td width="207" rowspan="4" valign="top"><img src="cadviz_logo_bw1.gif" width="200" height="89" alt="CADVIZ"></td>
-        <td width="274" rowspan="4" class="style3"><div align="center">TAX INVOICE</div></td>
+        <td width="274" rowspan="4" class="style3"><div align="center"><?= $docLabel ?></div></td>
         <td width="158"><p align="right" class="nrml">&nbsp;</p></td>
       </tr>
       <tr class="style3">
@@ -237,13 +256,11 @@ if (is_null($rs['Subtotal'])) {
     $pdo->exec("UPDATE Invoices SET Subtotal = $subtot WHERE Invoice_No = " . (int)$invoice_no);
     $rs['Subtotal'] = $subtot;
 }
-if ($subtot >= 0) {
-    echo '$' . number_format((float)$rs['Subtotal'], 2);
-} else {
-    echo "REDIRECTING TO CREDIT NOTICE...";
-    header('Location: credit_notice.php?invoice_no=' . (int)$invoice_no);
-    exit;
-}
+// Negative subtotals just retitle the page to "CREDIT NOTICE" above —
+// no redirect to a separate credit_notice.php (the old redirect was
+// dead code anyway because output buffering had already started so
+// header() couldn't actually fire).
+echo '$' . number_format((float)$rs['Subtotal'], 2);
 ?>
     </td>
   </tr>

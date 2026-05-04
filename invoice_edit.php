@@ -96,11 +96,22 @@ function print_dd_box($pdo, $table_name, $index_name, $display_name, $default_va
     }
     echo '</SELECT>';
 }
+
+// Enter-key target — go back to the referring page (e.g. a filtered
+// invoice_list.php?client=950, monthly_invoicing.php, invoices_for_job.php)
+// instead of always the global list. Falls back to invoice_list.php when
+// referer is missing OR would bounce back to this same page (which can
+// happen after the form's own POST → redirect cycle).
+$enterTarget = $_SERVER['HTTP_REFERER'] ?? '';
+$selfBase    = basename(parse_url($_SERVER['REQUEST_URI'] ?? '', PHP_URL_PATH) ?? '');
+if ($enterTarget === '' || ($selfBase !== '' && strpos($enterTarget, $selfBase) !== false)) {
+    $enterTarget = 'invoice_list.php';
+}
 ?>
 <script language="Javascript">
 	document.onkeydown = function() {
 		if (event.keyCode == 13) {
-			window.location="invoice_list.php"
+			window.location = <?= json_encode($enterTarget) ?>;
 		}
 	}
 </script>
