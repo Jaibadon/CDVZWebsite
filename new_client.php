@@ -117,11 +117,11 @@ if ($_SESSION['UserID'] == "jen") {
     </tr>
     <tr>
       <td><font color=#9B9B1B size="2"><b>Email:</b></font></td>
-      <td><input type="email" name="email" size="35" value=""></td>
+      <td><input type="text" name="email" size="50" value="" placeholder="single@example.com OR ap@example.com; cfo@example.com">&nbsp;<font size="1" color="#666">(separate multiple addresses with <strong>;</strong> or <strong>,</strong>)</font></td>
     </tr>
     <tr>
       <td><font color=#9B9B1B size="2"><b>Billing Email:</b></font></td>
-      <td><input type="email" name="Billing_Email" size="35" value="">&nbsp;<font size="1" color="#666">(used for invoices/statements; falls back to Email if blank/invalid)</font></td>
+      <td><input type="text" name="Billing_Email" size="50" value="" placeholder="single@example.com OR ap@example.com; cfo@example.com">&nbsp;<font size="1" color="#666">(used for invoices/statements; falls back to Email if blank/invalid; <strong>multiple addresses can be separated by ; or ,</strong>)</font></td>
     </tr>
     <tr>
       <td><font color=#9B9B1B size="2"><b>Multiplier:</b></font></td>
