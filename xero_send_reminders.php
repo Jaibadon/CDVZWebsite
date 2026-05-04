@@ -52,6 +52,39 @@ $pdo     = get_db();
 $dryRun  = $isCli ? in_array('dry-run', $argv, true) : !empty($_GET['dry_run']);
 $singleInvoice = (int)($_GET['invoice_no'] ?? 0);
 
+// ── Test mode ─────────────────────────────────────────────────────────────
+// When enabled, every reminder / statement gets diverted to a single test
+// inbox instead of the actual client address. Subject lines are prefixed
+// "[TEST]" so the recipient can tell at a glance. Spam guards / Sent flag
+// updates / xero SentToContact are all SKIPPED so a real client never
+// has their state mutated by a test run.
+//
+// Activate one of:
+//   web :  ?test=1                                   (web admin run)
+//          ?test=1&test_to=erik@cadviz.co.nz         (override recipient)
+//          ?test=1&force_days=45                     (preview a specific tone)
+//          ?test=1&force_days=45&force_tone=final    (override the tone)
+//   CLI :  php xero_send_reminders.php cron test
+//          CADVIZ_REMINDER_TEST_MODE=1 php …
+//          CADVIZ_REMINDER_TEST_TO=foo@bar.com php …
+$testMode = false;
+if ($isCli) {
+    $testMode = in_array('test', $argv ?? [], true) || !empty($_ENV['CADVIZ_REMINDER_TEST_MODE']) || getenv('CADVIZ_REMINDER_TEST_MODE');
+} else {
+    $testMode = !empty($_GET['test']);
+}
+// Pick the test recipient: explicit override → env → default to current user's email when web,
+// else fallback to the CADViz accounts inbox.
+$testTo = $_GET['test_to'] ?? $_ENV['CADVIZ_REMINDER_TEST_TO'] ?? getenv('CADVIZ_REMINDER_TEST_TO') ?? '';
+if ($testTo === '' || $testTo === false) $testTo = 'accounts@cadviz.co.nz';
+$forceDays = isset($_GET['force_days']) ? (int)$_GET['force_days'] : null;
+$forceTone = $_GET['force_tone'] ?? null; // gentle | reminder | firm | very_firm | final
+
+if ($testMode) {
+    // Loosen guards in test mode so the same invoice can be re-sent at will.
+    $minGapDays = 0;
+}
+
 // Always sync from Xero before deciding who to remind, so that invoices
 // paid since the last sync don't get a reminder. Errors are non-fatal —
 // fall through to the existing local view if Xero is unreachable.
@@ -143,24 +176,26 @@ $sent = []; $skipped = [];
  *   'send'     — yes, eligible
  *   'skip:...' — reason to skip (passed back as $skipped[$invNo])
  */
-$shouldRemind = function(array $r) use ($singleInvoice, $reminderStages, $reminderHardStop, $minGapDays) {
+$shouldRemind = function(array $r) use ($singleInvoice, $reminderStages, $reminderHardStop, $minGapDays, $testMode) {
     $days = (int)$r['days_overdue'];
 
-    // Opt-in default — only send for invoices Erik flipped on.
-    if (empty($r['reminder_started']) && $singleInvoice <= 0) {
+    // Opt-in default — only send for invoices Erik flipped on. Test mode
+    // and per-row manual sends bypass.
+    if (!$testMode && empty($r['reminder_started']) && $singleInvoice <= 0) {
         return 'skip:reminders not started for this invoice (use Start Reminders on monthly_invoicing)';
     }
     // Hard stop — final notice goes out at 60d; cron does not auto-send past that.
-    if ($days > $reminderHardStop && $singleInvoice <= 0) {
+    if (!$testMode && $days > $reminderHardStop && $singleInvoice <= 0) {
         return "skip:past hard-stop ({$days}d overdue, cap {$reminderHardStop}d) — handle manually";
     }
-    // Stage match — exact day = 7, 14, 30, 45, 60.
+    // Stage match — exact day = 7, 14, 30, 45, 60. Test mode skips the
+    // schedule check (since we may have force-overridden $days for tone preview).
     $isStage = in_array($days, $reminderStages, true);
-    if (!$isStage && $singleInvoice <= 0) {
+    if (!$testMode && !$isStage && $singleInvoice <= 0) {
         return "skip:not on reminder schedule (overdue $days d)";
     }
-    // Spam guard
-    if ($r['last_reminder_at']) {
+    // Spam guard (skipped in test mode so tones can be re-fired back-to-back)
+    if (!$testMode && $r['last_reminder_at']) {
         $hoursSince = (time() - strtotime($r['last_reminder_at'])) / 3600;
         if ($hoursSince < ($minGapDays * 24) && $singleInvoice <= 0) {
             return 'skip:reminded ' . round($hoursSince) . 'h ago';
@@ -169,11 +204,31 @@ $shouldRemind = function(array $r) use ($singleInvoice, $reminderStages, $remind
     return 'send';
 };
 
+// In test mode, optionally pin every row's days_overdue to a value so the
+// admin can preview a specific tone without waiting for time to pass.
+// force_tone wins; else force_days; else the row's real days_overdue.
+$forceDaysFromTone = [
+    'gentle'    => 7,
+    'reminder'  => 14,
+    'firm'      => 30,
+    'very_firm' => 45,
+    'final'     => 60,
+][$forceTone ?? ''] ?? null;
+$daysOverride = $forceDaysFromTone ?? $forceDays;
+
+$subjectTestPrefix = $testMode ? '[TEST] ' : '';
+
 // ── Main loop: per client ────────────────────────────────────────────────
 foreach ($byClient as $cid => $g) {
     if (count($sent) >= $cap) break;
     /** @var array $overdueRows */
     $overdueRows = $g['overdue'];
+    if ($daysOverride !== null) {
+        // Apply override BEFORE the per-row $shouldRemind closure runs,
+        // so the tone-preview path doesn't get killed by the schedule check.
+        foreach ($overdueRows as &$ovr) $ovr['days_overdue'] = (int)$daysOverride;
+        unset($ovr);
+    }
     $multipleOverdue = count($overdueRows) >= 2;
 
     // If single-invoice override (?invoice_no=N) and this client doesn't
@@ -188,12 +243,17 @@ foreach ($byClient as $cid => $g) {
     // every row of theirs). Skip the whole client if neither billing_email
     // nor email is valid — flag every row so it's visible in the report.
     $first   = $overdueRows[0];
-    $toAddrs = pick_billing_emails($first['billing_email'] ?? null, $first['email'] ?? null);
-    if (empty($toAddrs)) {
-        foreach ($overdueRows as $r) {
-            $skipped[(int)$r['Invoice_No']] = 'no valid email on Clients (Billing Email / Email)';
+    if ($testMode) {
+        // Divert: a real client never sees a test send.
+        $toAddrs = [$testTo];
+    } else {
+        $toAddrs = pick_billing_emails($first['billing_email'] ?? null, $first['email'] ?? null);
+        if (empty($toAddrs)) {
+            foreach ($overdueRows as $r) {
+                $skipped[(int)$r['Invoice_No']] = 'no valid email on Clients (Billing Email / Email)';
+            }
+            continue;
         }
-        continue;
     }
     $toLabel = implode(', ', $toAddrs);
 
@@ -214,8 +274,9 @@ foreach ($byClient as $cid => $g) {
             continue;
         }
 
-        // Per-client statement spam guard
-        if (!empty($clientLastStatement[$cid]) && $singleInvoice <= 0) {
+        // Per-client statement spam guard (skipped in test mode so admin
+        // can re-fire the same scenario back-to-back).
+        if (!$testMode && !empty($clientLastStatement[$cid]) && $singleInvoice <= 0) {
             $hoursSinceStatement = (time() - strtotime($clientLastStatement[$cid])) / 3600;
             if ($hoursSinceStatement < ($minGapDays * 24)) {
                 foreach ($overdueRows as $r) {
@@ -234,14 +295,19 @@ foreach ($byClient as $cid => $g) {
 
         try {
             $maxDays = max(array_map(fn($r) => (int)$r['days_overdue'], $overdueRows));
-            sendOverdueStatement($pdo, $first, $overdueRows, $toAddrs);
-            meta_set($pdo, 'reminder_statement_last_' . $cid, date('Y-m-d H:i:s'));
-            // Mark every covered invoice's reminder_last so the spam guard
-            // applies whether the next batch picks individual or statement.
-            foreach ($overdueRows as $r) {
-                $invNo = (int)$r['Invoice_No'];
-                meta_set($pdo, 'reminder_last_' . $invNo, date('Y-m-d H:i:s'));
-                $sent[$invNo] = "covered in statement to {$toLabel} ({$maxDays}d worst-overdue)";
+            sendOverdueStatement($pdo, $first, $overdueRows, $toAddrs, $subjectTestPrefix);
+            if (!$testMode) {
+                meta_set($pdo, 'reminder_statement_last_' . $cid, date('Y-m-d H:i:s'));
+                foreach ($overdueRows as $r) {
+                    $invNo = (int)$r['Invoice_No'];
+                    meta_set($pdo, 'reminder_last_' . $invNo, date('Y-m-d H:i:s'));
+                    $sent[$invNo] = "covered in statement to {$toLabel} ({$maxDays}d worst-overdue)";
+                }
+            } else {
+                foreach ($overdueRows as $r) {
+                    $invNo = (int)$r['Invoice_No'];
+                    $sent[$invNo] = "[TEST] would have included in statement to {$toLabel} ({$maxDays}d worst-overdue)";
+                }
             }
         } catch (Exception $e) {
             foreach ($overdueRows as $r) {
@@ -264,15 +330,19 @@ foreach ($byClient as $cid => $g) {
     if ($dryRun) { $sent[$invNo] = '(dry-run) would have reminded ' . $toLabel; continue; }
 
     try {
-        sendReminder($pdo, $r, $toAddrs);
-        meta_set($pdo, 'reminder_last_' . $invNo, date('Y-m-d H:i:s'));
-        $sent[$invNo] = 'sent to ' . $toLabel . " ({$days}d overdue)";
+        sendReminder($pdo, $r, $toAddrs, $subjectTestPrefix);
+        if (!$testMode) {
+            meta_set($pdo, 'reminder_last_' . $invNo, date('Y-m-d H:i:s'));
+            $sent[$invNo] = 'sent to ' . $toLabel . " ({$days}d overdue)";
+        } else {
+            $sent[$invNo] = "[TEST] reminder sent to {$toLabel} ({$days}d overdue, tone preview)";
+        }
     } catch (Exception $e) {
         $skipped[$invNo] = 'FAILED: ' . $e->getMessage();
     }
 }
 
-function sendReminder(PDO $pdo, array $r, array $toAddrs): void {
+function sendReminder(PDO $pdo, array $r, array $toAddrs, string $testPrefix = ''): void {
     $invNumStr = 'CAD-' . str_pad((string)$r['Invoice_No'], 5, '0', STR_PAD_LEFT);
     $totalIncTax = (float)$r['Subtotal'] * (1 + (float)$r['Tax_Rate']);
     // Greet by Contact first name; fallback to "Valued Customer".
@@ -349,7 +419,7 @@ function sendReminder(PDO $pdo, array $r, array $toAddrs): void {
         'to'       => $toAddrs,
         'bcc'      => ['accounts@cadviz.co.nz'],
         'reply_to' => 'accounts@cadviz.co.nz',
-        'subject'  => "{$subjectPrefix}: Invoice {$invNumStr} ({$days} days overdue)",
+        'subject'  => $testPrefix . "{$subjectPrefix}: Invoice {$invNumStr} ({$days} days overdue)",
         'text'     => $text,
         'html'     => $html,
     ]);
@@ -362,7 +432,7 @@ function sendReminder(PDO $pdo, array $r, array $toAddrs): void {
  * off the WORST-overdue invoice in the bundle (so a client with one 60d
  * + four 7d invoices gets a final-notice tone, not a gentle one).
  */
-function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, array $toAddrs): void {
+function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, array $toAddrs, string $testPrefix = ''): void {
     require_once __DIR__ . '/xero_client.php';
     $xc = new XeroClient($pdo);
 
@@ -497,7 +567,7 @@ function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, ar
         'to'          => $toAddrs,
         'bcc'         => ['accounts@cadviz.co.nz'],
         'reply_to'    => 'accounts@cadviz.co.nz',
-        'subject'     => "{$subjectPrefix}: {$count} overdue invoice(s) for " . ($clientName ?: 'your account') . " ({$totalStr})",
+        'subject'     => $testPrefix . "{$subjectPrefix}: {$count} overdue invoice(s) for " . ($clientName ?: 'your account') . " ({$totalStr})",
         'text'        => $text,
         'html'        => $html,
         'attachments' => $attachments,
@@ -506,7 +576,12 @@ function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, ar
 
 // ── Output ────────────────────────────────────────────────────────────────
 if ($isCli) {
-    echo "Reminders run @ " . date('c') . ($dryRun ? ' (DRY RUN)' : '') . "\n";
+    echo "Reminders run @ " . date('c')
+       . ($dryRun ? ' (DRY RUN)' : '')
+       . ($testMode ? " (TEST MODE → diverted to {$testTo}"
+                       . ($daysOverride !== null ? ", forcing days={$daysOverride}" : '')
+                       . ")" : '')
+       . "\n";
     echo "  xero sync: updated=" . (int)($syncResult['updated'] ?? 0)
        . ", paid_marked=" . (int)($syncResult['paid_marked'] ?? 0) . "\n";
     foreach (($syncResult['errors'] ?? []) as $e) echo "    SYNC ERROR: $e\n";
@@ -520,7 +595,14 @@ if ($isCli) {
 <!DOCTYPE html>
 <html><head><meta charset="utf-8"><link href="site.css" rel="stylesheet"><title>Send reminders</title></head>
 <body><div class="page"><div class="card">
-  <h2>Overdue reminders<?= $dryRun ? ' — DRY RUN' : '' ?></h2>
+  <h2>Overdue reminders<?= $dryRun ? ' &mdash; DRY RUN' : '' ?><?= $testMode ? ' &mdash; TEST MODE' : '' ?></h2>
+  <?php if ($testMode): ?>
+    <div style="background:#fff3cd;border:1px solid #c8a52e;color:#7a5a00;padding:8px 12px;border-radius:4px;margin-bottom:12px">
+      <strong>Test mode:</strong> all emails diverted to <code><?= htmlspecialchars($testTo) ?></code>.
+      Spam guards relaxed, opt-in flag bypassed, Sent flags / reminder_last NOT updated.
+      <?php if ($daysOverride !== null): ?>Tone preview: forcing days_overdue=<strong><?= (int)$daysOverride ?></strong>.<?php endif; ?>
+    </div>
+  <?php endif; ?>
   <p style="color:#246">Xero sync: <strong><?= (int)($syncResult['updated'] ?? 0) ?></strong> invoices refreshed,
      <strong><?= (int)($syncResult['paid_marked'] ?? 0) ?></strong> auto-marked PAID before this run.</p>
   <?php foreach (($syncResult['errors'] ?? []) as $e): ?>

@@ -210,6 +210,19 @@ if ($xeroConnected) {
           <a href="xero_send_reminders.php?dry_run=1" target="_blank">Preview reminder run (dry-run)</a>
           &nbsp;|&nbsp;
           <a href="xero_send_reminders.php" target="_blank" onclick="return confirm('Send overdue reminders to ALL clients due for one right now?\n\nXero is synced first, paid invoices are skipped, opt-in flag is required, and each email asks the client to disregard if already paid. Continue?');">Run reminder batch now</a>
+          <br>
+          <strong style="color:#7a5a00">Test mode (no real client emails):</strong>
+          <a href="xero_send_reminders.php?test=1" target="_blank">Run with diversion only</a>
+          &middot;
+          <a href="xero_send_reminders.php?test=1&force_tone=gentle"    target="_blank">7d / gentle</a>
+          &middot;
+          <a href="xero_send_reminders.php?test=1&force_tone=reminder"  target="_blank">14d / reminder</a>
+          &middot;
+          <a href="xero_send_reminders.php?test=1&force_tone=firm"      target="_blank">30d / firm</a>
+          &middot;
+          <a href="xero_send_reminders.php?test=1&force_tone=very_firm" target="_blank">45d / very_firm</a>
+          &middot;
+          <a href="xero_send_reminders.php?test=1&force_tone=final"     target="_blank">60d / final</a>
         </p>
         <table class="table">
           <tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Email</th><th>Due</th><th class="right">Amount Due</th><th>Status</th><th>Last reminder</th><th>Action</th></tr>

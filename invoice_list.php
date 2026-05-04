@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
@@ -9,6 +10,27 @@ if (empty($_SESSION['UserID'])) {
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403);
     echo '<p>Admin only. <a href="menu.php">Back to menu</a></p>';
+    exit;
+}
+
+// ── Start / stop automatic reminders for a single invoice ───────────
+// Mirrors the monthly_invoicing.php handler so admins can flip the
+// reminder opt-in flag straight from the day-to-day invoice list. Same
+// App_Meta key (reminder_started_<n>) so the cron path picks it up
+// automatically.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_reminders') {
+    $pdoForToggle = get_db();
+    $invNo = (int)($_POST['invoice_no'] ?? 0);
+    if ($invNo > 0) {
+        $key = 'reminder_started_' . $invNo;
+        $cur = meta_get($pdoForToggle, $key);
+        if (!empty($cur)) {
+            try { $pdoForToggle->prepare("DELETE FROM App_Meta WHERE meta_key = ?")->execute([$key]); } catch (Exception $e) {}
+        } else {
+            meta_set($pdoForToggle, $key, 'started by ' . ($_SESSION['UserID'] ?? '?') . ' on ' . date('Y-m-d'));
+        }
+    }
+    header('Location: invoice_list.php');
     exit;
 }
 ?>
@@ -211,6 +233,26 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
                . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
                . "<input type=\"submit\" value=\"&#9993; " . ($sentFlag !== 0 ? 'Re-email from CADViz' : 'Email from CADViz') . "\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
                . "</form>";
+
+            // Start / Stop reminders toggle — shown only on Xero-pushed
+            // unpaid invoices (paid invoices don't trigger reminders even
+            // if started). Same App_Meta key as monthly_invoicing.php.
+            if ($xs !== 'PAID') {
+                $started     = !empty(meta_get(get_db(), 'reminder_started_' . (int)$invNo));
+                $startBg     = $started ? '#666' : '#1a6b1a';
+                $startLabel  = $started ? '&#128276; Stop reminders' : '&#128276; Start reminders';
+                $startTitle  = $started
+                    ? "Cron is sending automatic reminders on the 7/14/30/45/60-day stages. Click to stop."
+                    : "Reminders are OFF for this invoice (default). Click to enable cron-driven reminders.";
+                $confirmMsg  = $started
+                    ? "Stop automatic reminders for #$invNo?\\n\\nCron will stop emailing the client about this invoice. The per-row Send reminder button on Monthly Invoicing still works."
+                    : "Start automatic reminders for #$invNo?\\n\\nCron will email the client on the 7/14/30/45/60-day overdue stages until paid. The 60-day final notice is the hard-stop.";
+                echo " <form method=\"post\" action=\"invoice_list.php\" style=\"display:inline\" onsubmit=\"return confirm('$confirmMsg');\">"
+                   . "<input type=\"hidden\" name=\"action\" value=\"toggle_reminders\">"
+                   . "<input type=\"hidden\" name=\"invoice_no\" value=\"" . (int)$invNo . "\">"
+                   . "<input type=\"submit\" value=\"$startLabel\" title=\"$startTitle\" style=\"background:$startBg;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:4px\">"
+                   . "</form>";
+            }
         }
     } else {
         if ($checked) {
