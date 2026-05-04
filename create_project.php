@@ -35,9 +35,13 @@ $activeIn  = $_POST['ACTIVE'] ?? $_POST['Active'] ?? '';
 $ACT       = (strtoupper($activeIn) === 'ON') ? 1 : 0;
 $projType  = (isset($_POST['Project_Type']) && $_POST['Project_Type'] !== '') ? (int)$_POST['Project_Type'] : null;
 
-// Compute next proj_id (Projects.proj_id isn't auto_increment in this DB)
+// Compute next proj_id with the same defensive pattern (zombie cleanup,
+// MAX+1 + clamp, retry on duplicate). Concurrent "Save Project" clicks
+// would otherwise race the MAX+1 computation.
+try { $pdo->exec("DELETE FROM Projects WHERE proj_id = 0"); } catch (Exception $e) { /* non-fatal */ }
 $nextStmt = $pdo->query("SELECT COALESCE(MAX(proj_id), 0) + 1 AS nxt FROM Projects");
 $nextId   = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+if ($nextId < 1) $nextId = 1;
 
 // Convert Manager/DP* empty strings to NULL so they don't insert as 0
 $Manager = ($Manager === '' ? null : (int)$Manager);
@@ -46,7 +50,18 @@ $DP2     = ($DP2     === '' ? null : (int)$DP2);
 $DP3     = ($DP3     === '' ? null : (int)$DP3);
 
 $stmt = $pdo->prepare("INSERT INTO Projects (proj_id, JobName, Client_ID, Job_Notes, Status, Contact_Notes, Contact_Date_Last, Contact_Date_Next, Draft_Date, Final_Date, Job_Description, Initial_Priority, Order_No, Manager, DP1, DP2, DP3, Active, Project_Type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-$stmt->execute([$nextId, $jname, $client_id, $jnotes, $stat, $cnotes, $clast, $cnext, $ddate, $fdate, $jd, $ip, $order_no, $Manager, $DP1, $DP2, $DP3, $ACT, $projType]);
+$attempts = 0;
+while (true) {
+    try {
+        $stmt->execute([$nextId, $jname, $client_id, $jnotes, $stat, $cnotes, $clast, $cnext, $ddate, $fdate, $jd, $ip, $order_no, $Manager, $DP1, $DP2, $DP3, $ACT, $projType]);
+        break;
+    } catch (PDOException $e) {
+        $isDupe = ($e->getCode() === '23000' || strpos($e->getMessage(), '1062') !== false);
+        if (!$isDupe || ++$attempts >= 5) throw $e;
+        $r = $pdo->query("SELECT COALESCE(MAX(proj_id),0)+1 AS nxt FROM Projects");
+        $nextId = max((int)$r->fetch(PDO::FETCH_ASSOC)['nxt'], $nextId + 1, 1);
+    }
+}
 
 header('Location: main.php');
 exit;
