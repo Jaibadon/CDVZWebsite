@@ -89,22 +89,20 @@ if ($locked === "true") {
         $delStmt->execute([$weekStartISO, $weekEndISO, (int)$_SESSION['Employee_id']]);
 
         // ── TS_ID assignment ──────────────────────────────────────────────
-        // We've seen intermittent "Duplicate entry '0' for key 'PRIMARY'"
-        // failures from a few different sources:
-        //   • stale TS_ID=0 row left over from legacy data — undeleteable
-        //     by the per-week DELETE above because its TS_DATE is NULL or
-        //     out of range
-        //   • schema where the column has DEFAULT 0 but AUTO_INCREMENT
-        //     either isn't applied or isn't kicking in
-        //   • two concurrent submits racing on MAX(TS_ID)+1
-        //
-        // Bulletproof approach: zap any TS_ID=0 zombie up front, ALWAYS
-        // pass an explicit MAX+1 (MySQL accepts that on AUTO_INCREMENT
-        // columns and advances its counter), and retry inserts on
-        // duplicate-key with a fresh MAX+1 if a race ever sneaks one in.
-        try { $pdo->exec("DELETE FROM Timesheets WHERE TS_ID = 0"); } catch (Exception $e) { /* non-fatal */ }
-
-        $nextStmt = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
+        // The Timesheets table has an AFTER DELETE trigger
+        // (Timesheet_catch) that copies every deleted row into
+        // Timesheets_HIST. If we ever pick a TS_ID that's already sitting
+        // in Timesheets_HIST, the next time that row is archived the
+        // trigger throws "Duplicate entry … for key 'PRIMARY'" and kills
+        // the whole submit. So we MUST compute MAX across both tables —
+        // not just Timesheets — when picking the next TS_ID.
+        $maxExpr = "(SELECT COALESCE(MAX(TS_ID), 0) FROM Timesheets)";
+        try {
+            if ($pdo->query("SHOW TABLES LIKE 'Timesheets_HIST'")->fetch()) {
+                $maxExpr = "GREATEST($maxExpr, (SELECT COALESCE(MAX(TS_ID), 0) FROM Timesheets_HIST))";
+            }
+        } catch (Exception $e) { /* HIST table doesn't exist — fine */ }
+        $nextStmt = $pdo->query("SELECT $maxExpr + 1 AS nxt");
         $nextTsId = (int)$nextStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
         if ($nextTsId < 1) $nextTsId = 1;
 
@@ -211,8 +209,8 @@ if ($locked === "true") {
 
                 // Retry-on-duplicate: a stale row, race, or weird default
                 // can leave the candidate TS_ID already taken. Refetch
-                // MAX+1 and bump $nextTsId; cap at 5 attempts to avoid an
-                // infinite loop if something is genuinely wrong.
+                // MAX+1 (across BOTH tables, see comment above) and bump
+                // $nextTsId; cap at 5 attempts to avoid an infinite loop.
                 $attempts = 0;
                 while (true) {
                     try {
@@ -221,7 +219,7 @@ if ($locked === "true") {
                     } catch (PDOException $insErr) {
                         $isDupe = ($insErr->getCode() === '23000' || strpos($insErr->getMessage(), '1062') !== false);
                         if (!$isDupe || ++$attempts >= 5) throw $insErr;
-                        $r = $pdo->query("SELECT COALESCE(MAX(TS_ID), 0) + 1 AS nxt FROM Timesheets");
+                        $r = $pdo->query("SELECT $maxExpr + 1 AS nxt");
                         $fresh = (int)$r->fetch(PDO::FETCH_ASSOC)['nxt'];
                         $nextTsId = max($fresh, $nextTsId + 1, 1);
                         $params[0] = $nextTsId;   // TS_ID is always the first param
