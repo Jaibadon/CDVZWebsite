@@ -84,7 +84,7 @@ if (($_SESSION['UserID'] ?? '') === 'erik') {
         $st = $pdo->query(
             "SELECT i.Invoice_No, i.Client_ID, i.Xero_AmountDue, i.Xero_DueDate,
                     DATEDIFF(CURDATE(), i.Xero_DueDate) AS days_overdue,
-                    c.Client_Name, c.Phone, c.Mobile, c.Phone_1
+                    c.Client_Name, c.Phone, c.Mobile
                FROM Invoices i
                LEFT JOIN Clients c ON i.Client_ID = c.Client_id
               WHERE i.Xero_InvoiceID IS NOT NULL
@@ -175,7 +175,7 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
         <thead><tr style="background:#fff3cd"><th style="padding:4px 6px;text-align:left">Invoice</th><th style="padding:4px 6px;text-align:left">Client</th><th style="padding:4px 6px;text-align:left">Phone</th><th style="padding:4px 6px;text-align:right">Amount due</th><th style="padding:4px 6px;text-align:right">Days late</th></tr></thead>
         <tbody>
         <?php foreach (array_slice($callList, 0, 12) as $c):
-            $ph = trim((string)($c['Phone_1'] ?? '')) ?: trim((string)($c['Phone'] ?? '')) ?: trim((string)($c['Mobile'] ?? ''));
+            $ph = trim((string)($c['Phone'] ?? '')) ?: trim((string)($c['Mobile'] ?? ''));
         ?>
           <tr style="border-bottom:1px solid #fce0bf">
             <td style="padding:4px 6px"><a href="invoice.php?Invoice_No=<?= (int)$c['Invoice_No'] ?>">CAD-<?= str_pad((string)$c['Invoice_No'], 5, '0', STR_PAD_LEFT) ?></a></td>

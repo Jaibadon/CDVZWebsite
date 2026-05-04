@@ -48,7 +48,7 @@ if ($xeroConnected) {
                     i.Xero_Status, i.Xero_AmountDue, i.Xero_AmountPaid, i.Xero_DueDate,
                     i.Xero_LastSynced, i.Xero_OnlineUrl,
                     DATEDIFF(CURDATE(), i.Xero_DueDate) AS days_overdue,
-                    c.Client_Name, c.billing_email, c.phone_no
+                    c.Client_Name, c.billing_email, c.Phone
                FROM Invoices i
                LEFT JOIN Clients c ON i.Client_ID = c.Client_id
               WHERE i.Xero_InvoiceID IS NOT NULL
@@ -156,9 +156,14 @@ $overdue = [];
 $lastSync = null;
 if ($xeroConnected) {
     try {
+        // Note: actual Clients columns are `Phone`, `Mobile`, `email`,
+        // `Billing_Email`. The previous query used `c.Phone_1` which
+        // doesn't exist — error was silently swallowed by the catch
+        // below, leaving $overdue=[] and the table never rendering.
         $st = $pdo->query(
             "SELECT i.Invoice_No, i.Xero_Status, i.Xero_AmountDue, i.Xero_DueDate, i.Xero_OnlineUrl,
-                    i.Xero_LastSynced, c.Client_Name, c.Phone_1, c.Email
+                    i.Xero_LastSynced,
+                    c.Client_Name, c.Phone, c.Mobile, c.email, c.billing_email
                FROM Invoices i
                LEFT JOIN Clients c ON i.Client_ID = c.Client_id
               WHERE i.Xero_InvoiceID IS NOT NULL
@@ -168,7 +173,9 @@ if ($xeroConnected) {
         );
         $overdue = $st->fetchAll();
     } catch (Exception $e) {
-        // Columns may not exist yet if migration not run
+        // Surface the failure instead of silently rendering empty.
+        $_SESSION['xero_flash_err'] = 'Overdue list query failed: ' . $e->getMessage();
+        $flashErr = $_SESSION['xero_flash_err']; unset($_SESSION['xero_flash_err']);
     }
     try {
         $lastSync = $pdo->query("SELECT MAX(Xero_LastSynced) FROM Invoices")->fetchColumn();
@@ -241,8 +248,14 @@ if ($xeroConnected) {
                 <?php endif; ?>
               </td>
               <td><?= htmlspecialchars($od['Client_Name'] ?? '?') ?></td>
-              <td><?= htmlspecialchars($od['Phone_1'] ?? '') ?></td>
-              <td><a href="mailto:<?= htmlspecialchars($od['Email'] ?? '') ?>"><?= htmlspecialchars($od['Email'] ?? '') ?></a></td>
+              <td><?php
+                  $ph = trim((string)($od['Phone'] ?? '')) ?: trim((string)($od['Mobile'] ?? ''));
+                  echo htmlspecialchars($ph);
+              ?></td>
+              <td><?php
+                  $em = trim((string)($od['billing_email'] ?? '')) ?: trim((string)($od['email'] ?? ''));
+                  if ($em !== '') echo '<a href="mailto:' . htmlspecialchars($em) . '">' . htmlspecialchars($em) . '</a>';
+              ?></td>
               <td><?= $od['Xero_DueDate'] ? date('d/m/Y', strtotime($od['Xero_DueDate'])) : '?' ?>
                 <?php if ($isOverdue): ?><br><strong style="color:#a00">OVERDUE</strong><?php endif; ?></td>
               <td class="right">$<?= number_format((float)$od['Xero_AmountDue'], 2) ?></td>
