@@ -1,6 +1,16 @@
 <?php
 session_start();
 require_once 'db_connect.php';
+
+if (empty($_SESSION['UserID'])) {
+    echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
+    exit;
+}
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403);
+    echo '<p>Admin only. <a href="menu.php">Back to menu</a></p>';
+    exit;
+}
 ?>
 <script language="Javascript">
 	document.onkeydown = function() {

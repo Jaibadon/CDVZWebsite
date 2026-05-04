@@ -7,6 +7,9 @@ if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
     exit;
 }
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403); die('Admin only.');
+}
 
 $pdo = get_db();
 
@@ -21,35 +24,43 @@ if (!$rs) {
     die("Invoice $invoice_no not found.");
 }
 
+// Case-insensitive helper — PDO row keys are case-sensitive on Linux MySQL,
+// and the actual column names are `date_sent` (lowercase) and `DatePaid`
+// (TitleCase). The previous code read `$rs['DATE_SENT']` / `$rs['DATEPAID']`
+// which were silently undefined → NULL → original send/paid dates were
+// overwritten with today's date on every Update_Invoice click.
+$ci = function(array $row, array $keys) {
+    foreach ($keys as $k) {
+        foreach ($row as $rk => $rv) {
+            if (strcasecmp($rk, $k) === 0) return $rv;
+        }
+    }
+    return null;
+};
+$prevDateSent = $ci($rs, ['date_sent']);
+$prevDatePaid = $ci($rs, ['DatePaid']);
+
 // Build update fields
 $client_id = (int)($_POST['CLIENT_BOX'] ?? 0);
 
 $inv_date = !empty($_POST['INV_DATE']) ? to_mysql_date($_POST['INV_DATE']) : null;
 
-// SENT handling
+// SENT handling — preserve the original send date when already set.
 if (isset($_POST['SENT']) && $_POST['SENT'] === 'ON') {
     $sent = 1;
-    if (is_null($rs['DATE_SENT'])) {
-        $date_sent = $curdate;
-    } else {
-        $date_sent = $rs['DATE_SENT'];
-    }
+    $date_sent = $prevDateSent ?: $curdate;
 } else {
     $sent = 0;
-    $date_sent = $rs['DATE_SENT'];
+    $date_sent = $prevDateSent;
 }
 
-// PAID handling
+// PAID handling — preserve the original paid date when already set.
 if (isset($_POST['PAID']) && $_POST['PAID'] === 'ON') {
     $paid = 1;
-    if (is_null($rs['DATEPAID'])) {
-        $datepaid = $curdate;
-    } else {
-        $datepaid = $rs['DATEPAID'];
-    }
+    $datepaid = $prevDatePaid ?: $curdate;
 } else {
     $paid = 0;
-    $datepaid = $rs['DATEPAID'];
+    $datepaid = $prevDatePaid;
 }
 
 // Notes handling

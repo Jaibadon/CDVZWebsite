@@ -6,6 +6,13 @@ if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
     exit;
 }
+// Editing invoices is admin-only. Without this guard ANY logged-in staff
+// member could view/modify all invoices — confidential client data.
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403);
+    echo '<p>Admin only. <a href="menu.php">Back to menu</a></p>';
+    exit;
+}
 
 $pdo = get_db();
 

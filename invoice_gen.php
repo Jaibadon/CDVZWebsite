@@ -7,6 +7,10 @@ if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
     exit;
 }
+// Generating invoices commits real billing rows — admin-only.
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403); die('Admin only.');
+}
 
 $pdo = get_db();
 
@@ -35,9 +39,16 @@ if ($firstRow === false) {
 $client_id  = (int)($firstRow['Client_ID'] ?? $firstRow['CLIENT_ID'] ?? 0);
 $ts_proj_id = (int)$firstRow['proj_id'];
 
-// Compute next invoice number (Invoices.Invoice_No isn't auto_increment)
-$maxStmt = $pdo->query("SELECT COALESCE(MAX(Invoice_No), 0) AS maxy FROM Invoices");
-$maxy    = (int)$maxStmt->fetch(PDO::FETCH_ASSOC)['maxy'] + 1;
+// Same defensive pattern as submit.php for Invoice_No: drop the
+// historical Invoice_No=0 zombie if any, compute MAX+1 explicitly (works
+// regardless of AUTO_INCREMENT), and retry on duplicate-key in case two
+// invoice generations race or AUTO_INCREMENT and our explicit value
+// collide. The previous "MAX+1 once, fingers crossed" path raced under
+// concurrent presses of "Generate Invoice".
+try { $pdo->exec("DELETE FROM Invoices WHERE Invoice_No = 0"); } catch (Exception $e) { /* non-fatal */ }
+$maxStmt = $pdo->query("SELECT COALESCE(MAX(Invoice_No), 0) + 1 AS nxt FROM Invoices");
+$maxy    = (int)$maxStmt->fetch(PDO::FETCH_ASSOC)['nxt'];
+if ($maxy < 1) $maxy = 1;
 
 // Insert new invoice with explicit Invoice_No. Default PaymentOption=1
 // (20th of next month) and pre-compute PayBy so Xero, statements, and the
@@ -46,7 +57,18 @@ $today        = date('Y-m-d');
 $defaultOpt   = 1;
 $defaultPayBy = compute_pay_by($today, $defaultOpt);
 $ins = $pdo->prepare("INSERT INTO Invoices (Invoice_No, Client_ID, Proj_ID, Date, PaymentOption, PayBy) VALUES (?, ?, ?, NOW(), ?, ?)");
-$ins->execute([$maxy, $client_id, $ts_proj_id, $defaultOpt, $defaultPayBy]);
+$insAttempts = 0;
+while (true) {
+    try {
+        $ins->execute([$maxy, $client_id, $ts_proj_id, $defaultOpt, $defaultPayBy]);
+        break;
+    } catch (PDOException $insErr) {
+        $isDupe = ($insErr->getCode() === '23000' || strpos($insErr->getMessage(), '1062') !== false);
+        if (!$isDupe || ++$insAttempts >= 5) throw $insErr;
+        $r = $pdo->query("SELECT COALESCE(MAX(Invoice_No), 0) + 1 AS nxt FROM Invoices");
+        $maxy = max((int)$r->fetch(PDO::FETCH_ASSOC)['nxt'], $maxy + 1, 1);
+    }
+}
 
 // Re-fetch all uninvoiced timesheets for this project
 $stmt2 = $pdo->prepare("SELECT Timesheets.TS_ID, Staff.`BILLING RATE` AS BILLING_RATE, Clients.Multiplier AS Multiplier

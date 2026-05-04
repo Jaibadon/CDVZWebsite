@@ -73,6 +73,30 @@ if (($_SESSION['UserID'] ?? '') === 'erik') {
 $leaveFlash    = $_SESSION['leave_flash']     ?? '';
 $leaveFlashErr = $_SESSION['leave_flash_err'] ?? '';
 unset($_SESSION['leave_flash'], $_SESSION['leave_flash_err']);
+
+// Invoices 30+ days overdue — Erik-only "call them" callout. Pulled fresh
+// from the local Xero_* mirror (whichever monthly_invoicing.php / cron sync
+// last refreshed). Ordered worst-first so the loudest case is at the top.
+$callList = [];
+if (($_SESSION['UserID'] ?? '') === 'erik') {
+    try {
+        $pdo = get_db();
+        $st = $pdo->query(
+            "SELECT i.Invoice_No, i.Client_ID, i.Xero_AmountDue, i.Xero_DueDate,
+                    DATEDIFF(CURDATE(), i.Xero_DueDate) AS days_overdue,
+                    c.Client_Name, c.Phone, c.Mobile, c.Phone_1
+               FROM Invoices i
+               LEFT JOIN Clients c ON i.Client_ID = c.Client_id
+              WHERE i.Xero_InvoiceID IS NOT NULL
+                AND i.Xero_AmountDue > 0
+                AND i.Xero_Status = 'AUTHORISED'
+                AND i.Xero_DueDate IS NOT NULL
+                AND DATEDIFF(CURDATE(), i.Xero_DueDate) >= 30
+              ORDER BY days_overdue DESC, i.Xero_AmountDue DESC"
+        );
+        $callList = $st->fetchAll();
+    } catch (Exception $e) { /* Xero columns may not exist on legacy installs */ }
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -132,6 +156,41 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
     <?php endif; ?>
     <?php if ($leaveFlashErr): ?>
       <div style="background:#ffd6d6;border:1px solid #c33;color:#a00;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($leaveFlashErr) ?></div>
+    <?php endif; ?>
+
+    <?php if (!empty($callList)):
+        $totalOverdue = 0; foreach ($callList as $c) $totalOverdue += (float)$c['Xero_AmountDue'];
+    ?>
+    <div style="background:#ffe4d6;border:2px solid #c33;border-radius:4px;padding:12px 16px;margin-bottom:16px">
+      <h3 style="margin:0 0 6px;color:#a00;border:none">
+        📞 <?= count($callList) ?> invoice<?= count($callList) === 1 ? '' : 's' ?> 30+ days overdue &mdash; please give the client a call
+      </h3>
+      <p style="margin:0 0 6px;font-size:11px;color:#7a2200">
+        Total overdue 30+ days: <strong>$<?= number_format($totalOverdue, 2) ?></strong>.
+        A phone call recovers far more debt than another email at this point.
+        Once you've spoken to them you can re-send the reminder via
+        <a href="monthly_invoicing.php" style="color:#a00">Monthly Invoicing</a>.
+      </p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px">
+        <thead><tr style="background:#fff3cd"><th style="padding:4px 6px;text-align:left">Invoice</th><th style="padding:4px 6px;text-align:left">Client</th><th style="padding:4px 6px;text-align:left">Phone</th><th style="padding:4px 6px;text-align:right">Amount due</th><th style="padding:4px 6px;text-align:right">Days late</th></tr></thead>
+        <tbody>
+        <?php foreach (array_slice($callList, 0, 12) as $c):
+            $ph = trim((string)($c['Phone_1'] ?? '')) ?: trim((string)($c['Phone'] ?? '')) ?: trim((string)($c['Mobile'] ?? ''));
+        ?>
+          <tr style="border-bottom:1px solid #fce0bf">
+            <td style="padding:4px 6px"><a href="invoice.php?Invoice_No=<?= (int)$c['Invoice_No'] ?>">CAD-<?= str_pad((string)$c['Invoice_No'], 5, '0', STR_PAD_LEFT) ?></a></td>
+            <td style="padding:4px 6px"><?= htmlspecialchars($c['Client_Name'] ?? '?') ?></td>
+            <td style="padding:4px 6px"><?php if ($ph !== ''): ?><a href="tel:<?= htmlspecialchars(preg_replace('/\s+/', '', $ph)) ?>" style="color:#a00;text-decoration:none">📞 <?= htmlspecialchars($ph) ?></a><?php else: ?><span style="color:#888">no phone on file</span><?php endif; ?></td>
+            <td style="padding:4px 6px;text-align:right">$<?= number_format((float)$c['Xero_AmountDue'], 2) ?></td>
+            <td style="padding:4px 6px;text-align:right;color:<?= ((int)$c['days_overdue']) >= 60 ? '#a00' : '#7a2200' ?>"><strong><?= (int)$c['days_overdue'] ?></strong></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php if (count($callList) > 12): ?>
+        <p style="font-size:11px;color:#7a2200;margin-top:6px">+ <?= count($callList) - 12 ?> more not shown &mdash; see <a href="monthly_invoicing.php" style="color:#a00">Monthly Invoicing</a> for the full list.</p>
+      <?php endif; ?>
+    </div>
     <?php endif; ?>
 
     <?php if (!empty($pendingLeave)):
