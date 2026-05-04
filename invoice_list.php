@@ -193,11 +193,11 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
     echo "&nbsp;-&nbsp;";
 
     if ($status == 0) {
-        echo "<font size=4 color=Grey>***HOLD - Not Checked :(</font>";
+        echo "<font size=2 color=Grey>***HOLD - Not Checked :(</font>";
     } elseif ($status == 1) {
-        echo "<font size=4 color=Red>***READY to Send Jen and I love you sweet thing :)</font>";
+        echo "<font size=2 color=Red>***READY to Send Jen and I love you sweet thing :)</font>";
     } elseif ($status == 2) {
-        echo "<font size=4>***SENT - everything is awesome!</font>";
+        echo "<font size=2>***SENT - everything is awesome!</font>";
     }
 
     // ── Xero status badge + push / email / statement buttons ─────────────

@@ -25,16 +25,33 @@ require_once 'xero_sync.php';
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403); die('Admin only.');
 }
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+
+// Test mode: GET ?test_to=email@example.com&invoice_no=N picks the
+// client of invoice N and renders the manual statement, but diverts
+// recipient + skips all persistence (no Sent flags, no SentToContact).
+$isTest = !empty($_GET['test_to']);
+if (!$isTest && $_SERVER['REQUEST_METHOD'] !== 'POST') {
     http_response_code(405); die('POST only.');
 }
 
-$clientId = (int)($_POST['client_id'] ?? 0);
-$ccErik   = !empty($_POST['cc_erik']);
-$back     = $_POST['back'] ?? ($_SERVER['HTTP_REFERER'] ?? 'invoice_list.php');
-if ($clientId <= 0) die('Missing client_id.');
+$ccErik = !empty($_POST['cc_erik']);
+$back   = $_POST['back'] ?? ($_SERVER['HTTP_REFERER'] ?? ($isTest ? 'email_templates.php' : 'invoice_list.php'));
 
 $pdo = get_db();
+
+$clientId = (int)($_POST['client_id'] ?? 0);
+if ($isTest && $clientId <= 0) {
+    // Test mode: derive client_id from the invoice_no the admin selected.
+    $invSeed = (int)($_GET['invoice_no'] ?? 0);
+    if ($invSeed > 0) {
+        try {
+            $st = $pdo->prepare("SELECT Client_ID FROM Invoices WHERE Invoice_No = ?");
+            $st->execute([$invSeed]);
+            $clientId = (int)($st->fetchColumn() ?: 0);
+        } catch (Exception $e) {}
+    }
+}
+if ($clientId <= 0) die('Missing client_id.');
 
 try {
     // Refresh from Xero before we decide what's unpaid.
@@ -50,8 +67,12 @@ try {
     if (!$cli) throw new Exception("Client #$clientId not found.");
     // Multiple addresses (e.g. "ap@acme.co; cfo@acme.co") in either column
     // are split, validated, and all included on the To: line.
-    $billtos = pick_billing_emails($cli['Billing_Email'] ?? null, $cli['email'] ?? null);
-    if (empty($billtos)) throw new Exception("Client #$clientId (" . ($cli['Client_Name'] ?? '') . ") has no valid email (Billing Email or Email). Fix it on the Client page first.");
+    if ($isTest) {
+        $billtos = [(string)$_GET['test_to']];
+    } else {
+        $billtos = pick_billing_emails($cli['Billing_Email'] ?? null, $cli['email'] ?? null);
+        if (empty($billtos)) throw new Exception("Client #$clientId (" . ($cli['Client_Name'] ?? '') . ") has no valid email (Billing Email or Email). Fix it on the Client page first.");
+    }
     $billto = implode(', ', $billtos); // for the success-flash text below
 
     // Pull all unpaid invoices for this client. Xero_OnlineUrl is the
@@ -146,75 +167,85 @@ try {
     // sees a number that's actually on their statement.
     $exampleRef = 'CAD-' . str_pad((string)($invoices[0]['Invoice_No'] ?? 0), 5, '0', STR_PAD_LEFT);
 
-    $textBody  = "Dear {$greetName},\r\n\r\n";
-    $textBody .= "Please find attached a statement of outstanding invoices from CADViz Limited (" . count($invoices) . " invoice(s)).\r\n\r\n";
-    $textBody .= "If you have already paid any of the invoices listed below, please disregard this statement for those — our records simply haven't caught up with your payment(s) yet.\r\n\r\n";
-    $textBody .= "Outstanding balance: $" . number_format($totalForDisplay, 2) . "\r\n\r\n";
-    $textBody .= "Outstanding invoices:\r\n" . implode("\r\n", $linesText) . "\r\n\r\n";
-    $textBody .= "IMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. {$exampleRef}) as the bank-transfer reference, so we can match each payment to the correct invoice.\r\n\r\n";
-    $textBody .= "Internet Bank Transfer\r\n\r\n";
-    $textBody .= "Account Name: CADViz Limited\r\n\r\n";
-    $textBody .= "Account Number: 03-0275-0551274-000\r\n\r\n";
-
+    // Pre-render the HTML invoice table and plain-text invoice list as
+    // placeholder substitutions so the editable template doesn't have
+    // to know how to format them.
+    $invoiceTableHtml = '<table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">'
+        . '<thead><tr style="background:#eee">'
+        . '<th style="padding:6px 8px;text-align:left">Invoice</th>'
+        . '<th style="padding:6px 8px;text-align:left">Date</th>'
+        . '<th style="padding:6px 8px;text-align:left">Due</th>'
+        . '<th style="padding:6px 8px;text-align:left">Job</th>'
+        . '<th style="padding:6px 8px;text-align:right">Amount Due</th>'
+        . '<th style="padding:6px 8px;text-align:center">View</th>'
+        . '</tr></thead><tbody>'
+        . implode('', $linesHtml)
+        . '</tbody></table>';
     if (!empty($missingPdf)) {
-        $textBody .= "(PDF attachments could not be retrieved for: CAD-" . implode(', CAD-', array_map(fn($n) => str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf)) . ". Please contact us if you need copies.)\r\n\r\n";
+        $invoiceTableHtml .= '<p style="color:#a00">PDF attachments could not be retrieved for: '
+                          . implode(', ', array_map(fn($n) => 'CAD-' . str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf))
+                          . '. Please reply to this email if you need copies.</p>';
     }
-    $textBody .= "If you have any other queries please reply to this email.\r\n\r\n";
-    $textBody .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
-
-    $htmlBody  = '<p>Dear ' . htmlspecialchars($greetName) . ',</p>';
-    $htmlBody .= '<p>Please find attached a statement of outstanding invoices from <strong>CADViz Limited</strong> (' . count($invoices) . ' invoice' . (count($invoices) === 1 ? '' : 's') . ').</p>';
-    $htmlBody .= '<p style="color:#666"><em>If you have already paid any of the invoices listed below, please disregard this statement for those &mdash; our records simply haven\'t caught up with your payment(s) yet.</em></p>';
-    $htmlBody .= '<p style="font-size:16px"><strong>Outstanding balance: $' . number_format($totalForDisplay, 2) . '</strong></p>';
-    $htmlBody .= '<table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">';
-    $htmlBody .= '<thead><tr style="background:#eee">'
-              .  '<th style="padding:6px 8px;text-align:left">Invoice</th>'
-              .  '<th style="padding:6px 8px;text-align:left">Date</th>'
-              .  '<th style="padding:6px 8px;text-align:left">Due</th>'
-              .  '<th style="padding:6px 8px;text-align:left">Job</th>'
-              .  '<th style="padding:6px 8px;text-align:right">Amount Due</th>'
-              .  '<th style="padding:6px 8px;text-align:center">View</th>'
-              .  '</tr></thead><tbody>';
-    $htmlBody .= implode('', $linesHtml);
-    $htmlBody .= '</tbody></table>';
-    $htmlBody .= '<p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice\'s reference (e.g. <strong>' . htmlspecialchars($exampleRef) . '</strong>) on your bank transfer so we can match each payment to the correct invoice.</p>';
-    $htmlBody .= '<p>Internet Bank Transfer: <strong>03 0275 0551274 00</strong></p>';
+    $linesTextStr = implode("\r\n", $linesText);
     if (!empty($missingPdf)) {
-        $htmlBody .= '<p style="color:#a00">PDF attachments could not be retrieved for: '
-                  . implode(', ', array_map(fn($n) => 'CAD-' . str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf))
-                  . '. Please reply to this email if you need copies.</p>';
+        $linesTextStr .= "\r\n(PDF attachments could not be retrieved for: CAD-"
+                       . implode(', CAD-', array_map(fn($n) => str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf))
+                       . ". Please contact us if you need copies.)";
     }
-    $htmlBody .= '<p>If you have any other queries please reply to this email.</p>';
-    $htmlBody .= '<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>';
 
-    $subject = 'Statement of outstanding invoices from CADViz Limited';
+    $vars = array_merge(default_email_boilerplate(), [
+        'name'              => $greetName,
+        'client_name'       => $clientName,
+        'count'             => (string)count($invoices),
+        'total_due'         => '$' . number_format($totalForDisplay, 2),
+        'invoice_table_html'=> $invoiceTableHtml,
+        'invoice_lines_text'=> $linesTextStr,
+        'example_ref'       => $exampleRef,
+    ]);
+    $subject  = render_email_template(email_template_get($pdo, 'statement_manual', 'subject'), $vars);
+    $textBody = render_email_template(email_template_get($pdo, 'statement_manual', 'text'),    $vars);
+    $htmlBody = render_email_template(email_template_get($pdo, 'statement_manual', 'html'),    $vars);
 
     SmtpMailer::send([
         'to'          => $billtos,
-        'cc'          => $ccErik ? ['erik@cadviz.co.nz'] : [],
-        'bcc'         => ['accounts@cadviz.co.nz'],
+        'cc'          => $isTest ? [] : ($ccErik ? ['erik@cadviz.co.nz'] : []),
+        'bcc'         => $isTest ? [] : ['accounts@cadviz.co.nz'],
         'reply_to'    => 'accounts@cadviz.co.nz',
-        'subject'     => $subject,
+        'subject'     => ($isTest ? '[TEST] ' : '') . $subject,
         'text'        => $textBody,
         'html'        => $htmlBody,
         'attachments' => $attachments,
     ]);
 
-    // Mark every invoice in this batch as Sent + Status_INV=2 (refreshing
-    // date_sent on every statement send so Erik can see when the most
-    // recent batch went out, even on resends). Also mark SentToContact
-    // in Xero where we have a Xero ID, so the Xero UI agrees.
-    $markSent = $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW(), Status_INV = 2 WHERE Invoice_No = ?");
-    $markedCount = 0;
-    foreach ($invoices as $inv) {
-        $wasUnsent = (int)($inv['Sent'] ?? 0) === 0;
-        $markSent->execute([(int)$inv['Invoice_No']]);
-        if ($wasUnsent) $markedCount++;
-        if (!empty($inv['Xero_InvoiceID'])) {
-            try { $xc->markSentToContact($inv['Xero_InvoiceID']); } catch (Exception $e) { /* non-fatal */ }
+    if (!$isTest) {
+        // Mark every invoice in this batch as Sent + Status_INV=2 (refreshing
+        // date_sent on every statement send so Erik can see when the most
+        // recent batch went out, even on resends). Also mark SentToContact
+        // in Xero where we have a Xero ID, so the Xero UI agrees.
+        $markSent = $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW(), Status_INV = 2 WHERE Invoice_No = ?");
+        $markedCount = 0;
+        foreach ($invoices as $inv) {
+            $wasUnsent = (int)($inv['Sent'] ?? 0) === 0;
+            $markSent->execute([(int)$inv['Invoice_No']]);
+            if ($wasUnsent) $markedCount++;
+            if (!empty($inv['Xero_InvoiceID'])) {
+                try { $xc->markSentToContact($inv['Xero_InvoiceID']); } catch (Exception $e) { /* non-fatal */ }
+            }
         }
+    } else {
+        $markedCount = 0;
     }
 
+    if ($isTest) {
+        echo "<!DOCTYPE html><html><body style=\"font-family:Arial;padding:18px\">"
+           . "<h2 style=\"color:#7a4d00\">&#129514; Test statement sent</h2>"
+           . "<p>Diverted to <code>" . htmlspecialchars($billto) . "</code>. "
+           . count($invoices) . " invoice(s), " . count($attachments) . " PDF(s) attached. "
+           . "Sent / Status_INV flags NOT updated.</p>"
+           . "<p><a href=\"" . htmlspecialchars($back) . "\">&larr; Back</a></p>"
+           . "</body></html>";
+        exit;
+    }
     $_SESSION['xero_flash'] = "Statement emailed to {$billto} (" . count($invoices) . " invoice(s), " . count($attachments) . " PDF(s) attached, {$markedCount} newly marked Sent).";
 } catch (Exception $e) {
     $_SESSION['xero_flash_err'] = 'Statement email failed: ' . $e->getMessage();

@@ -124,12 +124,19 @@ $cap              = (int)($_ENV['CADVIZ_REMINDER_CAP'] ?? 30);
 // one of billing_email / email being non-empty. Address validity is checked
 // per-row in the loop via pick_billing_email() so we can skip + report
 // invalid addresses cleanly instead of silently dropping them.
+//
+// In test mode + a specific invoice_no, we drop the "must be overdue"
+// requirement so admins can preview a tone against any pushed invoice
+// regardless of due date. The override $daysOverride below feeds the
+// pretend day-count to the renderer.
 $where = "i.Xero_InvoiceID IS NOT NULL
-          AND i.Xero_Status = 'AUTHORISED'
-          AND i.Xero_AmountDue > 0
-          AND i.Xero_DueDate IS NOT NULL
-          AND i.Xero_DueDate < CURDATE()
           AND (COALESCE(c.billing_email, '') <> '' OR COALESCE(c.email, '') <> '')";
+if (!$testMode || $singleInvoice <= 0) {
+    $where .= " AND i.Xero_Status = 'AUTHORISED'
+                AND i.Xero_AmountDue > 0
+                AND i.Xero_DueDate IS NOT NULL
+                AND i.Xero_DueDate < CURDATE()";
+}
 if ($singleInvoice > 0) $where .= " AND i.Invoice_No = " . (int)$singleInvoice;
 
 // Gate c.Contact behind feature detection so installs that haven't run
@@ -344,82 +351,38 @@ foreach ($byClient as $cid => $g) {
 
 function sendReminder(PDO $pdo, array $r, array $toAddrs, string $testPrefix = ''): void {
     $invNumStr = 'CAD-' . str_pad((string)$r['Invoice_No'], 5, '0', STR_PAD_LEFT);
-    $totalIncTax = (float)$r['Subtotal'] * (1 + (float)$r['Tax_Rate']);
-    // Greet by Contact first name; fallback to "Valued Customer".
     $name      = client_first_name($r['Contact'] ?? null);
     $days      = (int)$r['days_overdue'];
-    $due       = date('d/m/Y', strtotime($r['Xero_DueDate']));
+    $due       = !empty($r['Xero_DueDate']) ? date('d/m/Y', strtotime($r['Xero_DueDate'])) : '';
     $amount    = '$' . number_format((float)$r['Xero_AmountDue'], 2);
     $online    = $r['Xero_OnlineUrl'] ?? '';
 
-    // Tone tiers — match the stage table: 7=gentle, 14=reminder, 30=firm,
-    // 45=very_firm, 60=final (also the hard-stop).
     if      ($days >= 60) $tone = 'final';
     elseif  ($days >= 45) $tone = 'very_firm';
     elseif  ($days >= 30) $tone = 'firm';
     elseif  ($days >= 14) $tone = 'reminder';
     else                  $tone = 'gentle';
 
-    $text = "Dear {$name},\r\n\r\n";
-    if ($tone === 'gentle') {
-        $text .= "This is a friendly reminder that invoice {$invNumStr} for {$amount} was due on {$due} ({$days} days ago).\r\n\r\n";
-    } elseif ($tone === 'reminder') {
-        $text .= "Invoice {$invNumStr} for {$amount} is now {$days} days overdue (due date {$due}).\r\n\r\n";
-        $text .= "Please arrange payment at your earliest convenience.\r\n\r\n";
-    } elseif ($tone === 'firm') {
-        $text .= "Invoice {$invNumStr} for {$amount} is now {$days} days overdue. We would appreciate prompt payment.\r\n\r\n";
-        $text .= "If there's an issue with this invoice please reply to this email so we can sort it.\r\n\r\n";
-    } elseif ($tone === 'very_firm') {
-        $text .= "Invoice {$invNumStr} for {$amount} is now {$days} days overdue (due date {$due}) — this is significantly outside our usual payment terms.\r\n\r\n";
-        $text .= "Please settle this invoice this week. Under our standard Terms and Conditions of Trade (clause 5.2) interest of 2.5% per month or part month may be added to any amount owing past the due date.\r\n\r\n";
-        $text .= "If there is a dispute or a hardship issue please reply to this email today so we can talk it through before it escalates further.\r\n\r\n";
-    } else { // final (90+ days)
-        $text .= "FINAL NOTICE — Invoice {$invNumStr} for {$amount} is now {$days} days overdue (due date {$due}).\r\n\r\n";
-        $text .= "If we have not received payment or heard from you within 7 days we will refer this account to a debt-collection agency. Late-payment interest (2.5% per month or part month, T&Cs clause 5.2) and any reasonable solicitor's / collection-agency fees we incur become payable in addition to the invoice amount (clause 5.3).\r\n\r\n";
-        $text .= "Please reply to this email today even if you cannot pay in full — we would much rather agree a payment plan than escalate.\r\n\r\n";
-    }
-    if ($online) $text .= "View / pay online: {$online}\r\n\r\n";
-    $text .= "If you have already paid this invoice, please disregard this email — our records simply haven't caught up with your payment yet.\r\n\r\n";
-    $text .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
+    $tplKey = 'reminder_' . $tone;
+    $vars   = array_merge(default_email_boilerplate(), [
+        'name'         => $name,
+        'invoice_no'   => $invNumStr,
+        'amount'       => $amount,
+        'due_date'     => $due,
+        'days_overdue' => (string)$days,
+        'online_url'   => $online,
+        'client_name'  => trim((string)($r['Client_Name'] ?? '')),
+    ]);
 
-    $html  = "<p>Dear " . htmlspecialchars($name) . ",</p>";
-    if ($tone === 'gentle') {
-        $html .= "<p>This is a friendly reminder that invoice <strong>{$invNumStr}</strong> for <strong>{$amount}</strong> was due on <strong>{$due}</strong> ({$days} days ago).</p>";
-    } elseif ($tone === 'reminder') {
-        $html .= "<p>Invoice <strong>{$invNumStr}</strong> for <strong>{$amount}</strong> is now <strong>{$days} days overdue</strong> (due date {$due}).</p>";
-        $html .= "<p>Please arrange payment at your earliest convenience.</p>";
-    } elseif ($tone === 'firm') {
-        $html .= "<p>Invoice <strong>{$invNumStr}</strong> for <strong>{$amount}</strong> is now <strong>{$days} days overdue</strong>. We would appreciate prompt payment.</p>";
-        $html .= "<p>If there's an issue with this invoice please reply to this email so we can sort it.</p>";
-    } elseif ($tone === 'very_firm') {
-        $html .= "<p>Invoice <strong>{$invNumStr}</strong> for <strong>{$amount}</strong> is now <strong>{$days} days overdue</strong> (due date <strong>{$due}</strong>) &mdash; this is significantly outside our usual payment terms.</p>";
-        $html .= "<p>Please settle this invoice this week. Under our standard Terms and Conditions of Trade (clause&nbsp;5.2) interest of 2.5% per month or part month may be added to any amount owing past the due date.</p>";
-        $html .= "<p>If there is a dispute or a hardship issue please reply to this email today so we can talk it through before it escalates further.</p>";
-    } else { // final (90+ days)
-        $html .= "<p style=\"color:#a00;font-weight:bold\">FINAL NOTICE</p>";
-        $html .= "<p>Invoice <strong>{$invNumStr}</strong> for <strong>{$amount}</strong> is now <strong>{$days} days overdue</strong> (due date <strong>{$due}</strong>).</p>";
-        $html .= "<p>If we have not received payment or heard from you <strong>within 7 days</strong> we will refer this account to a debt-collection agency. Late-payment interest (2.5% per month or part month, T&amp;Cs clause&nbsp;5.2) and any reasonable solicitor's / collection-agency fees we incur become payable in addition to the invoice amount (clause&nbsp;5.3).</p>";
-        $html .= "<p>Please reply to this email today even if you cannot pay in full &mdash; we would much rather agree a payment plan than escalate.</p>";
-    }
-    if ($online) $html .= "<p><a href=\"" . htmlspecialchars($online) . "\">View / pay invoice online</a></p>";
-    $html .= "<p style=\"color:#666\"><em>If you have already paid this invoice, please disregard this email &mdash; our records simply haven't caught up with your payment yet.</em></p>";
-    $html .= "<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>";
-
-    // Subject prefix matches the tone so the urgency is visible from the
-    // inbox preview without opening the email.
-    $subjectPrefix = [
-        'gentle'    => 'Reminder',
-        'reminder'  => 'Overdue',
-        'firm'      => 'Overdue',
-        'very_firm' => 'OVERDUE — please action',
-        'final'     => 'FINAL NOTICE',
-    ][$tone] ?? 'Reminder';
+    $subject = render_email_template(email_template_get($pdo, $tplKey, 'subject'), $vars);
+    $text    = render_email_template(email_template_get($pdo, $tplKey, 'text'),    $vars);
+    $html    = render_email_template(email_template_get($pdo, $tplKey, 'html'),    $vars);
 
     SmtpMailer::send([
         'to'       => $toAddrs,
         'bcc'      => ['accounts@cadviz.co.nz'],
         'reply_to' => 'accounts@cadviz.co.nz',
-        'subject'  => $testPrefix . "{$subjectPrefix}: Invoice {$invNumStr} ({$days} days overdue)",
+        'subject'  => $testPrefix . $subject,
         'text'     => $text,
         'html'     => $html,
     ]);
@@ -489,85 +452,43 @@ function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, ar
 
     $totalStr = '$' . number_format($totalDue, 2);
     $count    = count($overdueRows);
-
-    // ── Build text body ────────────────────────────────────────────────
-    $text  = "Dear {$name},\r\n\r\n";
-    if ($tone === 'gentle' || $tone === 'reminder') {
-        $text .= "We have {$count} overdue invoices totalling {$totalStr} on your account with CADViz Limited. Please find attached and arrange payment when you can.\r\n\r\n";
-    } elseif ($tone === 'firm') {
-        $text .= "We have {$count} overdue invoices totalling {$totalStr} on your account with CADViz Limited. Please arrange payment promptly.\r\n\r\n";
-        $text .= "If there's a dispute or hardship issue please reply to this email so we can talk it through.\r\n\r\n";
-    } elseif ($tone === 'very_firm') {
-        $text .= "Your CADViz Limited account currently has {$count} overdue invoices totalling {$totalStr} — the oldest is now {$maxDays} days past due, which is significantly outside our payment terms.\r\n\r\n";
-        $text .= "Please settle these invoices this week. Under our standard Terms and Conditions of Trade (clause 5.2) interest of 2.5% per month or part month may be added to any amount owing past the due date.\r\n\r\n";
-        $text .= "If there is a dispute or a hardship issue please reply to this email today so we can agree a payment plan before the matter escalates further.\r\n\r\n";
-    } else { // final
-        $text .= "FINAL NOTICE — your CADViz Limited account has {$count} overdue invoices totalling {$totalStr}, the oldest now {$maxDays} days past due.\r\n\r\n";
-        $text .= "If we have not received payment in full or heard from you within 7 days we will refer this account to a debt-collection agency. Late-payment interest (2.5% per month or part month, T&Cs clause 5.2) and any reasonable solicitor's / collection-agency fees we incur become payable in addition to the invoice amounts (clause 5.3).\r\n\r\n";
-        $text .= "Please reply to this email today even if you cannot pay in full — we would much rather agree a payment plan than escalate.\r\n\r\n";
-    }
-    $text .= "Outstanding invoices:\r\n" . implode("\r\n", $linesText) . "\r\n\r\n";
-    $text .= "TOTAL OVERDUE: {$totalStr}\r\n\r\n";
-    $text .= "IMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. " . ($overdueRows[0]['Invoice_No'] ? 'CAD-' . str_pad((string)$overdueRows[0]['Invoice_No'], 5, '0', STR_PAD_LEFT) : 'CAD-09489') . ") as the bank-transfer reference, so we can match each payment correctly.\r\n";
-    $text .= "Internet Bank Transfer\r\n";
-    $text .= "Account Name: CADViz Limited\r\n";
-    $text .= "Account Number: 03-0275-0551274-000\r\n\r\n";
-    if (!empty($missingPdf)) {
-        $text .= "(PDF attachments could not be retrieved for: " . implode(', ', $missingPdf) . ". Please reply if you need copies.)\r\n\r\n";
-    }
-    $text .= "If you have already paid any of the invoices listed above, please disregard this email for those — our records simply haven't caught up with your payment(s) yet.\r\n\r\n";
-    $text .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
-
-    // ── Build HTML body ────────────────────────────────────────────────
-    $html  = '<p>Dear ' . htmlspecialchars($name) . ',</p>';
-    if ($tone === 'gentle' || $tone === 'reminder') {
-        $html .= "<p>We have <strong>{$count} overdue invoices</strong> totalling <strong>{$totalStr}</strong> on your account with CADViz Limited. Please find attached and arrange payment when you can.</p>";
-    } elseif ($tone === 'firm') {
-        $html .= "<p>We have <strong>{$count} overdue invoices</strong> totalling <strong>{$totalStr}</strong> on your account with CADViz Limited. Please arrange payment promptly.</p>";
-        $html .= '<p>If there&rsquo;s a dispute or hardship issue please reply to this email so we can talk it through.</p>';
-    } elseif ($tone === 'very_firm') {
-        $html .= "<p>Your CADViz Limited account currently has <strong>{$count} overdue invoices</strong> totalling <strong>{$totalStr}</strong> &mdash; the oldest is now <strong>{$maxDays} days past due</strong>, which is significantly outside our payment terms.</p>";
-        $html .= '<p>Please settle these invoices this week. Under our standard Terms and Conditions of Trade (clause&nbsp;5.2) interest of 2.5% per month or part month may be added to any amount owing past the due date.</p>';
-        $html .= '<p>If there is a dispute or a hardship issue please reply to this email today so we can agree a payment plan before the matter escalates further.</p>';
-    } else {
-        $html .= '<p style="color:#a00;font-weight:bold">FINAL NOTICE</p>';
-        $html .= "<p>Your CADViz Limited account has <strong>{$count} overdue invoices</strong> totalling <strong>{$totalStr}</strong>, the oldest now <strong>{$maxDays} days past due</strong>.</p>";
-        $html .= '<p>If we have not received payment in full or heard from you <strong>within 7 days</strong> we will refer this account to a debt-collection agency. Late-payment interest (2.5% per month or part month, T&amp;Cs clause&nbsp;5.2) and any reasonable solicitor&rsquo;s / collection-agency fees we incur become payable in addition to the invoice amounts (clause&nbsp;5.3).</p>';
-        $html .= '<p>Please reply to this email today even if you cannot pay in full &mdash; we would much rather agree a payment plan than escalate.</p>';
-    }
-    $html .= '<table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">';
-    $html .= '<thead><tr style="background:#eee">'
-          .  '<th style="padding:6px 8px;text-align:left">Invoice</th>'
-          .  '<th style="padding:6px 8px;text-align:left">Due</th>'
-          .  '<th style="padding:6px 8px;text-align:right">Days overdue</th>'
-          .  '<th style="padding:6px 8px;text-align:right">Amount</th>'
-          .  '<th style="padding:6px 8px;text-align:center">Online</th>'
-          .  '</tr></thead><tbody>';
-    $html .= implode('', $linesHtml);
-    $html .= '</tbody></table>';
-    $html .= "<p style=\"font-size:16px;margin-top:10px\"><strong>Total overdue: {$totalStr}</strong></p>";
     $exampleRef = 'CAD-' . str_pad((string)$overdueRows[0]['Invoice_No'], 5, '0', STR_PAD_LEFT);
-    $html .= '<p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice&rsquo;s reference (e.g. <strong>' . htmlspecialchars($exampleRef) . '</strong>) on your bank transfer so we can match each payment to the correct invoice.</p>';
-    $html .= '<p>Internet Bank Transfer: <strong>03 0275 0551274 00</strong> (CADViz Limited)</p>';
-    if (!empty($missingPdf)) {
-        $html .= '<p style="color:#a00">PDF attachments could not be retrieved for: ' . htmlspecialchars(implode(', ', $missingPdf)) . '. Please reply to this email if you need copies.</p>';
-    }
-    $html .= '<p style="color:#666"><em>If you have already paid any of the invoices listed above, please disregard this email for those &mdash; our records simply haven&rsquo;t caught up with your payment(s) yet.</em></p>';
-    $html .= '<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>';
 
-    $subjectPrefix = [
-        'gentle'    => 'Overdue invoices',
-        'reminder'  => 'Overdue invoices',
-        'firm'      => 'Overdue invoices',
-        'very_firm' => 'OVERDUE — please action',
-        'final'     => 'FINAL NOTICE',
-    ][$tone] ?? 'Overdue invoices';
+    $invoiceTableHtml = '<table border="1" cellspacing="0" cellpadding="0" style="border-collapse:collapse;font-family:Arial,sans-serif;font-size:13px">'
+        . '<thead><tr style="background:#eee">'
+        . '<th style="padding:6px 8px;text-align:left">Invoice</th>'
+        . '<th style="padding:6px 8px;text-align:left">Due</th>'
+        . '<th style="padding:6px 8px;text-align:right">Days overdue</th>'
+        . '<th style="padding:6px 8px;text-align:right">Amount</th>'
+        . '<th style="padding:6px 8px;text-align:center">Online</th>'
+        . '</tr></thead><tbody>'
+        . implode('', $linesHtml)
+        . '</tbody></table>';
+    if (!empty($missingPdf)) {
+        $invoiceTableHtml .= '<p style="color:#a00">PDF attachments could not be retrieved for: ' . htmlspecialchars(implode(', ', $missingPdf)) . '. Please reply to this email if you need copies.</p>';
+    }
+
+    $tplKey = 'overdue_statement_' . ($tone === 'reminder' ? 'gentle' : $tone);
+    $vars   = array_merge(default_email_boilerplate(), [
+        'name'              => $name,
+        'client_name'       => $clientName,
+        'count'             => (string)$count,
+        'total_due'         => $totalStr,
+        'days_overdue'      => (string)$maxDays,
+        'invoice_table_html'=> $invoiceTableHtml,
+        'invoice_lines_text'=> implode("\r\n", $linesText) . (!empty($missingPdf) ? "\r\n(PDF attachments could not be retrieved for: " . implode(', ', $missingPdf) . ". Please reply if you need copies.)" : ''),
+        'example_ref'       => $exampleRef,
+    ]);
+
+    $subject = render_email_template(email_template_get($pdo, $tplKey, 'subject'), $vars);
+    $text    = render_email_template(email_template_get($pdo, $tplKey, 'text'),    $vars);
+    $html    = render_email_template(email_template_get($pdo, $tplKey, 'html'),    $vars);
 
     SmtpMailer::send([
         'to'          => $toAddrs,
         'bcc'         => ['accounts@cadviz.co.nz'],
         'reply_to'    => 'accounts@cadviz.co.nz',
-        'subject'     => $testPrefix . "{$subjectPrefix}: {$count} overdue invoice(s) for " . ($clientName ?: 'your account') . " ({$totalStr})",
+        'subject'     => $testPrefix . $subject,
         'text'        => $text,
         'html'        => $html,
         'attachments' => $attachments,

@@ -30,8 +30,9 @@ if (!function_exists('push_invoice_to_xero')) {
  *
  * Returns a one-line success message ("Invoice CAD-09489 sent to ...").
  */
-function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = false, bool $skipPush = false): string
+function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = false, bool $skipPush = false, string $testTo = ''): string
 {
+    $isTest = $testTo !== '';
     if ($invoiceNo <= 0) throw new Exception('Missing Invoice_No.');
 
     // Re-push to Xero before sending so the attached PDF + email body
@@ -75,9 +76,14 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     // (e.g. "ap@acme.co; cfo@acme.co"). All valid ones get the email.
     // Refuse to send (with a clear error for the admin) when neither
     // column has anything that passes FILTER_VALIDATE_EMAIL.
-    $toAddrs = pick_billing_emails($row['billing_email'] ?? null, $row['email'] ?? null);
-    if (empty($toAddrs)) {
-        throw new Exception("Client " . ($row['Client_Name'] ?? '') . " has no valid email (Billing Email or Email). Fix it on the Client page first.");
+    if ($isTest) {
+        // Divert in test mode — real client never sees this.
+        $toAddrs = [$testTo];
+    } else {
+        $toAddrs = pick_billing_emails($row['billing_email'] ?? null, $row['email'] ?? null);
+        if (empty($toAddrs)) {
+            throw new Exception("Client " . ($row['Client_Name'] ?? '') . " has no valid email (Billing Email or Email). Fix it on the Client page first.");
+        }
     }
 
     $client = new XeroClient($pdo);
@@ -137,26 +143,26 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     $payBy    = $payByIso ? date('d/m/Y', strtotime($payByIso)) : null;
     $onlineUrl  = $row['Xero_OnlineUrl'] ?: '';
 
-    $textBody  = "Dear {$greetName},\r\n\r\n";
-    $textBody .= "Please find attached invoice {$invNumStr} from CADViz Limited for $" . number_format($totalIncTax, 2) . " (incl. GST).\r\n\r\n";
-    if ($payBy)     $textBody .= "Payment due: {$payBy}\r\n\r\n";
-    if ($onlineUrl) $textBody .= "View online: {$onlineUrl}\r\n\r\n";
-    $textBody .= "If you have any queries please reply to this email.\r\n\r\n";
-    $textBody .= "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz\r\n";
-
-    $htmlBody  = '<p>Dear ' . htmlspecialchars($greetName) . ',</p>';
-    $htmlBody .= '<p>Please find attached invoice <strong>' . $invNumStr . '</strong> from CADViz Limited for <strong>$' . number_format($totalIncTax, 2) . '</strong> (incl. GST).</p>';
-    if ($payBy)     $htmlBody .= '<p><strong>Payment due:</strong> ' . htmlspecialchars($payBy) . '</p>';
-    if ($onlineUrl) $htmlBody .= '<p><a href="' . htmlspecialchars($onlineUrl) . '">View online</a></p>';
-    $htmlBody .= '<p>If you have any queries please reply to this email.</p>';
-    $htmlBody .= '<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>';
+    // Render the email body via the editable template (App_Meta override
+    // wins; falls back to default_email_templates() in helpers.php).
+    $vars = array_merge(default_email_boilerplate(), [
+        'name'        => $greetName,
+        'client_name' => $clientName,
+        'invoice_no'  => $invNumStr,
+        'amount'      => '$' . number_format($totalIncTax, 2),
+        'pay_by'      => $payBy ?: '(no due date set)',
+        'online_url'  => $onlineUrl ?: '(no Xero online link)',
+    ]);
+    $subject  = render_email_template(email_template_get($pdo, 'invoice', 'subject'), $vars);
+    $textBody = render_email_template(email_template_get($pdo, 'invoice', 'text'),    $vars);
+    $htmlBody = render_email_template(email_template_get($pdo, 'invoice', 'html'),    $vars);
 
     SmtpMailer::send([
         'to'          => $toAddrs,
-        'cc'          => $ccErik ? ['erik@cadviz.co.nz'] : [],
-        'bcc'         => ['accounts@cadviz.co.nz'],
+        'cc'          => $isTest ? [] : ($ccErik ? ['erik@cadviz.co.nz'] : []),
+        'bcc'         => $isTest ? [] : ['accounts@cadviz.co.nz'],
         'reply_to'    => 'accounts@cadviz.co.nz',
-        'subject'     => "Invoice {$invNumStr} from CADViz Limited",
+        'subject'     => ($isTest ? '[TEST] ' : '') . $subject,
         'text'        => $textBody,
         'html'        => $htmlBody,
         'attachments' => [[
@@ -166,11 +172,13 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
         ]],
     ]);
 
-    try { $client->markSentToContact($row['Xero_InvoiceID']); } catch (Exception $e) { /* non-fatal */ }
-    // Set Sent=1, refresh date_sent on every send (so the admin can see
-    // *when* the most recent email went out), and bump Status_INV to 2
-    // ("Sent") so the dashboard label moves out of "Ready to Send".
-    $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW(), Status_INV = 2 WHERE Invoice_No = ?")->execute([$invoiceNo]);
+    if (!$isTest) {
+        try { $client->markSentToContact($row['Xero_InvoiceID']); } catch (Exception $e) { /* non-fatal */ }
+        // Set Sent=1, refresh date_sent on every send (so the admin can see
+        // *when* the most recent email went out), and bump Status_INV to 2
+        // ("Sent") so the dashboard label moves out of "Ready to Send".
+        $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW(), Status_INV = 2 WHERE Invoice_No = ?")->execute([$invoiceNo]);
+    }
 
-    return "Invoice {$invNumStr} sent from accounts@cadviz.co.nz to " . implode(', ', $toAddrs) . '.';
+    return ($isTest ? '[TEST] ' : '') . "Invoice {$invNumStr} sent from accounts@cadviz.co.nz to " . implode(', ', $toAddrs) . '.';
 }

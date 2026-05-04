@@ -120,6 +120,7 @@ $pdo = get_db();
   <tr><td align="Left"><a onMouseOver="window.status='View list of Outstanding Invoices'; return true" onMouseOut="window.status=''; return true" href="invoice_list.php"><font color="#FFFFFF">Current Invoice List</font></a></td></tr>
   <tr><td width="652" align="Left"><a onMouseOver="window.status='View list of Old Invoices'; return true" onMouseOut="window.status=''; return true" href="invoice_archive.php"><font color="#FFFFFF">Archived Invoices</font></a></td></tr>
   <tr><td width="652" align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="monthly_invoicing.php"><font color="#FFFFFF">Monthly Invoicing (12mths)</font></a></td></tr>
+  <tr><td width="652" align="Left"><a onMouseOver="window.status='Edit the wording of every outbound email'; return true" onMouseOut="window.status=''; return true" href="email_templates.php"><font color="#FFFFFF">Email Templates (edit wording + per-tone tests)</font></a></td></tr>
   <tr>
     <td width="652" align="Left"><font color="#FFFFFF">Generate Invoice for:
         <?php print_dd_box($pdo, "Projects", "proj_id", "JOBNAME", "", "Proj_box", "proj_ID IN (SELECT proj_ID FROM Timesheets WHERE Invoice_No=0)"); ?>

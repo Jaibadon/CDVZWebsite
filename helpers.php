@@ -171,6 +171,135 @@ function clients_has_contact(PDO $pdo): bool {
     return $cached;
 }
 
+// ─── Editable email templates ─────────────────────────────────────────
+//
+// Every email body the system sends (single-invoice, manual statement,
+// reminder × 5 tones, overdue-statement × 5 tones) is rendered through
+// `render_email_template()`. The text comes from App_Meta when an admin
+// has saved an override on email_templates.php; otherwise we fall back
+// to the hardcoded default registered in `default_email_templates()`.
+//
+// Placeholder syntax inside templates: {var_name}. Anything in
+// $vars is substituted; unknown placeholders pass through unchanged
+// (so admins can spot typos by seeing them un-rendered in test sends).
+
+function render_email_template(string $tpl, array $vars): string {
+    return preg_replace_callback('/\{([a-zA-Z_][a-zA-Z0-9_]*)\}/', function($m) use ($vars) {
+        return array_key_exists($m[1], $vars) ? (string)$vars[$m[1]] : $m[0];
+    }, $tpl);
+}
+
+function email_template_get(PDO $pdo, string $key, string $field): string {
+    $stored = meta_get($pdo, 'tpl_' . $key . '_' . $field);
+    if ($stored !== null && $stored !== '') return $stored;
+    $defaults = default_email_templates();
+    return $defaults[$key][$field] ?? '';
+}
+
+function email_template_set(PDO $pdo, string $key, string $field, string $value): void {
+    $metaKey = 'tpl_' . $key . '_' . $field;
+    if ($value === '') {
+        try { $pdo->prepare("DELETE FROM App_Meta WHERE meta_key = ?")->execute([$metaKey]); } catch (Exception $e) {}
+    } else {
+        meta_set($pdo, $metaKey, $value);
+    }
+}
+
+function default_email_boilerplate(): array {
+    return [
+        'disregard'                => "If you have already paid this invoice, please disregard this email \xE2\x80\x94 our records simply haven't caught up with your payment yet.",
+        'disregard_statement'      => "If you have already paid any of the invoices listed above, please disregard this email for those \xE2\x80\x94 our records simply haven't caught up with your payment(s) yet.",
+        'disregard_html'           => '<p style="color:#666"><em>If you have already paid this invoice, please disregard this email &mdash; our records simply haven&rsquo;t caught up with your payment yet.</em></p>',
+        'disregard_statement_html' => '<p style="color:#666"><em>If you have already paid any of the invoices listed above, please disregard this email for those &mdash; our records simply haven&rsquo;t caught up with your payment(s) yet.</em></p>',
+        'kind_regards'             => "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz",
+        'kind_regards_html'        => '<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>',
+        'bank_details'             => "Internet Bank Transfer\r\nAccount Name: CADViz Limited\r\nAccount Number: 03-0275-0551274-000",
+        'bank_details_html'        => '<p>Internet Bank Transfer: <strong>03 0275 0551274 00</strong> (CADViz Limited)</p>',
+    ];
+}
+
+function default_email_templates(): array {
+    return [
+        'invoice' => [
+            'label'        => 'Invoice email (per-invoice "Email from CADViz")',
+            'placeholders' => 'name, client_name, invoice_no, amount, pay_by, online_url',
+            'subject'      => 'Invoice {invoice_no} from CADViz Limited',
+            'text'         => "Dear {name},\r\n\r\nPlease find attached invoice {invoice_no} from CADViz Limited for {amount} (incl. GST).\r\n\r\nPayment due: {pay_by}\r\n\r\nView online: {online_url}\r\n\r\n{disregard}\r\n\r\nIf you have any other queries please reply to this email.\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>Please find attached invoice <strong>{invoice_no}</strong> from CADViz Limited for <strong>{amount}</strong> (incl. GST).</p><p><strong>Payment due:</strong> {pay_by}</p><p><a href="{online_url}">View online</a></p>{disregard_html}<p>If you have any other queries please reply to this email.</p>{kind_regards_html}',
+        ],
+        'statement_manual' => [
+            'label'        => 'Manual statement (Send Statement button)',
+            'placeholders' => 'name, client_name, count, total_due, invoice_table_html, invoice_lines_text, example_ref',
+            'subject'      => 'Statement of outstanding invoices from CADViz Limited',
+            'text'         => "Dear {name},\r\n\r\nPlease find attached a statement of outstanding invoices from CADViz Limited ({count} invoice(s)).\r\n\r\n{disregard_statement}\r\n\r\nOutstanding balance: {total_due}\r\n\r\nOutstanding invoices:\r\n{invoice_lines_text}\r\n\r\nIMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. {example_ref}) as the bank-transfer reference, so we can match each payment correctly.\r\n\r\n{bank_details}\r\n\r\nIf you have any other queries please reply to this email.\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>Please find attached a statement of outstanding invoices from <strong>CADViz Limited</strong> ({count} invoice(s)).</p>{disregard_statement_html}<p style="font-size:16px"><strong>Outstanding balance: {total_due}</strong></p>{invoice_table_html}<p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice\'s reference (e.g. <strong>{example_ref}</strong>) on your bank transfer so we can match each payment to the correct invoice.</p>{bank_details_html}<p>If you have any other queries please reply to this email.</p>{kind_regards_html}',
+        ],
+        'reminder_gentle' => [
+            'label'        => 'Reminder — gentle (7 days overdue)',
+            'placeholders' => 'name, invoice_no, amount, due_date, days_overdue, online_url',
+            'subject'      => 'Reminder: Invoice {invoice_no} ({days_overdue} days overdue)',
+            'text'         => "Dear {name},\r\n\r\nThis is a friendly reminder that invoice {invoice_no} for {amount} was due on {due_date} ({days_overdue} days ago).\r\n\r\nView / pay online: {online_url}\r\n\r\n{disregard}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>This is a friendly reminder that invoice <strong>{invoice_no}</strong> for <strong>{amount}</strong> was due on <strong>{due_date}</strong> ({days_overdue} days ago).</p><p><a href="{online_url}">View / pay invoice online</a></p>{disregard_html}{kind_regards_html}',
+        ],
+        'reminder_reminder' => [
+            'label'        => 'Reminder — please pay soon (14 days overdue)',
+            'placeholders' => 'name, invoice_no, amount, due_date, days_overdue, online_url',
+            'subject'      => 'Overdue: Invoice {invoice_no} ({days_overdue} days overdue)',
+            'text'         => "Dear {name},\r\n\r\nInvoice {invoice_no} for {amount} is now {days_overdue} days overdue (due date {due_date}).\r\n\r\nPlease arrange payment at your earliest convenience.\r\n\r\nView / pay online: {online_url}\r\n\r\n{disregard}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>Invoice <strong>{invoice_no}</strong> for <strong>{amount}</strong> is now <strong>{days_overdue} days overdue</strong> (due date {due_date}).</p><p>Please arrange payment at your earliest convenience.</p><p><a href="{online_url}">View / pay invoice online</a></p>{disregard_html}{kind_regards_html}',
+        ],
+        'reminder_firm' => [
+            'label'        => 'Reminder — firm (30 days overdue)',
+            'placeholders' => 'name, invoice_no, amount, due_date, days_overdue, online_url',
+            'subject'      => 'Overdue: Invoice {invoice_no} ({days_overdue} days overdue)',
+            'text'         => "Dear {name},\r\n\r\nInvoice {invoice_no} for {amount} is now {days_overdue} days overdue. We would appreciate prompt payment.\r\n\r\nIf there's an issue with this invoice please reply to this email so we can sort it.\r\n\r\nView / pay online: {online_url}\r\n\r\n{disregard}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>Invoice <strong>{invoice_no}</strong> for <strong>{amount}</strong> is now <strong>{days_overdue} days overdue</strong>. We would appreciate prompt payment.</p><p>If there&rsquo;s an issue with this invoice please reply to this email so we can sort it.</p><p><a href="{online_url}">View / pay invoice online</a></p>{disregard_html}{kind_regards_html}',
+        ],
+        'reminder_very_firm' => [
+            'label'        => 'Reminder — very firm (45 days overdue)',
+            'placeholders' => 'name, invoice_no, amount, due_date, days_overdue, online_url',
+            'subject'      => 'OVERDUE - please action: Invoice {invoice_no} ({days_overdue} days overdue)',
+            'text'         => "Dear {name},\r\n\r\nInvoice {invoice_no} for {amount} is now {days_overdue} days overdue (due date {due_date}) \xE2\x80\x94 this is significantly outside our usual payment terms.\r\n\r\nPlease settle this invoice this week. Under our standard Terms and Conditions of Trade (clause 5.2) interest of 2.5% per month or part month may be added to any amount owing past the due date.\r\n\r\nIf there is a dispute or a hardship issue please reply to this email today so we can talk it through before it escalates further.\r\n\r\nView / pay online: {online_url}\r\n\r\n{disregard}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>Invoice <strong>{invoice_no}</strong> for <strong>{amount}</strong> is now <strong>{days_overdue} days overdue</strong> (due date <strong>{due_date}</strong>) &mdash; this is significantly outside our usual payment terms.</p><p>Please settle this invoice this week. Under our standard Terms and Conditions of Trade (clause&nbsp;5.2) interest of 2.5% per month or part month may be added to any amount owing past the due date.</p><p>If there is a dispute or a hardship issue please reply to this email today so we can talk it through before it escalates further.</p><p><a href="{online_url}">View / pay invoice online</a></p>{disregard_html}{kind_regards_html}',
+        ],
+        'reminder_final' => [
+            'label'        => 'Reminder — FINAL NOTICE (60 days overdue, hard-stop)',
+            'placeholders' => 'name, invoice_no, amount, due_date, days_overdue, online_url',
+            'subject'      => 'FINAL NOTICE: Invoice {invoice_no} ({days_overdue} days overdue)',
+            'text'         => "Dear {name},\r\n\r\nFINAL NOTICE \xE2\x80\x94 Invoice {invoice_no} for {amount} is now {days_overdue} days overdue (due date {due_date}).\r\n\r\nIf we have not received payment or heard from you within 7 days we will refer this account to a debt-collection agency. Late-payment interest (2.5% per month or part month, T&Cs clause 5.2) and any reasonable solicitor's / collection-agency fees we incur become payable in addition to the invoice amount (clause 5.3).\r\n\r\nPlease reply to this email today even if you cannot pay in full \xE2\x80\x94 we would much rather agree a payment plan than escalate.\r\n\r\nView / pay online: {online_url}\r\n\r\n{disregard}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p style="color:#a00;font-weight:bold">FINAL NOTICE</p><p>Invoice <strong>{invoice_no}</strong> for <strong>{amount}</strong> is now <strong>{days_overdue} days overdue</strong> (due date <strong>{due_date}</strong>).</p><p>If we have not received payment or heard from you <strong>within 7 days</strong> we will refer this account to a debt-collection agency. Late-payment interest (2.5% per month or part month, T&amp;Cs clause&nbsp;5.2) and any reasonable solicitor&rsquo;s / collection-agency fees we incur become payable in addition to the invoice amount (clause&nbsp;5.3).</p><p>Please reply to this email today even if you cannot pay in full &mdash; we would much rather agree a payment plan than escalate.</p><p><a href="{online_url}">View / pay invoice online</a></p>{disregard_html}{kind_regards_html}',
+        ],
+        'overdue_statement_gentle' => [
+            'label'        => 'Overdue statement — gentle / reminder (≤14 days)',
+            'placeholders' => 'name, client_name, count, total_due, days_overdue, invoice_table_html, invoice_lines_text, example_ref',
+            'subject'      => 'Overdue invoices: {count} for {client_name} ({total_due})',
+            'text'         => "Dear {name},\r\n\r\nWe have {count} overdue invoices totalling {total_due} on your account with CADViz Limited. Please find attached and arrange payment when you can.\r\n\r\nOutstanding invoices:\r\n{invoice_lines_text}\r\n\r\nTOTAL OVERDUE: {total_due}\r\n\r\nIMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. {example_ref}) as the bank-transfer reference, so we can match each payment correctly.\r\n\r\n{bank_details}\r\n\r\n{disregard_statement}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>We have <strong>{count} overdue invoices</strong> totalling <strong>{total_due}</strong> on your account with CADViz Limited. Please find attached and arrange payment when you can.</p>{invoice_table_html}<p style="font-size:16px;margin-top:10px"><strong>Total overdue: {total_due}</strong></p><p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice&rsquo;s reference (e.g. <strong>{example_ref}</strong>) on your bank transfer so we can match each payment correctly.</p>{bank_details_html}{disregard_statement_html}{kind_regards_html}',
+        ],
+        'overdue_statement_firm' => [
+            'label'        => 'Overdue statement — firm (30 days)',
+            'placeholders' => 'name, client_name, count, total_due, days_overdue, invoice_table_html, invoice_lines_text, example_ref',
+            'subject'      => 'Overdue invoices: {count} for {client_name} ({total_due})',
+            'text'         => "Dear {name},\r\n\r\nWe have {count} overdue invoices totalling {total_due} on your account with CADViz Limited. Please arrange payment promptly.\r\n\r\nIf there's a dispute or hardship issue please reply to this email so we can talk it through.\r\n\r\nOutstanding invoices:\r\n{invoice_lines_text}\r\n\r\nTOTAL OVERDUE: {total_due}\r\n\r\nIMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. {example_ref}) as the bank-transfer reference, so we can match each payment correctly.\r\n\r\n{bank_details}\r\n\r\n{disregard_statement}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>We have <strong>{count} overdue invoices</strong> totalling <strong>{total_due}</strong> on your account with CADViz Limited. Please arrange payment promptly.</p><p>If there&rsquo;s a dispute or hardship issue please reply to this email so we can talk it through.</p>{invoice_table_html}<p style="font-size:16px;margin-top:10px"><strong>Total overdue: {total_due}</strong></p><p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice&rsquo;s reference (e.g. <strong>{example_ref}</strong>) on your bank transfer so we can match each payment correctly.</p>{bank_details_html}{disregard_statement_html}{kind_regards_html}',
+        ],
+        'overdue_statement_very_firm' => [
+            'label'        => 'Overdue statement — very firm (45 days)',
+            'placeholders' => 'name, client_name, count, total_due, days_overdue, invoice_table_html, invoice_lines_text, example_ref',
+            'subject'      => 'OVERDUE - please action: {count} invoices for {client_name} ({total_due})',
+            'text'         => "Dear {name},\r\n\r\nYour CADViz Limited account currently has {count} overdue invoices totalling {total_due} \xE2\x80\x94 the oldest is now {days_overdue} days past due, which is significantly outside our payment terms.\r\n\r\nPlease settle these invoices this week. Under our standard Terms and Conditions of Trade (clause 5.2) interest of 2.5% per month or part month may be added to any amount owing past the due date.\r\n\r\nIf there is a dispute or a hardship issue please reply to this email today so we can agree a payment plan before the matter escalates further.\r\n\r\nOutstanding invoices:\r\n{invoice_lines_text}\r\n\r\nTOTAL OVERDUE: {total_due}\r\n\r\nIMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. {example_ref}) as the bank-transfer reference, so we can match each payment correctly.\r\n\r\n{bank_details}\r\n\r\n{disregard_statement}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>Your CADViz Limited account currently has <strong>{count} overdue invoices</strong> totalling <strong>{total_due}</strong> &mdash; the oldest is now <strong>{days_overdue} days past due</strong>, which is significantly outside our payment terms.</p><p>Please settle these invoices this week. Under our standard Terms and Conditions of Trade (clause&nbsp;5.2) interest of 2.5% per month or part month may be added to any amount owing past the due date.</p><p>If there is a dispute or a hardship issue please reply to this email today so we can agree a payment plan before the matter escalates further.</p>{invoice_table_html}<p style="font-size:16px;margin-top:10px"><strong>Total overdue: {total_due}</strong></p><p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice&rsquo;s reference (e.g. <strong>{example_ref}</strong>) on your bank transfer so we can match each payment correctly.</p>{bank_details_html}{disregard_statement_html}{kind_regards_html}',
+        ],
+        'overdue_statement_final' => [
+            'label'        => 'Overdue statement — FINAL NOTICE (60 days, hard-stop)',
+            'placeholders' => 'name, client_name, count, total_due, days_overdue, invoice_table_html, invoice_lines_text, example_ref',
+            'subject'      => 'FINAL NOTICE: {count} overdue invoices for {client_name} ({total_due})',
+            'text'         => "Dear {name},\r\n\r\nFINAL NOTICE \xE2\x80\x94 your CADViz Limited account has {count} overdue invoices totalling {total_due}, the oldest now {days_overdue} days past due.\r\n\r\nIf we have not received payment in full or heard from you within 7 days we will refer this account to a debt-collection agency. Late-payment interest (2.5% per month or part month, T&Cs clause 5.2) and any reasonable solicitor's / collection-agency fees we incur become payable in addition to the invoice amounts (clause 5.3).\r\n\r\nPlease reply to this email today even if you cannot pay in full \xE2\x80\x94 we would much rather agree a payment plan than escalate.\r\n\r\nOutstanding invoices:\r\n{invoice_lines_text}\r\n\r\nTOTAL OVERDUE: {total_due}\r\n\r\nIMPORTANT: please pay each invoice INDIVIDUALLY using that invoice's number (e.g. {example_ref}) as the bank-transfer reference, so we can match each payment correctly.\r\n\r\n{bank_details}\r\n\r\n{disregard_statement}\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p style="color:#a00;font-weight:bold">FINAL NOTICE</p><p>Your CADViz Limited account has <strong>{count} overdue invoices</strong> totalling <strong>{total_due}</strong>, the oldest now <strong>{days_overdue} days past due</strong>.</p><p>If we have not received payment in full or heard from you <strong>within 7 days</strong> we will refer this account to a debt-collection agency. Late-payment interest (2.5% per month or part month, T&amp;Cs clause&nbsp;5.2) and any reasonable solicitor&rsquo;s / collection-agency fees we incur become payable in addition to the invoice amounts (clause&nbsp;5.3).</p><p>Please reply to this email today even if you cannot pay in full &mdash; we would much rather agree a payment plan than escalate.</p>{invoice_table_html}<p style="font-size:16px;margin-top:10px"><strong>Total overdue: {total_due}</strong></p><p style="color:#a00000"><strong>Important:</strong> please pay each invoice <em>individually</em> and quote that invoice&rsquo;s reference (e.g. <strong>{example_ref}</strong>) on your bank transfer so we can match each payment correctly.</p>{bank_details_html}{disregard_statement_html}{kind_regards_html}',
+        ],
+    ];
+}
+
 /**
  * Salutation name for invoice / statement / reminder emails. Returns the
  * Clients.Contact value verbatim (just trimmed) so admins keep full control
