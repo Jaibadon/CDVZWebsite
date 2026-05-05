@@ -206,9 +206,12 @@ if ($xeroConnected) {
         <p style="font-size:11px;color:#555">
           Automatic reminders are <strong>opt-in</strong>. Click
           <strong>🔔 Start reminders</strong> on a row to let cron email
-          that client on the 7 / 14 / 30 / 45 / 60-day overdue stages
-          (60d is the final notice and the hard-stop &mdash; cron does
-          not auto-send after that).
+          that client on the 8 / 15 / 31 / 46 / 61-day overdue stages
+          (1 day past the typical 7/14/30/45/60 schedule, because Xero's
+          bank feed surfaces payments roughly a day late and we don't
+          want to chase a client who paid yesterday). 61d is the final
+          notice and the hard-stop &mdash; cron does not auto-send after
+          that.
           The per-row <strong>✉ Send reminder</strong> button always
           works regardless of opt-in &mdash; useful for one-off chases
           after a phone call.
@@ -219,20 +222,20 @@ if ($xeroConnected) {
           <br>
           <a href="xero_send_reminders.php?dry_run=1" target="_blank">Preview reminder run (dry-run)</a>
           &nbsp;|&nbsp;
-          <a href="xero_send_reminders.php" target="_blank" onclick="return confirm('Send overdue reminders to ALL clients due for one right now?\n\nXero is synced first, paid invoices are skipped, opt-in flag is required, and each email asks the client to disregard if already paid. Continue?');">Run reminder batch now</a>
+          <a href="xero_send_reminders.php" target="_blank" onclick="return confirm('Send overdue reminders to ALL clients due for one right now?\n\nXero is synced first, paid invoices are skipped, opt-in flag is required, and each email asks the client to disregard if they paid in the last 24–48h (Xero takes ~1 day to surface bank-fed payments — that''s why the schedule has a 1-day buffer). Continue?');">Run reminder batch now</a>
           <br>
           <strong style="color:#7a5a00">Test mode (no real client emails):</strong>
           <a href="xero_send_reminders.php?test=1" target="_blank">Run with diversion only</a>
           &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=gentle"    target="_blank">7d / gentle</a>
+          <a href="xero_send_reminders.php?test=1&force_tone=gentle"    target="_blank">8d / gentle</a>
           &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=reminder"  target="_blank">14d / reminder</a>
+          <a href="xero_send_reminders.php?test=1&force_tone=reminder"  target="_blank">15d / reminder</a>
           &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=firm"      target="_blank">30d / firm</a>
+          <a href="xero_send_reminders.php?test=1&force_tone=firm"      target="_blank">31d / firm</a>
           &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=very_firm" target="_blank">45d / very_firm</a>
+          <a href="xero_send_reminders.php?test=1&force_tone=very_firm" target="_blank">46d / very_firm</a>
           &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=final"     target="_blank">60d / final</a>
+          <a href="xero_send_reminders.php?test=1&force_tone=final"     target="_blank">61d / final</a>
         </p>
         <table class="table">
           <tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Email</th><th>Due</th><th class="right">Amount Due</th><th>Status</th><th>Last reminder</th><th>Action</th></tr>
@@ -271,10 +274,10 @@ if ($xeroConnected) {
                 <a href="invoice.php?Invoice_No=<?= (int)$od['Invoice_No'] ?>" style="font-size:11px">Local</a>
                 <br>
                 <a href="xero_send_reminders.php?invoice_no=<?= (int)$od['Invoice_No'] ?>"
-                   onclick="return confirm('Send overdue reminder for CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?> now from accounts@cadviz.co.nz?\n\nXero is re-synced first so a just-paid invoice will be skipped. The email asks the client to disregard if already paid. Continue?');"
+                   onclick="return confirm('Send overdue reminder for CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?> now from accounts@cadviz.co.nz?\n\nXero is re-synced first, but Xero''s bank feed takes ~1 day to surface payments — a payment the client made yesterday may not show up yet. The email body explicitly asks the client to disregard if they paid in the last 24–48h. Continue?');"
                    style="background:#9B9B1B;color:#fff;padding:2px 8px;border-radius:3px;text-decoration:none;font-size:11px">✉ Send reminder</a>
                 <form method="post" action="monthly_invoicing.php" style="display:inline;margin-left:4px"
-                      onsubmit="return confirm('<?= $isStarted ? 'Stop' : 'Start' ?> automatic reminders for ALL of <?= htmlspecialchars(addslashes((string)($od['Client_Name'] ?? 'this client')), ENT_QUOTES) ?>’s overdue invoices?\n\n<?= $isStarted ? 'This switches OFF automatic reminders for every overdue invoice this client has — current and future. The per-row Send reminder button still works.' : 'This switches ON automatic reminders for every overdue invoice this client has — current and future. Cron will send on the 7/14/30/45/60-day stages until paid (or until day 60 hard-stop). The per-row Send reminder button always works regardless.' ?>');">
+                      onsubmit="return confirm('<?= $isStarted ? 'Stop' : 'Start' ?> automatic reminders for ALL of <?= htmlspecialchars(addslashes((string)($od['Client_Name'] ?? 'this client')), ENT_QUOTES) ?>’s overdue invoices?\n\n<?= $isStarted ? 'This switches OFF automatic reminders for every overdue invoice this client has — current and future. The per-row Send reminder button still works.' : 'This switches ON automatic reminders for every overdue invoice this client has — current and future. Cron will send on the 8/15/31/46/61-day stages (1-day buffer past the typical 7/14/30/45/60 schedule, because Xero takes ~1 day to surface payments from the bank feed) until paid. Day 61 is the hard-stop. The per-row Send reminder button always works regardless.' ?>');">
                   <input type="hidden" name="action" value="toggle_reminders">
                   <input type="hidden" name="client_id" value="<?= (int)$od['Client_ID'] ?>">
                   <input type="submit" value="<?= $isStarted ? '🔕 Stop reminders (client)' : '🔔 Start reminders (client)' ?>"

@@ -88,7 +88,37 @@ if ($testMode) {
 // Always sync from Xero before deciding who to remind, so that invoices
 // paid since the last sync don't get a reminder. Errors are non-fatal —
 // fall through to the existing local view if Xero is unreachable.
+//
+// Important: Xero's bank feed itself takes ~1 day to reflect a payment
+// after it actually clears the bank, so even a successful sync here
+// only catches payments Xero already knows about. The reminder
+// schedule has a +1 day buffer (8/15/31/46/61) to absorb that lag,
+// and the email boilerplate explicitly asks the client to disregard
+// if they paid in the last 24–48 hours.
 $syncResult = run_xero_sync($pdo);
+
+// Stale-sync guard: if run_xero_sync didn't manage to refresh today's
+// data (Xero unreachable, OAuth expired, etc.) and the latest
+// Xero_LastSynced is older than 36 hours, refuse to auto-send. We'd
+// rather miss a stage-day than chase a client who paid 2 days ago and
+// just hasn't been synced yet. Test mode and manual ?invoice_no=
+// override bypass this guard.
+$staleSyncAbort = false;
+if (!$testMode && $singleInvoice <= 0) {
+    try {
+        $latestSync = $pdo->query("SELECT MAX(Xero_LastSynced) FROM Invoices")->fetchColumn();
+        if ($latestSync) {
+            $hoursStale = (time() - strtotime((string)$latestSync)) / 3600;
+            if ($hoursStale > 36) {
+                $staleSyncAbort = true;
+                error_log(sprintf(
+                    '[xero_send_reminders] aborting: latest Xero_LastSynced is %.1fh old (>36h) — refusing to send against stale data',
+                    $hoursStale
+                ));
+            }
+        }
+    } catch (Exception $e) { /* schema may lack Xero_LastSynced — fall through */ }
+}
 
 // ── Reminder schedule: days-overdue → tone ───────────────────────────────
 //
@@ -97,16 +127,29 @@ $syncResult = run_xero_sync($pdo);
 //
 //    stage    days     tone           wording
 //    -----    -----    -------------  ----------------------------
-//    1        7        gentle         friendly reminder
-//    2        14       reminder       please pay soon
-//    3        30       firm           prompt payment requested
-//    4        45       very_firm      explicit "this is now seriously overdue"
-//    5        60       final          "final notice — next step is collections"
+//    1        8        gentle         friendly reminder
+//    2        15       reminder       please pay soon
+//    3        31       firm           prompt payment requested
+//    4        46       very_firm      explicit "this is now seriously overdue"
+//    5        61       final          "final notice — next step is collections"
 //                                     ALSO the hard-stop. Cron stops sending
 //                                     after this so we don't drip the same
 //                                     email forever; Erik handles 60+ day
 //                                     debts manually (call, payment plan,
 //                                     collections, write-off).
+//
+// **Why the schedule is shifted by +1 day** (8/15/31/46/61 instead of
+// 7/14/30/45/60): Xero's bank feed reconciles payments roughly 1 day
+// after the bank actually clears them, so a payment made by the client
+// on day 7 may not show in our local Xero mirror until day 8. Sending a
+// reminder on the same day a payment lands is the #1 source of
+// "I already paid" complaints. Adding a 1-day buffer absorbs the lag —
+// we always run run_xero_sync() at the top of this script, so by day 8
+// any payment that landed on day 7 is reflected and the invoice is
+// dropped from the candidate set. We can't eliminate the false-positive
+// risk completely (a client paying late on day 8 morning may not appear
+// until day 9) but the disregard wording in every reminder/statement
+// covers that edge case.
 //
 // **Opt-in by default, per-CLIENT.** Reminders DO NOT fire automatically.
 // Erik must explicitly press "Start reminders" on monthly_invoicing.php
@@ -118,8 +161,8 @@ $syncResult = run_xero_sync($pdo);
 // partial bundles. The manual per-row "Send reminder" button
 // (?invoice_no=N) bypasses the opt-in so Erik can fire one-off reminders
 // without flipping the long-term flag.
-$reminderStages   = [7, 14, 30, 45, 60];
-$reminderHardStop = 60;                    // matches the final-notice stage — no auto-sends past this
+$reminderStages   = [8, 15, 31, 46, 61];
+$reminderHardStop = 61;                    // matches the final-notice stage — no auto-sends past this
 $minGapDays       = (int)(meta_get($pdo, 'reminder_min_gap_days') ?: 6);
 $cap              = (int)($_ENV['CADVIZ_REMINDER_CAP'] ?? 30);
 
@@ -206,7 +249,7 @@ $shouldRemind = function(array $r) use ($singleInvoice, $reminderStages, $remind
     if (!$testMode && $days > $reminderHardStop && $singleInvoice <= 0) {
         return "skip:past hard-stop ({$days}d overdue, cap {$reminderHardStop}d) — handle manually";
     }
-    // Stage match — exact day = 7, 14, 30, 45, 60. Test mode skips the
+    // Stage match — exact day = 8, 15, 31, 46, 61. Test mode skips the
     // schedule check (since we may have force-overridden $days for tone preview).
     $isStage = in_array($days, $reminderStages, true);
     if (!$testMode && !$isStage && $singleInvoice <= 0) {
@@ -226,18 +269,28 @@ $shouldRemind = function(array $r) use ($singleInvoice, $reminderStages, $remind
 // admin can preview a specific tone without waiting for time to pass.
 // force_tone wins; else force_days; else the row's real days_overdue.
 $forceDaysFromTone = [
-    'gentle'    => 7,
-    'reminder'  => 14,
-    'firm'      => 30,
-    'very_firm' => 45,
-    'final'     => 60,
+    'gentle'    => 8,
+    'reminder'  => 15,
+    'firm'      => 31,
+    'very_firm' => 46,
+    'final'     => 61,
 ][$forceTone ?? ''] ?? null;
 $daysOverride = $forceDaysFromTone ?? $forceDays;
 
 $subjectTestPrefix = $testMode ? '[TEST] ' : '';
 
 // ── Main loop: per client ────────────────────────────────────────────────
+// If the stale-sync guard tripped, mark every candidate as skipped and
+// fall through to the report. Don't send anything.
+if ($staleSyncAbort) {
+    foreach ($byClient as $cid => $g) {
+        foreach ($g['overdue'] as $r) {
+            $skipped[(int)$r['Invoice_No']] = 'Xero sync is >36h stale — refusing to send against potentially missed payments';
+        }
+    }
+}
 foreach ($byClient as $cid => $g) {
+    if ($staleSyncAbort) break;
     if (count($sent) >= $cap) break;
     /** @var array $overdueRows */
     $overdueRows = $g['overdue'];
@@ -537,6 +590,11 @@ if ($isCli) {
   <?php endif; ?>
   <p style="color:#246">Xero sync: <strong><?= (int)($syncResult['updated'] ?? 0) ?></strong> invoices refreshed,
      <strong><?= (int)($syncResult['paid_marked'] ?? 0) ?></strong> auto-marked PAID before this run.</p>
+  <?php if ($staleSyncAbort): ?>
+    <div style="background:#ffd6d6;border:2px solid #c33;color:#a00;padding:10px 14px;border-radius:4px;margin-bottom:12px">
+      <strong>Aborted:</strong> the latest Xero_LastSynced timestamp is more than 36 hours old, so this run refused to send any reminders. Reconnect Xero (menu &rarr; Connect Xero) or re-run the sync manually, then run this again. Skipping is the safer default — it avoids chasing clients whose payments may simply not have synced yet.
+    </div>
+  <?php endif; ?>
   <?php foreach (($syncResult['errors'] ?? []) as $e): ?>
     <p style="color:#c33">Sync warning: <?= htmlspecialchars($e) ?></p>
   <?php endforeach; ?>

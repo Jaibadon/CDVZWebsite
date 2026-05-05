@@ -207,10 +207,10 @@ function email_template_set(PDO $pdo, string $key, string $field, string $value)
 
 function default_email_boilerplate(): array {
     return [
-        'disregard'                => "If you have already paid this invoice, please disregard this email \xE2\x80\x94 our records simply haven't caught up with your payment yet.",
-        'disregard_statement'      => "If you have already paid any of the invoices listed above, please disregard this email for those \xE2\x80\x94 our records simply haven't caught up with your payment(s) yet.",
-        'disregard_html'           => '<p style="color:#666"><em>If you have already paid this invoice, please disregard this email &mdash; our records simply haven&rsquo;t caught up with your payment yet.</em></p>',
-        'disregard_statement_html' => '<p style="color:#666"><em>If you have already paid any of the invoices listed above, please disregard this email for those &mdash; our records simply haven&rsquo;t caught up with your payment(s) yet.</em></p>',
+        'disregard'                => "If you have already paid this invoice, please disregard this email.",
+        'disregard_statement'      => "If you have already paid any of the invoices listed above, please disregard this email for those.",
+        'disregard_html'           => '<p style="color:#666"><em>If you have already paid this invoice, please disregard this email.</em></p>',
+        'disregard_statement_html' => '<p style="color:#666"><em>If you have already paid any of the invoices listed above, please disregard this email for those.</em></p>',
         'kind_regards'             => "Kind regards,\r\nCADViz Accounts\r\naccounts@cadviz.co.nz",
         'kind_regards_html'        => '<p>Kind regards,<br>CADViz Accounts<br>accounts@cadviz.co.nz</p>',
         'bank_details'             => "Internet Bank Transfer\r\nAccount Name: CADViz Limited\r\nAccount Number: 03-0275-0551274-000",

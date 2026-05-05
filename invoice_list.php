@@ -284,7 +284,7 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
                 $clientNameJs = addslashes((string)$client);
                 $confirmMsg  = $started
                     ? "Stop automatic reminders for ALL of {$clientNameJs}\xe2\x80\x99s overdue invoices?\\n\\nThis switches OFF cron-driven reminders for every overdue invoice this client has — current and future. The per-row Send reminder button still works."
-                    : "Start automatic reminders for ALL of {$clientNameJs}\xe2\x80\x99s overdue invoices?\\n\\nThis switches ON cron-driven reminders for every overdue invoice this client has — current and future. Cron sends on the 7/14/30/45/60-day stages until paid (60-day = hard-stop).";
+                    : "Start automatic reminders for ALL of {$clientNameJs}\xe2\x80\x99s overdue invoices?\\n\\nThis switches ON cron-driven reminders for every overdue invoice this client has — current and future. Cron sends on the 8/15/31/46/61-day stages until paid (1-day buffer past the typical 7/14/30/45/60 because Xero takes ~1 day to surface bank-fed payments). Day 61 = hard-stop.";
                 echo " <form method=\"post\" action=\"invoice_list.php\" style=\"display:inline\" onsubmit=\"return confirm('" . htmlspecialchars($confirmMsg, ENT_QUOTES) . "');\">"
                    . "<input type=\"hidden\" name=\"action\" value=\"toggle_reminders\">"
                    . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
@@ -311,7 +311,7 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
     //   - The client has >1 unpaid invoice (otherwise the per-invoice
     //     Email button is the right choice)
     if ($checked && $xs && $clientId > 0 && ($unpaidPerClient[$clientId] ?? 0) > 1) {
-        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Send a STATEMENT email to this client now?\\n\\nIncludes PDFs of every unpaid invoice and marks each one as Sent. The client will be asked to disregard if already paid. Continue?');\">"
+        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Send a STATEMENT email to this client now?\\n\\nIncludes PDFs of every unpaid invoice and marks each one as Sent. Note: Xero''s bank feed takes ~1 day to surface payments — invoices the client paid yesterday may still appear here. The email body asks the client to disregard if they paid in the last 24–48h. Continue?');\">"
            . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
            . "<input type=\"submit\" value=\"&#9993; Send Statement\" style=\"background:#5d3a9b;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
            . "</form>";

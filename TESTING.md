@@ -47,8 +47,11 @@ sends mail correctly and reaches the right inboxes.
 
 ### 2b. Test each tone end-to-end
 1. On `monthly_invoicing.php`, click each of the test-mode links:
-   "7d / gentle", "14d / reminder", "30d / firm", "45d / very_firm",
-   "60d / final".
+   "8d / gentle", "15d / reminder", "31d / firm", "46d / very_firm",
+   "61d / final". (The schedule is offset by +1 day vs. the original
+   7/14/30/45/60 because Xero's bank feed lags real bank settlement
+   by ~1 day — sending on day 7 risked chasing clients who'd paid the
+   day before.)
 2. Every click sends one email to `accounts@cadviz.co.nz` with a `[TEST]`
    subject prefix. Read each one — confirm:
    - Wording matches the tone (gentle = friendly, final = "FINAL NOTICE").
