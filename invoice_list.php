@@ -13,16 +13,30 @@ if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     exit;
 }
 
-// ── Start / stop automatic reminders for a single invoice ───────────
-// Mirrors the monthly_invoicing.php handler so admins can flip the
-// reminder opt-in flag straight from the day-to-day invoice list. Same
-// App_Meta key (reminder_started_<n>) so the cron path picks it up
-// automatically.
+// ── Start / stop automatic reminders for a CLIENT (all of their invoices) ──
+// Mirrors monthly_invoicing.php. The opt-in flag is per-CLIENT
+// (reminder_started_client_<Client_ID>) so flipping it covers every overdue
+// invoice for that client — current and future. This keeps the cron's
+// statement-batch path consistent: when a client has 2+ overdue invoices the
+// statement bundles ALL of them, so we don't want partial opt-in. The
+// invoice_no in the form is just the row the user clicked on; the handler
+// resolves it to a Client_ID before flipping the meta key.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_reminders') {
     $pdoForToggle = get_db();
-    $invNo = (int)($_POST['invoice_no'] ?? 0);
-    if ($invNo > 0) {
-        $key = 'reminder_started_' . $invNo;
+    $cid = (int)($_POST['client_id'] ?? 0);
+    if ($cid <= 0) {
+        // fall back to looking up the client from invoice_no
+        $invNo = (int)($_POST['invoice_no'] ?? 0);
+        if ($invNo > 0) {
+            try {
+                $st = $pdoForToggle->prepare("SELECT Client_ID FROM Invoices WHERE Invoice_No = ?");
+                $st->execute([$invNo]);
+                $cid = (int)($st->fetchColumn() ?: 0);
+            } catch (Exception $e) {}
+        }
+    }
+    if ($cid > 0) {
+        $key = 'reminder_started_client_' . $cid;
         $cur = meta_get($pdoForToggle, $key);
         if (!empty($cur)) {
             try { $pdoForToggle->prepare("DELETE FROM App_Meta WHERE meta_key = ?")->execute([$key]); } catch (Exception $e) {}
@@ -236,21 +250,23 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
 
             // Start / Stop reminders toggle — shown only on Xero-pushed
             // unpaid invoices (paid invoices don't trigger reminders even
-            // if started). Same App_Meta key as monthly_invoicing.php.
-            if ($xs !== 'PAID') {
-                $started     = !empty(meta_get(get_db(), 'reminder_started_' . (int)$invNo));
+            // if started). Per-CLIENT App_Meta key — flipping it covers
+            // every overdue invoice for the client, current and future.
+            if ($xs !== 'PAID' && $clientId > 0) {
+                $started     = !empty(meta_get(get_db(), 'reminder_started_client_' . $clientId));
                 $startBg     = $started ? '#666' : '#1a6b1a';
-                $startLabel  = $started ? '&#128276; Stop reminders' : '&#128276; Start reminders';
+                $startLabel  = $started ? '&#128276; Stop reminders (client)' : '&#128276; Start reminders (client)';
                 $startTitle  = $started
-                    ? "Cron is sending automatic reminders on the 7/14/30/45/60-day stages. Click to stop."
-                    : "Reminders are OFF for this invoice (default). Click to enable cron-driven reminders.";
+                    ? "Cron is sending automatic reminders for ALL of " . htmlspecialchars((string)$client) . "'s overdue invoices. Click to stop for the whole client."
+                    : "Reminders are OFF for " . htmlspecialchars((string)$client) . " (default). Click to enable cron-driven reminders for ALL of this client's overdue invoices, current and future.";
+                $clientNameJs = addslashes((string)$client);
                 $confirmMsg  = $started
-                    ? "Stop automatic reminders for #$invNo?\\n\\nCron will stop emailing the client about this invoice. The per-row Send reminder button on Monthly Invoicing still works."
-                    : "Start automatic reminders for #$invNo?\\n\\nCron will email the client on the 7/14/30/45/60-day overdue stages until paid. The 60-day final notice is the hard-stop.";
-                echo " <form method=\"post\" action=\"invoice_list.php\" style=\"display:inline\" onsubmit=\"return confirm('$confirmMsg');\">"
+                    ? "Stop automatic reminders for ALL of {$clientNameJs}\xe2\x80\x99s overdue invoices?\\n\\nThis switches OFF cron-driven reminders for every overdue invoice this client has — current and future. The per-row Send reminder button still works."
+                    : "Start automatic reminders for ALL of {$clientNameJs}\xe2\x80\x99s overdue invoices?\\n\\nThis switches ON cron-driven reminders for every overdue invoice this client has — current and future. Cron sends on the 7/14/30/45/60-day stages until paid (60-day = hard-stop).";
+                echo " <form method=\"post\" action=\"invoice_list.php\" style=\"display:inline\" onsubmit=\"return confirm('" . htmlspecialchars($confirmMsg, ENT_QUOTES) . "');\">"
                    . "<input type=\"hidden\" name=\"action\" value=\"toggle_reminders\">"
-                   . "<input type=\"hidden\" name=\"invoice_no\" value=\"" . (int)$invNo . "\">"
-                   . "<input type=\"submit\" value=\"$startLabel\" title=\"$startTitle\" style=\"background:$startBg;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:4px\">"
+                   . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
+                   . "<input type=\"submit\" value=\"$startLabel\" title=\"" . htmlspecialchars($startTitle, ENT_QUOTES) . "\" style=\"background:$startBg;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:4px\">"
                    . "</form>";
             }
         }

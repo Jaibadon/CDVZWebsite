@@ -108,12 +108,16 @@ $syncResult = run_xero_sync($pdo);
 //                                     debts manually (call, payment plan,
 //                                     collections, write-off).
 //
-// **Opt-in by default.** Reminders DO NOT fire automatically. Erik must
-// explicitly press "Start reminders" on monthly_invoicing.php for an
-// invoice (writes App_Meta['reminder_started_<n>']) before the cron will
-// pick it up. The manual per-row "Send reminder" button (?invoice_no=N)
-// bypasses the opt-in so Erik can fire one-off reminders without flipping
-// the long-term flag.
+// **Opt-in by default, per-CLIENT.** Reminders DO NOT fire automatically.
+// Erik must explicitly press "Start reminders" on monthly_invoicing.php
+// (or invoice_list.php) for any one of a client's invoices — that flips
+// App_Meta['reminder_started_client_<Client_ID>'] which then covers ALL
+// of that client's overdue invoices, current and future. We do this
+// per-client (not per-invoice) so the statement-batch path can include
+// every overdue invoice for the client without awkward "2 of 5 included"
+// partial bundles. The manual per-row "Send reminder" button
+// (?invoice_no=N) bypasses the opt-in so Erik can fire one-off reminders
+// without flipping the long-term flag.
 $reminderStages   = [7, 14, 30, 45, 60];
 $reminderHardStop = 60;                    // matches the final-notice stage — no auto-sends past this
 $minGapDays       = (int)(meta_get($pdo, 'reminder_min_gap_days') ?: 6);
@@ -142,13 +146,20 @@ if ($singleInvoice > 0) $where .= " AND i.Invoice_No = " . (int)$singleInvoice;
 // Gate c.Contact behind feature detection so installs that haven't run
 // migrations/add_clients_contact.sql don't crash here.
 $contactCol = clients_has_contact($pdo) ? 'c.Contact' : 'NULL AS Contact';
+// Opt-in is now CLIENT-WIDE: a single reminder_started_client_<cid> flag
+// covers every overdue invoice for that client (current and future). The
+// previous per-invoice keys (reminder_started_<n>) are ignored — admins
+// just press Start once and all of that client's overdue invoices come
+// along for the ride. Statements that cover multiple overdue invoices
+// then naturally make sense (you don't get the awkward "here are 2 of
+// your 5 overdue" partial bundle).
 $rows = $pdo->query(
     "SELECT i.Invoice_No, i.Client_ID, i.Subtotal, i.Tax_Rate, i.Xero_DueDate, i.Xero_AmountDue,
             i.Xero_OnlineUrl, i.Xero_InvoiceID,
             DATEDIFF(CURDATE(), i.Xero_DueDate) AS days_overdue,
             c.Client_Name, {$contactCol}, c.billing_email, c.email,
-            (SELECT MAX(updated_at) FROM App_Meta WHERE meta_key = CONCAT('reminder_last_',    i.Invoice_No)) AS last_reminder_at,
-            (SELECT meta_value     FROM App_Meta WHERE meta_key = CONCAT('reminder_started_', i.Invoice_No)) AS reminder_started
+            (SELECT MAX(updated_at) FROM App_Meta WHERE meta_key = CONCAT('reminder_last_',           i.Invoice_No)) AS last_reminder_at,
+            (SELECT meta_value     FROM App_Meta WHERE meta_key = CONCAT('reminder_started_client_', i.Client_ID))  AS reminder_started
        FROM Invoices i
        LEFT JOIN Clients c ON i.Client_ID = c.Client_id
       WHERE $where
@@ -189,7 +200,7 @@ $shouldRemind = function(array $r) use ($singleInvoice, $reminderStages, $remind
     // Opt-in default — only send for invoices Erik flipped on. Test mode
     // and per-row manual sends bypass.
     if (!$testMode && empty($r['reminder_started']) && $singleInvoice <= 0) {
-        return 'skip:reminders not started for this invoice (use Start Reminders on monthly_invoicing)';
+        return 'skip:reminders not started for this client (use Start Reminders on monthly_invoicing — flips it for ALL of the client\'s overdue invoices)';
     }
     // Hard stop — final notice goes out at 60d; cron does not auto-send past that.
     if (!$testMode && $days > $reminderHardStop && $singleInvoice <= 0) {

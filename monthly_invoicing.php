@@ -16,17 +16,20 @@ if (!in_array($userID, $allowed)) {
 $pdo = get_db();
 $xeroConnected = XeroClient::isConfigured() && XeroClient::isConnected($pdo);
 
-// ── Start / stop automatic reminders for a single invoice ────────────
-// xero_send_reminders.php now requires explicit OPT-IN: the cron only
-// sends reminders for invoices whose App_Meta['reminder_started_<n>']
-// row is non-empty. Default state is "no automatic reminders". This
-// button writes / clears that flag. Manual ?invoice_no=N reminders
-// still bypass the opt-in so Erik can fire one-off sends without
-// committing to long-term automation.
+// ── Start / stop automatic reminders for a CLIENT (all of their invoices) ──
+// xero_send_reminders.php now requires explicit OPT-IN, but the flag is
+// PER-CLIENT (App_Meta['reminder_started_client_<Client_ID>']). Flipping it
+// on for any one of a client's overdue invoices covers ALL of that client's
+// overdue invoices — current and future — until Erik clicks Stop again.
+// We do this client-wide so the statement-batch path (which bundles every
+// overdue invoice for a client into a single email) doesn't leave invoices
+// out: if it covered only the opted-in subset, the resulting email would
+// say "Statement balance: $X" while the client's actual balance was higher.
+// Manual ?invoice_no=N reminders still bypass opt-in for one-offs.
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_reminders') {
-    $invNo = (int)($_POST['invoice_no'] ?? 0);
-    if ($invNo > 0) {
-        $key  = 'reminder_started_' . $invNo;
+    $cid = (int)($_POST['client_id'] ?? 0);
+    if ($cid > 0) {
+        $key  = 'reminder_started_client_' . $cid;
         $cur  = meta_get($pdo, $key);
         if (!empty($cur)) {
             try { $pdo->prepare("DELETE FROM App_Meta WHERE meta_key = ?")->execute([$key]); } catch (Exception $e) {}
@@ -161,7 +164,7 @@ if ($xeroConnected) {
         // doesn't exist — error was silently swallowed by the catch
         // below, leaving $overdue=[] and the table never rendering.
         $st = $pdo->query(
-            "SELECT i.Invoice_No, i.Xero_Status, i.Xero_AmountDue, i.Xero_DueDate, i.Xero_OnlineUrl,
+            "SELECT i.Invoice_No, i.Client_ID, i.Xero_Status, i.Xero_AmountDue, i.Xero_DueDate, i.Xero_OnlineUrl,
                     i.Xero_LastSynced,
                     c.Client_Name, c.Phone, c.Mobile, c.email, c.billing_email
                FROM Invoices i
@@ -235,16 +238,16 @@ if ($xeroConnected) {
           <tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Email</th><th>Due</th><th class="right">Amount Due</th><th>Status</th><th>Last reminder</th><th>Action</th></tr>
           <?php foreach ($overdue as $od):
               $isOverdue    = $od['Xero_DueDate'] && $od['Xero_DueDate'] < date('Y-m-d');
-              $lastReminder = meta_get($pdo, 'reminder_last_'    . (int)$od['Invoice_No']);
-              $startedFlag  = meta_get($pdo, 'reminder_started_' . (int)$od['Invoice_No']);
+              $lastReminder = meta_get($pdo, 'reminder_last_'           . (int)$od['Invoice_No']);
+              $startedFlag  = meta_get($pdo, 'reminder_started_client_' . (int)$od['Client_ID']);
               $isStarted    = !empty($startedFlag);
           ?>
             <tr<?= $isOverdue ? ' style="background:#ffd6d6"' : '' ?>>
               <td>CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?>
                 <?php if ($isStarted): ?>
-                  <br><span style="background:#1a6b1a;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px" title="<?= htmlspecialchars($startedFlag) ?>">AUTO-REMINDERS ON</span>
+                  <br><span style="background:#1a6b1a;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px" title="Client-wide opt-in: <?= htmlspecialchars($startedFlag) ?>">AUTO-REMINDERS ON (client)</span>
                 <?php else: ?>
-                  <br><span style="background:#888;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px" title="No automatic reminders are being sent for this invoice. Default state. Click 'Start reminders' to enable.">auto-reminders off</span>
+                  <br><span style="background:#888;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px" title="No automatic reminders are being sent for this client. Default state. Click 'Start reminders' on any of this client's invoices to enable for ALL of them.">auto-reminders off</span>
                 <?php endif; ?>
               </td>
               <td><?= htmlspecialchars($od['Client_Name'] ?? '?') ?></td>
@@ -271,10 +274,10 @@ if ($xeroConnected) {
                    onclick="return confirm('Send overdue reminder for CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?> now from accounts@cadviz.co.nz?\n\nXero is re-synced first so a just-paid invoice will be skipped. The email asks the client to disregard if already paid. Continue?');"
                    style="background:#9B9B1B;color:#fff;padding:2px 8px;border-radius:3px;text-decoration:none;font-size:11px">✉ Send reminder</a>
                 <form method="post" action="monthly_invoicing.php" style="display:inline;margin-left:4px"
-                      onsubmit="return confirm('<?= $isStarted ? 'Stop' : 'Start' ?> automatic reminders for CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?>?\n\n<?= $isStarted ? 'Cron will stop sending automatic reminders for this invoice. The per-row Send reminder button still works.' : 'Cron will start sending reminders on the 7/14/30/45/60-day stages until paid (or until day 60 hard-stop). The per-row Send reminder button always works regardless.' ?>');">
+                      onsubmit="return confirm('<?= $isStarted ? 'Stop' : 'Start' ?> automatic reminders for ALL of <?= htmlspecialchars(addslashes((string)($od['Client_Name'] ?? 'this client')), ENT_QUOTES) ?>’s overdue invoices?\n\n<?= $isStarted ? 'This switches OFF automatic reminders for every overdue invoice this client has — current and future. The per-row Send reminder button still works.' : 'This switches ON automatic reminders for every overdue invoice this client has — current and future. Cron will send on the 7/14/30/45/60-day stages until paid (or until day 60 hard-stop). The per-row Send reminder button always works regardless.' ?>');">
                   <input type="hidden" name="action" value="toggle_reminders">
-                  <input type="hidden" name="invoice_no" value="<?= (int)$od['Invoice_No'] ?>">
-                  <input type="submit" value="<?= $isStarted ? '🔕 Stop reminders' : '🔔 Start reminders' ?>"
+                  <input type="hidden" name="client_id" value="<?= (int)$od['Client_ID'] ?>">
+                  <input type="submit" value="<?= $isStarted ? '🔕 Stop reminders (client)' : '🔔 Start reminders (client)' ?>"
                          style="background:<?= $isStarted ? '#666' : '#1a6b1a' ?>;color:#fff;border:none;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px">
                 </form>
               </td>

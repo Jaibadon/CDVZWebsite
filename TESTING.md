@@ -214,7 +214,7 @@ audit trail to clean up.
 
 | What | How to clear |
 |---|---|
-| Spurious `reminder_started_<n>` rows | `DELETE FROM App_Meta WHERE meta_key LIKE 'reminder_started_%'` (then opt back in via the UI) |
+| Spurious `reminder_started_client_<cid>` rows | `DELETE FROM App_Meta WHERE meta_key LIKE 'reminder_started_client_%'` (then opt back in via the UI). Legacy per-invoice keys (`reminder_started_<n>`, no `client_`) are ignored by the cron and can be cleaned with `DELETE FROM App_Meta WHERE meta_key LIKE 'reminder_started_%' AND meta_key NOT LIKE 'reminder_started_client_%'` |
 | Spurious `reminder_last_<n>` rows | `DELETE FROM App_Meta WHERE meta_key LIKE 'reminder_last_%'` |
 | `Sent = 1` set by a real (not test-mode) email | `UPDATE Invoices SET Sent = 0, date_sent = NULL WHERE Invoice_No = ?` |
 | Stuck Xero tokens | menu → Disconnect Xero → Connect again |
