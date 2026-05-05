@@ -66,6 +66,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggl
 <basefont face="arial">
 <style type="text/css">
 .style1 { background-color: #9B9B1B; }
+/* Each invoice row: one visual line. white-space:nowrap stops the text or
+   the inline button forms wrapping; if the row is wider than the viewport
+   the page-level horizontal scroll handles it. */
+.inv-row {
+    white-space: nowrap;
+    padding: 2px 4px;
+    line-height: 22px;
+    font-size: 13px;
+    border-bottom: 1px dotted #ccc;
+}
+.inv-row form { display: inline; vertical-align: middle; }
+.inv-row input[type=submit],
+.inv-row .row-btn {
+    vertical-align: middle;
+    white-space: nowrap;
+}
+.inv-row a { vertical-align: middle; }
+.inv-row .row-status { vertical-align: middle; }
+/* The main scroll container so wide rows don't push the whole page wider
+   than the viewport. */
+.inv-list-wrap { overflow-x: auto; max-width: 100%; padding-bottom: 8px; }
 </style>
 </head>
 <body bgcolor="#EBEBEB" text="black">
@@ -139,6 +160,7 @@ if ($_SESSION['UserID'] == 'jen') {
 try {
 $pdo = get_db();
 $grand = 0;
+echo '<div class="inv-list-wrap">';
 
 // Explicit columns + aliases avoid name-collision when SELECT * over a JOIN
 $sql = "SELECT Invoices.Invoice_No   AS Invoice_No,
@@ -180,7 +202,7 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $client   = $rs['Client_Name'] ?? '';
     $jobName  = $rs['JobName']     ?? '';
 
-    echo "<br>";
+    echo '<div class="inv-row">';
     echo "<a href=\"invoice.php?Invoice_No=" . htmlspecialchars((string)$invNo) . "\">";
     echo htmlspecialchars((string)$invNo);
     echo "</a>";
@@ -294,7 +316,9 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
            . "<input type=\"submit\" value=\"&#9993; Send Statement\" style=\"background:#5d3a9b;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
            . "</form>";
     }
+    echo '</div>'; // .inv-row
 }
+echo '</div>'; // .inv-list-wrap
 if ($count === 0) {
     echo '<p style="color:#888">No unpaid invoices.</p>';
 }

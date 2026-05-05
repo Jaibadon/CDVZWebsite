@@ -110,13 +110,48 @@ $storedSub = $rs['Subtotal'] !== null ? (float)$rs['Subtotal'] : null;
 $isCredit  = ($subtot < 0) || ($storedSub !== null && $storedSub < 0);
 $docLabel  = $isCredit ? 'CREDIT NOTICE' : 'TAX INVOICE';
 
-// Enter-key target. Send the user back to wherever they came from
-// (invoice_list.php?client=950, monthly_invoicing.php, etc.) instead of
-// always the global invoice list. Falls back to invoice_list.php when
-// referer is missing or would bounce back to this same page.
-$enterTarget = $_SERVER['HTTP_REFERER'] ?? '';
-$selfPath    = $_SERVER['REQUEST_URI'] ?? '';
-if ($enterTarget === '' || ($selfPath !== '' && strpos($enterTarget, basename($selfPath)) !== false)) {
+// Enter-key target. Priority order:
+//   1. Explicit ?back=... query param (whitelisted basename). Set by
+//      invoices_for_client.php / invoices_for_job.php so the user lands
+//      back on the SAME filtered list they came from. This is the
+//      reliable path because POST-based list URLs (no client_id in the
+//      URL) lose their state on a plain referer-driven back nav.
+//   2. HTTP_REFERER, but ONLY when the referer's basename is one of
+//      our list pages — and for invoices_for_client / invoices_for_job
+//      we rebuild the URL with this invoice's own Client_ID / proj_id
+//      so the filter is restored even if the referer URL didn't carry
+//      it.
+//   3. invoice_list.php as a final fallback.
+$allowedBackPages = [
+    'invoice_list.php',
+    'invoices_for_client.php',
+    'invoices_for_job.php',
+    'invoice_archive.php',
+    'monthly_invoicing.php',
+];
+$enterTarget = '';
+$rawBack = (string)($_GET['back'] ?? '');
+if ($rawBack !== '') {
+    $bp = basename((string)parse_url($rawBack, PHP_URL_PATH));
+    if (in_array($bp, $allowedBackPages, true)) {
+        $enterTarget = $rawBack;
+    }
+}
+if ($enterTarget === '') {
+    $referer  = $_SERVER['HTTP_REFERER'] ?? '';
+    $refPath  = $referer === '' ? '' : (string)parse_url($referer, PHP_URL_PATH);
+    $refBase  = $refPath === '' ? '' : basename($refPath);
+    $cid      = (int)($rs['Client_ID'] ?? 0);
+    $pid      = (int)($rs['proj_id']   ?? 0);
+    if ($refBase === 'invoices_for_client.php' && $cid > 0) {
+        $enterTarget = 'invoices_for_client.php?client_id=' . $cid;
+    } elseif ($refBase === 'invoices_for_job.php' && $pid > 0) {
+        $enterTarget = 'invoices_for_job.php?proj_id=' . $pid;
+    } elseif ($refBase !== '' && in_array($refBase, $allowedBackPages, true) && $refBase !== basename($_SERVER['REQUEST_URI'] ?? '')) {
+        $enterTarget = $referer;
+    }
+}
+if ($enterTarget === '') {
     $enterTarget = 'invoice_list.php';
 }
 ?>

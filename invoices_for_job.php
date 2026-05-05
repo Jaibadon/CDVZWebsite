@@ -110,11 +110,17 @@ $sql = "SELECT Invoices.Invoice_No  AS Invoice_No,
 $stmt = $pdo->prepare($sql);
 $stmt->execute([$proj_id]);
 
+// Pre-compute the &back= URL so invoice.php's Enter handler can return
+// the user to the same filtered list. The list page has no
+// querystring when reached via POST from more.php, so the referer
+// alone wouldn't carry proj_id back here.
+$backUrl = 'invoices_for_job.php?proj_id=' . (int)$proj_id;
+
 $count = 0;
 while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $count++;
     echo "<br>";
-    echo "<a href=\"invoice.php?Invoice_No=" . htmlspecialchars((string)$rs['Invoice_No']) . "\">";
+    echo "<a href=\"invoice.php?Invoice_No=" . htmlspecialchars((string)$rs['Invoice_No']) . "&amp;back=" . urlencode($backUrl) . "\">";
     echo htmlspecialchars((string)$rs['Invoice_No']);
     echo "</a>";
     echo "&nbsp;-&nbsp;";

@@ -111,11 +111,17 @@ $sql = "SELECT Invoices.Invoice_No  AS Invoice_No,
 $stmt = $pdo->prepare($sql);
 $stmt->execute([$client_id]);
 
+// Pre-compute the &back= URL so invoice.php knows where to send the
+// user when they press Enter. POST-loaded list pages have no
+// querystring of their own, so the referer alone wouldn't carry the
+// client_id back here — the explicit back param fixes that.
+$backUrl = 'invoices_for_client.php?client_id=' . (int)$client_id;
+
 $count = 0;
 while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $count++;
     echo "<br>";
-    echo "<a href=\"invoice.php?Invoice_No=" . htmlspecialchars((string)$rs['Invoice_No']) . "\">";
+    echo "<a href=\"invoice.php?Invoice_No=" . htmlspecialchars((string)$rs['Invoice_No']) . "&amp;back=" . urlencode($backUrl) . "\">";
     echo htmlspecialchars((string)$rs['Invoice_No']);
     echo "</a>";
     echo "&nbsp;-&nbsp;";
