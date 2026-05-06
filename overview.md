@@ -18,7 +18,7 @@ This is a PHP 7.4+ app, originally Classic ASP / MSSQL, ported to PHP / MySQL. L
 - **`menu.php`** — main navigation. Different sections for admin vs staff. Shows Xero / SMTP connect status, pending-variation alert, dormancy sweep banner, **and Erik's "📞 30+ days overdue, please call" callout** (red panel listing invoices with `Xero_DueDate` ≥ 30 days past, click-to-call phone links).
 - **`main.php`** — the timesheet entry page. 30 rows, 7-day grid. Task picker is a `<select>` (not free text) populated by JS from `window.PROJECT_TASKS` keyed by proj_id. Submit button turns red + adds JS confirm if `is_employed_staff()` and there are missing weekdays IN THE CURRENT WEEK (future-week or back-fill weeks suppress the alert). Picker option value = `Proj_Task_ID`.
 - **`submit.php`** — handles the timesheet POST. Wraps DELETE+INSERTs in a single transaction, output-buffers the response. Resolves Proj_Task_ID → Task_Type_ID + Variation_ID via Project_Tasks JOIN. Re-checks missing weekdays AFTER the insert and shows red banner if gaps remain. **TS_ID generation:** combines `MAX(TS_ID)` across `Timesheets` AND `Timesheets_HIST` to avoid PK collisions (the AFTER DELETE trigger archives to HIST), with retry-on-duplicate.
-- **`my_checklist.php`** — staff-facing per-project task list. `?proj_id=X` filters to one project; `?print=1` triggers auto print dialog.
+- **`my_checklist.php`** — staff-facing per-project task list. `?proj_id=X` filters to one project; `?print=1` triggers auto print dialog. **Renders rate-adjusted hours**: each task carries a `Project_Tasks.Quoted_Rate` snapshot (the per-hour rate locked in at quote time — see "Pricing & rate-ratio model" below). When an assigned staff member's `Billing Rate` ≠ that task's `Quoted_Rate`, the dollar value stays fixed (= contract with the client) but the staff's hour budget scales by `Quoted_Rate / their_rate`. So a 4h task quoted at TBA $90 (= $360) assigned to Phil at $120/h shows 3h on Phil's checklist (= same $360). A junior at $75/h picking up a Phil-quoted ($120) task shows 6.4h. Estimated and Remaining columns show the scaled value bold + the original quoted value struck-through underneath. Tooltip explains the math.
 - **`variation_add.php`** — staff-facing form to request an unapproved variation. Acknowledgment checkbox required.
 
 ### Projects & quote builder (admin only)
@@ -26,7 +26,8 @@ This is a PHP 7.4+ app, originally Classic ASP / MSSQL, ported to PHP / MySQL. L
 - **`updateform_admin1.php`** + **`update_admin1.php`** — admin project edit form + handler.
 - **`project_new.php`** + **`create_project.php`** — new project wizard.
 - **`project_stages.php`** — admin "stages/tasks/quote builder" page. Loads `$quoteStatus` (NULL/draft = free editing, 'accepted' = locked) and includes `stages_editor.php`. Has Accept Quote / Reset to Draft buttons + Print Original Quote / Quote (+variations) / Variations / Checklist links. **PaymentOption picker** with values 1=20th of next month, 2=invoice date + 7 days, 3=invoice date itself.
-- **`stages_editor.php`** — shared partial that does CRUD for stages + tasks + variations. Mode-aware: in `$isAccepted=true`, original tasks become read-only (`Save Variation` button creates new task in latest unapproved variation + marks original as `Is_Removed`). Helpers: `ensureUnapprovedVariation()`, `ensureVariationStage()`. Has a global JS submit handler that stamps `scroll_y` so PRG redirects don't lose scroll position.
+- **`stages_editor.php`** — shared partial that does CRUD for stages + tasks + variations. Mode-aware: in `$isAccepted=true`, original tasks become read-only (`Save Variation` button creates new task in latest unapproved variation + marks original as `Is_Removed`). Helpers: `ensureUnapprovedVariation()`, `ensureVariationStage()`, **`taskTypeOptions()`** (renders the Task_Type select with optgroups: "Common in this stage" first, then "other task types" — matches on `Tasks_Types.Stage_ID == Project_Stages.Stage_Type_ID` so the obvious choices float to the top). Has a global JS submit handler that stamps `scroll_y` so PRG redirects don't lose scroll position.
+- **`task_types_admin.php`** — single-page CRUD for the `Tasks_Types` catalog. **Replaces** the old `TASK_TYPES.php` + `task_type_add.php` + `task_type_update.php` + `task_type_drop.php` (all deleted). Filterable by stage; refuses to delete a task type that's still referenced by `Project_Tasks` rows (must reassign first).
 - **`templates.php`** + **`template_stages.php`** + **`template_apply.php`** + **`template_save.php`** — reusable stage+task templates per Project_Type.
 - **`quote.php`** — printable Fee Proposal. Includes original quote stages + approved variations. `?original_only=1` hides variations. `?nomoney=1` hides prices (used by `checklist.php`). **Breakdown modes:** `?breakdown=hours` (hours per task, no $), `?breakdown=full` (hours + $ per task), `?breakdown=tasks_only` (tasks + final fixed price). Admin-only.
 - **`quote_variations.php`** — variations-only printout. Default shows ALL variations including unapproved (internal review). `?approved_only=1` for client-facing. Admin-only.
@@ -60,9 +61,10 @@ This is a PHP 7.4+ app, originally Classic ASP / MSSQL, ported to PHP / MySQL. L
 - **`smtp_oauth_connect.php`** / **`smtp_oauth_callback.php`** — OAuth flow.
 - **`smtp_mailer.php`** — `SmtpMailer::send($msg)`. Builds multipart MIME, opens socket to `smtp.gmail.com:587`, STARTTLS, AUTH XOAUTH2 with the access token. From: `accounts@cadviz.co.nz` (which is a verified send-as alias on Erik's Gmail; NOT a real mailbox — it's a Google Group containing erik@ + jen@).
 
-### Analytics & dormancy
+### Analytics, staff & dormancy
 - **`task_analytics.php`** — actual-vs-estimated by Project_Type / Manager / Stage / Task. Median/mean/stddev/n. Chart.js (CDN). Filter: original / variations / all. Has 1-click "Apply" buttons to update Tasks_Types.Estimated_Time when the median ratio is outside ±15% over n≥3 projects.
 - **`dormancy_sweep.php`** — admin page to review/undo auto-deactivations from the 5-year dormancy sweep.
+- **`staff_admin.php`** — full CRUD for the `Staff` table: Login, First/Last Name, email, Mobile, Pay_Rate, `Billing Rate`, Level, Active. Add new staff (auto-allocates next `Employee_ID`). Passwords are NOT managed here — that's `set_password.php` (which has the bcrypt-aware logic). `Efficiency_Factor` column exists in the schema but is dead — not exposed in this UI.
 - **`staff_hours.php`** — uninvoiced hours per staff (all-time).
 - **`report.php`**, **`reports/*`** — assorted older reports.
 
@@ -74,6 +76,40 @@ This is a PHP 7.4+ app, originally Classic ASP / MSSQL, ported to PHP / MySQL. L
 - **`overview.md`** — this file.
 - **`TESTING.md`** — manual test plan. Covers the dry-run preview, per-tone test sends, multi-overdue statement path, rolling back accidental writes.
 - **`HTTP2_ERRORS.md`** — triage guide for `ERR_HTTP2_PROTOCOL_ERROR`. The 80% case is fixed by db_connect.php's output buffering + display_errors=0. The other 20% is documented step-by-step.
+
+---
+
+## Pricing & rate-ratio model
+
+**Two rates per task, used in different contexts:**
+
+1. **Display rate** — used by `quote.php`, `quote_variations.php`, `stages_editor.php`. Computed live from the current `Assigned_To`: `(staff Billing Rate or TBA) × Multiplier`. This is what the client sees on the printed Fee Proposal and what the quote builder shows. Assigning Phil ($120) to a task IN the quote raises the displayed price. That's intentional — it's how Erik can quote senior labour at a higher rate.
+
+2. **Quoted rate** — `Project_Tasks.Quoted_Rate`, snapshotted at task creation and updated on every save while the project is in draft. **Frozen when `Projects.Quote_Status = 'accepted'`** — reassignments after that don't touch it. This is the contract with the client.
+
+**Where they diverge:** after acceptance, if Erik reassigns a task from Phil ($120) to a junior ($75), the Display Rate would calculate as $75 × Multiplier = lower price. But Quoted_Rate stays at $120 — that's what was sold. The reassignment doesn't change what the client owes.
+
+**`my_checklist.php` uses Quoted_Rate** (NOT Display Rate) to compute the staff's hour budget:
+
+```
+staff_effective_hours = quoted_hours × (Quoted_Rate / staff_rate)
+```
+
+So:
+- Phil at $120 picking up a TBA-quoted ($90) task → 0.75× hours.
+- Junior at $75 picking up a Phil-quoted ($120) task → 1.6× hours.
+
+The dollar value of the task is preserved either way; the staff's hour budget rebalances to match their rate.
+
+**Where Quoted_Rate gets written:**
+- `add_task` and `save_variation_task`: always set from current state.
+- `update_task` and `save_stage_all`: refreshed only when `!$isAccepted`. After acceptance, the snapshot is frozen.
+- `assign_stage` and `assign_all`: same — refresh while draft, frozen after acceptance.
+- See `migrations/add_quoted_rate.sql` for the backfill rule for pre-existing rows.
+
+**Variation tasks**: `Quoted_Rate` is set on creation and (currently) on every update regardless of variation status — TODO: tighten so it freezes when the variation flips to `approved`.
+
+**To change the system-wide TBA rate**: edit Staff #29's `Billing Rate` via `staff_admin.php`. Don't grep for `90.00` — that hardcoded number is gone (only remains as a fallback inside `get_tba_rate()` for installs missing the row).
 
 ---
 
@@ -140,6 +176,8 @@ The schedule is offset +1 day from the typical 7/14/30/45/60 because **Xero's ba
 - **`Invoices.PaymentOption`** — 1=20th of next month, 2=invoice date + 7 days, 3=invoice date itself. `compute_pay_by()` is the single source of truth; `xero_sync.php` pushes DueDate corrections back to Xero when local & Xero disagree.
 - **`Clients.Contact`** (added by `migrations/add_clients_contact.sql`) — verbatim "Dear ___" greeting. Falls back to "Valued Customer" when blank. Feature-detected via `clients_has_contact($pdo)`.
 - **`Clients.billing_email`** — supports MULTIPLE recipients separated by `;` or `,`. Use `pick_billing_emails()`; each address is filter-validated.
+- **`Staff` column names with spaces** (legacy MSSQL): `\`First Name\``, `\`Last Name\``, `\`Billing Rate\``. MySQL is case-insensitive on column identifiers by default, so older queries using `\`BILLING RATE\`` (uppercase) still work alongside the canonical mixed-case from `SHOW CREATE TABLE`. Other Staff cols: `Employee_ID`, `Login`, `email`, `Mobile`, `Pay_Rate`, `Level`, `Last_Review`, `Last_Increase`, `Bank_Acc`, `Active`, `password`, `securepword`, `Efficiency_Factor`. **`Efficiency_Factor` is dead** — column exists, no code reads it. Don't rely on it.
+- **TBA quote rate** — sourced from `Staff WHERE Employee_ID = 29` (the placeholder "T.B.A." record) via `helpers.php::get_tba_rate()`. **Edit it from `staff_admin.php`** by changing Staff #29's `Billing Rate`. Falls back to $90 only if the row is missing. The single source of truth — `quote.php`, `quote_variations.php`, `stages_editor.php`, `helpers.php::compute_project_estimate()`, `my_checklist.php`, and `xero_invoice_push.php` all call `get_tba_rate()`. (Old code hardcoded `$baseRate = 90.00` in five places — that's been removed.)
 - **`App_Meta` reminder keys:**
   - `reminder_started_client_<Client_ID>` — client-wide opt-in flag.
   - `reminder_last_<Invoice_No>` — last-sent timestamp (per invoice).
@@ -247,11 +285,25 @@ Located in `migrations/`. Apply via phpMyAdmin SQL tab.
 
 ---
 
-## Planned: bank-feeds branch
+## In progress: bank-feeds branch (`bankfeeds-akahu`)
 
-A future fork is planned with native bank-feed reconciliation (skipping Xero for the payments side because Xero's bank-feed lag and reconciliation UX are problematic for this use case). Expected approach:
-- **Aggregator**: [Akahu](https://akahu.nz) for NZ bank coverage including Westpac NZ. Direct bank APIs are not realistically available for non-bank developers in NZ; partnership feeds (Westpac Live → Xero/MYOB) aren't open. Akahu is the standard.
-- **Architecture**: a new `bankfeed_*` set of files mirroring the `xero_*` shape — `bankfeed_client.php` (OAuth + token storage in a new `Bankfeed_Tokens` table), `bankfeed_sync.php` (pull transactions into a local `Bank_Transactions` table), `bankfeed_reconcile.php` (match transactions to invoices by amount + reference + date proximity, auto-flip `Paid=1` + `DatePaid`).
-- **Reconciliation rules**: prefer reference match (`CAD-0xxxxx` in the transaction memo) over amount-only, since the amount can collide across invoices for the same client.
-- **Coexistence with Xero**: keep Xero as the invoicing destination (push invoices, get the PDF), but make the bank-feeds branch authoritative for `Paid` / `DatePaid`. The `xero_sync.php` Paid-flip then becomes a fallback rather than the primary path.
-- **Top Bug #11** (manual local tick doesn't propagate to Xero) becomes less painful in this branch because the bank feed itself is faster than Xero's, so the manual override is rarely needed.
+This is now a real branch, not just a plan. `git switch bankfeeds-akahu` to look at it. The scaffold replaces Xero on the payments side with [Akahu](https://akahu.nz) (NZ open-banking aggregator) for direct bank-transaction feeds. **Not yet smoke-tested against a real Akahu account** — that's the next step before the destructive Xero deletion can land.
+
+Files added on the branch (all stand-alone; no changes to main-branch files):
+- `migrations/add_akahu_bankfeed.sql` — `Akahu_Tokens`, `Bank_Accounts`, `Bank_Transactions`, `Bank_Allocations`, plus `Invoices.AmountPaid`.
+- `akahu_client.php` — API wrapper. Auth = static App + User token (no OAuth refresh).
+- `akahu_connect.php` — token entry UI (smoke-tests on save).
+- `akahu_sync.php` — pulls accounts + paginated transactions, INSERT IGNOREs into `Bank_Transactions`, then runs `run_auto_match()`. CLI cron + library modes.
+- `bankfeed_match.php` — auto-match: `CAD-NNNNN` regex against description / particulars / code / reference. Partial-payment-aware allocation (`txn < remaining`, `txn == remaining`, `txn > remaining`). `recompute_invoice_paid()` keeps `Invoices.AmountPaid` in sync with `SUM(Bank_Allocations.amount)`. `reverse_allocation()` is the undo path.
+- `bankfeed_reconcile.php` — manual queue UI for transactions the matcher couldn't resolve (wrong reference, no reference, lump-sum payments covering multiple invoices). Allocate / undo / ignore / re-run auto-match.
+- `BANKFEEDS.md` — design doc + Akahu setup steps + cron lines.
+- `SESSION_RESUME.md` — pickup notes for the next session (which Xero files to delete, reminder port to do, email PDF replacement options).
+
+**Coexistence**: `xero_sync.php` and the new `akahu_sync.php` can run side-by-side during transition. Each writes a disjoint column set apart from `Paid` itself — whichever sees the payment first flips `Paid=1`.
+
+**Open follow-ups on the branch** (see `SESSION_RESUME.md` for the full list):
+1. Smoke-test against real Westpac via Akahu Genie.
+2. Build `akahu_accounts.php` (account picker for multi-account installs).
+3. Port `xero_send_reminders.php` → `send_reminders.php` reading `Invoices.AmountDue = Subtotal*(1+Tax_Rate) - AmountPaid`. Drop the +1 day buffer (8/15/31/46/61 → 7/14/30/45/60) since direct bank-feed has no lag.
+4. Replace the PDF-from-Xero path in `lib_invoice_email.php` with either a local PDF render (TCPDF single-file drop-in) or HTML emails linking to `/invoice.php?Invoice_No=N`.
+5. Delete `xero_*.php` files. Drop `Invoices.Xero_*` columns. Update `default_email_boilerplate()` to remove the "Xero takes ~1 day" disclaimer.

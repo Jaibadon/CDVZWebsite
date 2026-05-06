@@ -98,7 +98,7 @@ function push_invoice_to_xero(PDO $pdo, int $invoiceNo): array
     // line built from Invoices.Subtotal further down (small fixed-price jobs).
 
     $multiplier = (float)($head['Multiplier'] ?? 1) ?: 1;
-    $baseRate   = 90.00;
+    $baseRate   = get_tba_rate($pdo);
 
     // NOTE on the multiplier: invoice_gen.php already bakes the client
     // Multiplier into Timesheets.Rate when it generates the invoice

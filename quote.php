@@ -1,6 +1,7 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403);
@@ -69,8 +70,10 @@ if (!$head) die('Project not found');
 $multiplier = (float)($head['Multiplier'] ?? 1);
 if ($multiplier <= 0) $multiplier = 1;
 
-// CADViz base hourly rate (from quote sample)
-$baseRate = 90.00;
+// TBA hourly rate — sourced from Staff #29's `Billing Rate` so admins can
+// retune it from staff_admin.php without code changes. Falls back to $90
+// if the row is missing.
+$baseRate = get_tba_rate($pdo);
 
 // Detect variation columns
 $hasVariations = false;

@@ -36,6 +36,39 @@ if (!isset($quoteType))   $quoteType   = 'estimate';
 $isAccepted = ($mode === 'project' && $quoteStatus === 'accepted' && $hasVariations);
 $isFixedPrice = ($mode === 'project' && $quoteType === 'fixed');
 
+// Detect Project_Tasks.Quoted_Rate (added by add_quoted_rate.sql). Gate
+// the writes so installs that haven't migrated still load.
+$hasQuotedRate = false;
+try { $hasQuotedRate = (bool)$pdo->query("SHOW COLUMNS FROM Project_Tasks LIKE 'Quoted_Rate'")->fetch(); } catch (Exception $e) {}
+
+/**
+ * Resolve the per-hour rate to snapshot into Project_Tasks.Quoted_Rate
+ * for a task being added/updated. Pulls the assigned staff's `Billing
+ * Rate`; falls back to the TBA rate when unassigned or unknown.
+ *
+ * NB: returned without the client multiplier — multiplier applies
+ * uniformly so it cancels out of the my_checklist hour-budget ratio.
+ */
+function compute_quoted_rate(PDO $pdo, $assignedTo, float $tbaRate): float {
+    $assignedId = (int)$assignedTo;
+    if ($assignedId <= 0) return $tbaRate;
+    try {
+        $st = $pdo->prepare("SELECT `Billing Rate` FROM Staff WHERE Employee_ID = ?");
+        $st->execute([$assignedId]);
+        $r = $st->fetchColumn();
+        if ($r === false) {
+            $st = $pdo->prepare("SELECT `BILLING RATE` FROM Staff WHERE Employee_ID = ?");
+            $st->execute([$assignedId]);
+            $r = $st->fetchColumn();
+        }
+        return ($r !== false && (float)$r > 0) ? (float)$r : $tbaRate;
+    } catch (Exception $e) { return $tbaRate; }
+}
+
+// Pre-resolve TBA so the post handlers below can call compute_quoted_rate
+// cheaply (helpers.php's get_tba_rate caches per request).
+$tbaRateForHandlers = get_tba_rate($pdo);
+
 /**
  * Find the latest unapproved/draft variation for this project, creating
  * one on-demand if none exists. Returns Variation_ID. Used in accepted
@@ -125,38 +158,64 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $sid,
                 $owner_id,
             ]);
-            // Update all tasks submitted as arrays
-            $taskStmt = $pdo->prepare("UPDATE `$tasks_table` SET Task_Type_ID = ?, Description = ?, Weight = ?, Proj_Task_Notes = ?, Proj_Task_Order = ?, Assigned_To = ? WHERE Proj_Task_ID = ?");
+            // Update all tasks submitted as arrays. Quoted_Rate refresh
+            // mirrors update_task: only while !$isAccepted.
+            $refreshQR = $hasQuotedRate && !$isAccepted;
+            $qrSet     = $refreshQR ? ', Quoted_Rate = ?' : '';
+            $taskStmt  = $pdo->prepare("UPDATE `$tasks_table` SET Task_Type_ID = ?, Description = ?, Weight = ?, Proj_Task_Notes = ?, Proj_Task_Order = ?, Assigned_To = ?$qrSet WHERE Proj_Task_ID = ?");
             foreach ($_POST['tasks'] ?? [] as $tp) {
                 $tid = (int)($tp['Proj_Task_ID'] ?? 0);
                 if ($tid <= 0) continue;
                 $assignedTo = (isset($tp['Assigned_To']) && $tp['Assigned_To'] !== '') ? (int)$tp['Assigned_To'] : null;
-                $taskStmt->execute([
+                $params = [
                     (int)($tp['Task_Type_ID'] ?? 0),
                     $tp['Description'] ?? '',
                     (float)($tp['Weight'] ?? 1),
                     $tp['Proj_Task_Notes'] ?? '',
                     (int)($tp['Proj_Task_Order'] ?? 0),
                     $assignedTo,
-                    $tid,
-                ]);
+                ];
+                if ($refreshQR) $params[] = compute_quoted_rate($pdo, $assignedTo, $tbaRateForHandlers);
+                $params[] = $tid;
+                $taskStmt->execute($params);
             }
 
         } elseif ($action === 'assign_stage') {
             $sid = (int)$_POST['Project_Stage_ID'];
             $assignedTo = (isset($_POST['Assigned_To']) && $_POST['Assigned_To'] !== '') ? (int)$_POST['Assigned_To'] : null;
+            // Bulk-assign: when !$isAccepted, also rewrite Quoted_Rate so the
+            // displayed quote price matches. After acceptance, only the
+            // assignment changes; Quoted_Rate stays frozen.
+            $refreshQR = $hasQuotedRate && !$isAccepted;
+            $qrSet = $refreshQR ? ', Quoted_Rate = ?' : '';
+            $newQR = $refreshQR ? compute_quoted_rate($pdo, $assignedTo, $tbaRateForHandlers) : null;
             if ($mode === 'template') {
-                $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ? WHERE Project_Stage_ID = ? AND Template_ID = ?")->execute([$assignedTo, $sid, $owner_id]);
+                $params = [$assignedTo];
+                if ($refreshQR) $params[] = $newQR;
+                $params[] = $sid; $params[] = $owner_id;
+                $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ?$qrSet WHERE Project_Stage_ID = ? AND Template_ID = ?")->execute($params);
             } else {
-                $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ? WHERE Project_Stage_ID = ?")->execute([$assignedTo, $sid]);
+                $params = [$assignedTo];
+                if ($refreshQR) $params[] = $newQR;
+                $params[] = $sid;
+                $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ?$qrSet WHERE Project_Stage_ID = ?")->execute($params);
             }
 
         } elseif ($action === 'assign_all') {
             $assignedTo = (isset($_POST['Assigned_To']) && $_POST['Assigned_To'] !== '') ? (int)$_POST['Assigned_To'] : null;
+            $refreshQR = $hasQuotedRate && !$isAccepted;
+            $qrSet = $refreshQR ? ', Quoted_Rate = ?' : '';
+            $newQR = $refreshQR ? compute_quoted_rate($pdo, $assignedTo, $tbaRateForHandlers) : null;
             if ($mode === 'template') {
-                $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ? WHERE Template_ID = ?")->execute([$assignedTo, $owner_id]);
+                $params = [$assignedTo];
+                if ($refreshQR) $params[] = $newQR;
+                $params[] = $owner_id;
+                $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ?$qrSet WHERE Template_ID = ?")->execute($params);
             } else {
-                $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ? WHERE Project_Stage_ID IN (SELECT Project_Stage_ID FROM Project_Stages WHERE Proj_ID = ?)")->execute([$assignedTo, $owner_id]);
+                $params = [$assignedTo];
+                if ($refreshQR) $params[] = $newQR;
+                $params[] = $owner_id;
+                $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ?$qrSet WHERE Project_Stage_ID IN (SELECT Project_Stage_ID FROM Project_Stages WHERE Proj_ID = ?)")->execute($params);
             }
 
         } elseif ($action === 'drop_stage') {
@@ -191,8 +250,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $next = (int)$pdo->query("SELECT COALESCE(MAX(Proj_Task_ID),0)+1 FROM `$tasks_table`")->fetchColumn();
             $vCol = $hasVariations ? ', Variation_ID' : '';
             $vPh  = $hasVariations ? ', ?' : '';
+            $qrCol = $hasQuotedRate ? ', Quoted_Rate' : '';
+            $qrPh  = $hasQuotedRate ? ', ?' : '';
+            // Snapshot the per-hour rate at task creation time. This is the
+            // contract value the my_checklist hour-budget ratio anchors
+            // against once the quote is accepted.
+            $quotedRate = $hasQuotedRate ? compute_quoted_rate($pdo, $assignedTo, $tbaRateForHandlers) : null;
             if ($mode === 'template') {
-                $stmt = $pdo->prepare("INSERT INTO `$tasks_table` (Proj_Task_ID, Template_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To$vCol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?$vPh)");
+                $stmt = $pdo->prepare("INSERT INTO `$tasks_table` (Proj_Task_ID, Template_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To$vCol$qrCol) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?$vPh$qrPh)");
                 $params = [$next, $owner_id, $sid,
                     (int)($_POST['Task_Type_ID'] ?? 0),
                     $_POST['Description'] ?? '',
@@ -201,9 +266,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     (int)($_POST['Proj_Task_Order'] ?? 0),
                     $assignedTo];
                 if ($hasVariations) $params[] = $taskVariationId;
+                if ($hasQuotedRate) $params[] = $quotedRate;
                 $stmt->execute($params);
             } else {
-                $stmt = $pdo->prepare("INSERT INTO `$tasks_table` (Proj_Task_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To$vCol) VALUES (?, ?, ?, ?, ?, ?, ?, ?$vPh)");
+                $stmt = $pdo->prepare("INSERT INTO `$tasks_table` (Proj_Task_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To$vCol$qrCol) VALUES (?, ?, ?, ?, ?, ?, ?, ?$vPh$qrPh)");
                 $params = [$next, $effectiveSid,
                     (int)($_POST['Task_Type_ID'] ?? 0),
                     $_POST['Description'] ?? '',
@@ -212,6 +278,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     (int)($_POST['Proj_Task_Order'] ?? 0),
                     $assignedTo];
                 if ($hasVariations) $params[] = $taskVariationId;
+                if ($hasQuotedRate) $params[] = $quotedRate;
                 $stmt->execute($params);
             }
 
@@ -231,17 +298,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $autoVid = ensureUnapprovedVariation($pdo, (int)$owner_id, (int)($_SESSION['Employee_id'] ?? 0));
             $varStageId = ensureVariationStage($pdo, (int)$owner_id, $autoVid, (int)$origMeta['Stage_Type_ID']);
             $next = (int)$pdo->query("SELECT COALESCE(MAX(Proj_Task_ID),0)+1 FROM Project_Tasks")->fetchColumn();
-            $pdo->prepare("INSERT INTO Project_Tasks (Proj_Task_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To, Variation_ID)
-                            VALUES (?, ?, ?, ?, ?, '', ?, ?, ?)")
-                ->execute([
-                    $next, $varStageId,
-                    (int)($_POST['Task_Type_ID'] ?? 0),
-                    'CHANGED: ' . ($_POST['Description'] ?? ''),
-                    (float)($_POST['Weight'] ?? 1),
-                    (int)($_POST['Proj_Task_Order'] ?? 0),
-                    $assignedTo,
-                    $autoVid,
-                ]);
+            // Variation tasks get a Quoted_Rate snapshot at creation, same
+            // as fresh quote tasks. The variation's price is locked when
+            // its Status flips to 'approved'; until then this column will
+            // be re-snapshotted by update_task below if the assignment
+            // changes.
+            $qrCol = $hasQuotedRate ? ', Quoted_Rate' : '';
+            $qrPh  = $hasQuotedRate ? ', ?'          : '';
+            $quotedRate = $hasQuotedRate ? compute_quoted_rate($pdo, $assignedTo, $tbaRateForHandlers) : null;
+            $sqlIns = "INSERT INTO Project_Tasks (Proj_Task_ID, Project_Stage_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To, Variation_ID$qrCol)
+                            VALUES (?, ?, ?, ?, ?, '', ?, ?, ?$qrPh)";
+            $params = [
+                $next, $varStageId,
+                (int)($_POST['Task_Type_ID'] ?? 0),
+                'CHANGED: ' . ($_POST['Description'] ?? ''),
+                (float)($_POST['Weight'] ?? 1),
+                (int)($_POST['Proj_Task_Order'] ?? 0),
+                $assignedTo,
+                $autoVid,
+            ];
+            if ($hasQuotedRate) $params[] = $quotedRate;
+            $pdo->prepare($sqlIns)->execute($params);
             // Mark the original task as removed in this variation
             $pdo->prepare("UPDATE Project_Tasks SET Is_Removed = 1, Removed_In_Variation_ID = ? WHERE Proj_Task_ID = ?")
                 ->execute([$autoVid, $origTid]);
@@ -249,16 +326,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         } elseif ($action === 'update_task') {
             $tid = (int)$_POST['Proj_Task_ID'];
             $assignedTo = (isset($_POST['Assigned_To']) && $_POST['Assigned_To'] !== '') ? (int)$_POST['Assigned_To'] : null;
-            $stmt = $pdo->prepare("UPDATE `$tasks_table` SET Task_Type_ID = ?, Description = ?, Weight = ?, Proj_Task_Notes = ?, Proj_Task_Order = ?, Assigned_To = ? WHERE Proj_Task_ID = ?");
-            $stmt->execute([
+            // Refresh Quoted_Rate ONLY while the project is still in draft
+            // (or when editing template tasks — templates aren't quotes).
+            // Once $isAccepted, the snapshot is frozen so reassignments
+            // don't silently rewrite the contract value.
+            $refreshQR = $hasQuotedRate && !$isAccepted;
+            $qrSet = $refreshQR ? ', Quoted_Rate = ?' : '';
+            $stmt = $pdo->prepare("UPDATE `$tasks_table` SET Task_Type_ID = ?, Description = ?, Weight = ?, Proj_Task_Notes = ?, Proj_Task_Order = ?, Assigned_To = ?$qrSet WHERE Proj_Task_ID = ?");
+            $params = [
                 (int)($_POST['Task_Type_ID'] ?? 0),
                 $_POST['Description'] ?? '',
                 (float)($_POST['Weight'] ?? 1),
                 $_POST['Proj_Task_Notes'] ?? '',
                 (int)($_POST['Proj_Task_Order'] ?? 0),
                 $assignedTo,
-                $tid,
-            ]);
+            ];
+            if ($refreshQR) $params[] = compute_quoted_rate($pdo, $assignedTo, $tbaRateForHandlers);
+            $params[] = $tid;
+            $stmt->execute($params);
 
         } elseif ($action === 'drop_task') {
             $tid = (int)$_POST['Proj_Task_ID'];
@@ -437,24 +522,50 @@ if ($hasVariations && $mode === 'project') {
     $removedTasks = $rmStmt->fetchAll();
 }
 
-// ── Pricing setup (quote.php style) ────────────────────────────────────
-$baseRate = 90.00;  // CADViz base hourly rate
+// ── Pricing setup ──────────────────────────────────────────────────────
+// Pricing model — matches quote.php exactly:
+//   rate = (assigned staff's Billing Rate, OR TBA rate if unassigned)
+//          × client.Multiplier
+//   price = hrs × rate
+// Assigning a more expensive staff member to a task IN the quote raises
+// the quote price. That's the correct behaviour at quote-build time —
+// the client is being told "Phil's senior, his hour costs more".
+//
+// AFTER the quote is accepted, reassigning a task should NOT change the
+// price the client pays — the contract is locked in. To enforce that,
+// each task's rate at quote time is snapshotted into
+// Project_Tasks.Quoted_Rate (see migrations/add_quoted_rate.sql), and
+// my_checklist.php uses Quoted_Rate to compute hour-budget ratios for
+// reassigned staff. This file's $rate variable is what's DISPLAYED
+// during quote building (live, varies with assignment), while
+// Quoted_Rate is the FROZEN snapshot the checklist works against.
+$baseRate = get_tba_rate($pdo);  // TBA rate from Staff #29 (helpers.php). Falls back to $90 if missing.
 $multiplier = 1.0;  // Client multiplier (default)
 if ($mode === 'project') {
-    $projData = $pdo->prepare("SELECT p.Client_ID, c.Multiplier FROM Projects p LEFT JOIN Clients c ON p.Client_ID = c.Client_id WHERE p.proj_id = ?")->fetch();
-    if ($projData) {
-        $multiplier = (float)($projData['Multiplier'] ?? 1);
+    $projData = $pdo->prepare("SELECT p.Client_ID, c.Multiplier FROM Projects p LEFT JOIN Clients c ON p.Client_ID = c.Client_id WHERE p.proj_id = ?");
+    $projData->execute([$owner_id]);
+    $row = $projData->fetch();
+    if ($row) {
+        $multiplier = (float)($row['Multiplier'] ?? 1);
         if ($multiplier <= 0) $multiplier = 1;
     }
 }
 
-// Build staff lookup by Employee_ID for quick rate access
+// Per-staff billing rates — used ONLY for the informational "(Phil @ $120)"
+// suffix shown next to assignment dropdowns; never affects the quoted
+// price. Pulled in one query rather than per-task.
 $staffRates = [];
-foreach ($allTasks as $t) {
-    if ($t['Assigned_To'] && !isset($staffRates[$t['Assigned_To']])) {
-        $sr = $pdo->prepare("SELECT `BILLING RATE` FROM Staff WHERE Employee_ID = ?")->fetch();
-        $staffRates[$t['Assigned_To']] = (float)($sr['BILLING RATE'] ?? 0);
+try {
+    foreach ($pdo->query("SELECT Employee_ID, `Billing Rate` AS BR FROM Staff")->fetchAll() as $sr) {
+        $staffRates[(int)$sr['Employee_ID']] = (float)($sr['BR'] ?? 0);
     }
+} catch (Exception $e) {
+    // Older installs may use uppercase `BILLING RATE`. Fall back.
+    try {
+        foreach ($pdo->query("SELECT Employee_ID, `BILLING RATE` AS BR FROM Staff")->fetchAll() as $sr) {
+            $staffRates[(int)$sr['Employee_ID']] = (float)($sr['BR'] ?? 0);
+        }
+    } catch (Exception $e2) {}
 }
 
 // Lookups
@@ -473,6 +584,56 @@ function staffOptions(array $staff, int $selected = 0): string {
         $sel = ((int)$s['Employee_ID'] === $selected) ? ' selected' : '';
         $rate = !empty($s['BillingRate']) ? ' ($' . number_format((float)$s['BillingRate'], 0) . ')' : '';
         $html .= '<option value="' . (int)$s['Employee_ID'] . '"' . $sel . '>' . htmlspecialchars($s['Login']) . $rate . '</option>';
+    }
+    return $html;
+}
+
+/**
+ * Render the Task_Type_ID <select> with task types belonging to this
+ * stage at the top, then a divider, then everything else. Avoids the
+ * "scroll through 80 alphabetised types to find the one that obviously
+ * goes here" problem.
+ *
+ * $stageTypeId = the Stage_Type_ID of the stage this select is being
+ * rendered inside; pass 0 if unknown (no grouping then).
+ * $required    = emit the placeholder "-- pick a task --" first option
+ * (set true on the add-row select; false on the edit-row select where
+ * we always have a current value).
+ */
+function taskTypeOptions(array $taskTypes, int $stageTypeId, int $selected = 0, bool $required = false): string {
+    $html = '';
+    if ($required) $html .= '<option value="">-- pick a task --</option>';
+
+    if ($stageTypeId <= 0) {
+        // No stage context — flat list, alphabetical (caller's order).
+        foreach ($taskTypes as $tt) {
+            $sel = ((int)$tt['Task_ID'] === $selected) ? ' selected' : '';
+            $html .= '<option value="' . (int)$tt['Task_ID'] . '"' . $sel . '>'
+                   . htmlspecialchars($tt['Task_Name']) . ' (' . (float)$tt['Estimated_Time'] . 'h)</option>';
+        }
+        return $html;
+    }
+
+    $here = []; $other = [];
+    foreach ($taskTypes as $tt) {
+        if ((int)($tt['Stage_ID'] ?? 0) === $stageTypeId) $here[] = $tt;
+        else $other[] = $tt;
+    }
+    $opt = function ($tt) use ($selected) {
+        $sel = ((int)$tt['Task_ID'] === $selected) ? ' selected' : '';
+        return '<option value="' . (int)$tt['Task_ID'] . '"' . $sel . '>'
+             . htmlspecialchars($tt['Task_Name']) . ' (' . (float)$tt['Estimated_Time'] . 'h)</option>';
+    };
+
+    if (!empty($here)) {
+        $html .= '<optgroup label="Common in this stage">';
+        foreach ($here as $tt) $html .= $opt($tt);
+        $html .= '</optgroup>';
+    }
+    if (!empty($other)) {
+        $html .= '<optgroup label="——————— other task types ———————">';
+        foreach ($other as $tt) $html .= $opt($tt);
+        $html .= '</optgroup>';
     }
     return $html;
 }
@@ -586,13 +747,17 @@ window.addEventListener('DOMContentLoaded', function() {
 <?php endif; ?>
 
 <?php
-$grandHrs = 0;
+$grandHrs   = 0;
+$grandPrice = 0;
 foreach ($stages as $stage):
     $sid = (int)$stage['Project_Stage_ID'];
     // Stage weight removed from functionality — always treat as 1.
     $stageWeight = 1.0;
     $tasks = $tasksByStage[$sid] ?? [];
-    $stageHrs = 0;
+    $stageHrs   = 0;
+    $stagePrice = 0;  // RESET PER STAGE. Earlier code re-used the carry from
+                      // the previous stage, so stage 2's "subtotal" was
+                      // stage1+stage2, stage 3 was stage1+stage2+stage3, etc.
 ?>
 
 <table>
@@ -632,14 +797,18 @@ foreach ($stages as $stage):
 <tr><th style="width:28%">Task</th><th>Description</th><th style="width:55px">Weight</th><th style="width:60px">Hours</th><th style="width:70px">Rate</th><th style="width:75px">Price</th><th style="width:130px">Assigned To</th><th style="width:60px">Order</th><th style="width:90px">Actions</th></tr>
 
 <?php foreach ($tasks as $t):
-    $hrs = (float)($t['Estimated_Time'] ?? 0) * (float)($t['Weight'] ?? 1);
-    $assigned = (int)($t['Assigned_To'] ?? 0);
-    $staffRate = (float)($staffRates[$assigned] ?? 0);
-    $rateBase = ($staffRate > 0) ? $staffRate : $baseRate;
-    $rate = $rateBase * $multiplier;
-    $price = $hrs * $rate;
-    $stageHrs += $hrs;
-    $stagePrice = ($stagePrice ?? 0) + $price;
+    $hrs        = (float)($t['Estimated_Time'] ?? 0) * (float)($t['Weight'] ?? 1);
+    $assigned   = (int)($t['Assigned_To'] ?? 0);
+    $staffRate  = (float)($staffRates[$assigned] ?? 0);
+    // Use the assigned staff's billing rate when they have one, else TBA.
+    // Multiplier is applied once at the end. This matches quote.php so the
+    // dollar figures shown in the quote builder reproduce exactly on the
+    // printed Fee Proposal.
+    $rateBase   = ($staffRate > 0) ? $staffRate : $baseRate;
+    $rate       = $rateBase * $multiplier;
+    $price      = $hrs * $rate;
+    $stageHrs   += $hrs;
+    $stagePrice += $price;
 ?>
 <tr>
   <form method="post" class="inline task-form" data-stage-id="<?= $sid ?>">
@@ -647,11 +816,7 @@ foreach ($stages as $stage):
     <input type="hidden" name="Proj_Task_ID" value="<?= (int)$t['Proj_Task_ID'] ?>">
     <td>
       <select name="Task_Type_ID">
-        <?php foreach ($taskTypes as $tt): ?>
-          <option value="<?= (int)$tt['Task_ID'] ?>" <?= ((int)$tt['Task_ID'] === (int)$t['Task_Type_ID']) ? 'selected' : '' ?>>
-            <?= htmlspecialchars($tt['Task_Name']) ?> (<?= (float)$tt['Estimated_Time'] ?>h)
-          </option>
-        <?php endforeach; ?>
+        <?= taskTypeOptions($taskTypes, (int)($stage['Stage_Type_ID'] ?? 0), (int)$t['Task_Type_ID'], false) ?>
       </select>
     </td>
     <td><input type="text" name="Description" value="<?= htmlspecialchars((string)($t['Description'] ?? '')) ?>" style="width:99%"></td>
@@ -702,10 +867,7 @@ foreach ($stages as $stage):
     <input type="hidden" name="Project_Stage_ID" value="<?= $sid ?>">
     <td>
       <select name="Task_Type_ID" required>
-        <option value="">-- pick a task --</option>
-        <?php foreach ($taskTypes as $tt): ?>
-          <option value="<?= (int)$tt['Task_ID'] ?>"><?= htmlspecialchars($tt['Task_Name']) ?> (<?= (float)$tt['Estimated_Time'] ?>h)</option>
-        <?php endforeach; ?>
+        <?= taskTypeOptions($taskTypes, (int)($stage['Stage_Type_ID'] ?? 0), 0, true) ?>
       </select>
     </td>
     <td><input type="text" name="Description" placeholder="(override description)" style="width:99%"></td>
@@ -741,8 +903,9 @@ foreach ($stages as $stage):
 
 
 <?php
-    $grandHrs += $stageHrs;
-    $grandPrice = ($grandPrice ?? 0) + ($stagePrice ?? 0);
+    $grandHrs   += $stageHrs;
+    $grandPrice += $stagePrice;  // $stagePrice is now properly reset per
+                                 // stage above, so this addition is correct.
 endforeach;
 ?>
 
@@ -866,9 +1029,7 @@ endforeach;
         <input type="hidden" name="Proj_Task_ID" value="<?= (int)$t['Proj_Task_ID'] ?>">
         <td>
           <select name="Task_Type_ID">
-            <?php foreach ($taskTypes as $tt): ?>
-              <option value="<?= (int)$tt['Task_ID'] ?>" <?= ((int)$tt['Task_ID'] === (int)$t['Task_Type_ID']) ? 'selected' : '' ?>><?= htmlspecialchars($tt['Task_Name']) ?> (<?= (float)$tt['Estimated_Time'] ?>h)</option>
-            <?php endforeach; ?>
+            <?= taskTypeOptions($taskTypes, (int)($vstage['Stage_Type_ID'] ?? 0), (int)$t['Task_Type_ID'], false) ?>
           </select>
         </td>
         <td><input type="text" name="Description" value="<?= htmlspecialchars($t['Description'] ?? '') ?>" style="width:99%"></td>
@@ -897,10 +1058,7 @@ endforeach;
         <input type="hidden" name="Project_Stage_ID" value="<?= $vsid ?>">
         <td>
           <select name="Task_Type_ID" required>
-            <option value="">-- pick a task --</option>
-            <?php foreach ($taskTypes as $tt): ?>
-              <option value="<?= (int)$tt['Task_ID'] ?>"><?= htmlspecialchars($tt['Task_Name']) ?> (<?= (float)$tt['Estimated_Time'] ?>h)</option>
-            <?php endforeach; ?>
+            <?= taskTypeOptions($taskTypes, (int)($vstage['Stage_Type_ID'] ?? 0), 0, true) ?>
           </select>
         </td>
         <td><input type="text" name="Description" placeholder="(optional)" style="width:99%"></td>

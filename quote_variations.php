@@ -33,7 +33,8 @@ if (!$head) die('Project not found');
 
 $multiplier = (float)($head['Multiplier'] ?? 1);
 if ($multiplier <= 0) $multiplier = 1;
-$baseRate = 90.00;
+require_once 'helpers.php';
+$baseRate = get_tba_rate($pdo);
 
 $statusFilter = $includeUnapproved
     ? "1=1"

@@ -9,6 +9,7 @@
  */
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 $pdo  = get_db();
 $empId = (int)($_SESSION['Employee_id'] ?? 0);
@@ -26,6 +27,42 @@ try {
 } catch (Exception $e) { /* ignore */ }
 
 $ptFilter = $hasVariations ? "AND COALESCE(pt.Is_Removed, 0) = 0" : '';
+
+// Tasks are priced at quote time using either the assigned staff's
+// billing rate, or the TBA rate when nobody is assigned. The rate at
+// QUOTE time is snapshotted into Project_Tasks.Quoted_Rate (added by
+// migrations/add_quoted_rate.sql; backfilled from current Assigned_To
+// if the task predates the migration). After acceptance, reassigning a
+// task does NOT update Quoted_Rate — the contract dollar value is
+// frozen — so the staff member's hour budget scales by
+// (Quoted_Rate / their_rate). When Quoted_Rate is NULL (very old rows
+// the migration couldn't infer a sensible value for), fall back to the
+// system-wide TBA rate.
+$tbaRate = get_tba_rate($pdo);  // sourced from Staff #29
+
+// Has the migration that added Project_Tasks.Quoted_Rate run? Gate the
+// SELECT so installs that haven't migrated still load the page.
+$hasQuotedRate = false;
+try { $hasQuotedRate = (bool)$pdo->query("SHOW COLUMNS FROM Project_Tasks LIKE 'Quoted_Rate'")->fetch(); } catch (Exception $e) {}
+$staffBillingRate = [];
+try {
+    foreach ($pdo->query("SELECT Employee_ID, `Billing Rate` AS BillingRate, Login FROM Staff")->fetchAll() as $sr) {
+        $staffBillingRate[(int)$sr['Employee_ID']] = [
+            'rate'  => (float)($sr['BillingRate'] ?? 0),
+            'login' => $sr['Login'],
+        ];
+    }
+} catch (Exception $e) {
+    // Older installs may use `BILLING RATE` (uppercase). Fall back.
+    try {
+        foreach ($pdo->query("SELECT Employee_ID, `BILLING RATE` AS BillingRate, Login FROM Staff")->fetchAll() as $sr) {
+            $staffBillingRate[(int)$sr['Employee_ID']] = [
+                'rate'  => (float)($sr['BillingRate'] ?? 0),
+                'login' => $sr['Login'],
+            ];
+        }
+    } catch (Exception $e2) {}
+}
 
 // Projects this staff member is involved with.
 // When ?proj_id=X is set, narrow to just that project (still requires the
@@ -84,6 +121,7 @@ if (!empty($projIds)) {
         ? ", pt.Variation_ID, pv.Variation_Number, pv.Title AS VTitle, pv.Status AS VStatus"
         : ", NULL AS Variation_ID, NULL AS Variation_Number, NULL AS VTitle, NULL AS VStatus";
     $vJoin = $hasVariations ? "LEFT JOIN Project_Variations pv ON pt.Variation_ID = pv.Variation_ID" : "";
+    $qrCol = $hasQuotedRate ? ", pt.Quoted_Rate" : ", NULL AS Quoted_Rate";
 
     $tStmt = $pdo->prepare(
         "SELECT ps.Proj_ID,
@@ -94,6 +132,7 @@ if (!empty($projIds)) {
                 COALESCE(ps.Weight,1) AS StageWeight,
                 stg.Stage_Order
                 $vCol
+                $qrCol
            FROM Project_Tasks pt
            JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
            JOIN Tasks_Types tt ON pt.Task_Type_ID = tt.Task_ID
@@ -151,24 +190,73 @@ if (!empty($projIds)) {
         $logged = $loggedByPtid[(int)$t['Proj_Task_ID']] ?? 0.0;
         $remaining = $est - $logged;
         $isMine = ((int)$t['Assigned_To'] === $empId);
+
+        // Rate-adjusted hours for the assigned staff member.
+        //
+        // The dollar budget for the task was locked when the quote was
+        // accepted, at the rate captured in pt.Quoted_Rate (which itself
+        // comes from whoever was assigned at quote time, or TBA if
+        // unassigned). Reassigning a task post-acceptance does NOT change
+        // Quoted_Rate — that's the whole point: variations are how you
+        // change the dollar value, reassignment is just "who does it".
+        //
+        // Effective hours for the staff doing it = quoted_hours ×
+        // (Quoted_Rate / their_rate). Phil at $120 picking up a TBA-quoted
+        // ($90) task → 0.75× hours. A junior at $75 picking up a Phil-
+        // quoted ($120) task → 1.6× hours.
+        //
+        // When Quoted_Rate is missing (very old rows, migration didn't
+        // backfill it), fall back to the system-wide TBA rate.
+        $assignedId   = (int)($t['Assigned_To'] ?? 0);
+        $assignedInfo = $staffBillingRate[$assignedId] ?? null;
+        $quotedRate   = ($t['Quoted_Rate'] !== null && (float)$t['Quoted_Rate'] > 0.001)
+                          ? (float)$t['Quoted_Rate']
+                          : $tbaRate;
+        $scaledEst    = $est;
+        $scaledRem    = $remaining;
+        $assignedRate = 0.0;
+        $assignedLogin = '';
+        $hasRatio     = false;
+        if ($assignedInfo && (float)$assignedInfo['rate'] > 0.001) {
+            $assignedRate  = (float)$assignedInfo['rate'];
+            $assignedLogin = (string)$assignedInfo['login'];
+            $ratio         = $quotedRate / $assignedRate;
+            // Only flag as "hasRatio" when it actually changes the hours
+            // (i.e. quoted rate differs from the assigned staff's rate).
+            if (abs($ratio - 1.0) > 0.001) {
+                $scaledEst = $est * $ratio;
+                $scaledRem = $scaledEst - $logged;
+                $hasRatio  = true;
+            }
+        }
+
         $tasksByProject[$pid][] = [
-            'name'      => $t['Task_Name'],
-            'desc'      => $t['TaskDesc'],
-            'stage'     => $t['Stage_Type_Name'] ?? 'Other',
-            'est'       => $est,
-            'logged'    => $logged,
-            'remaining' => $remaining,
-            'mine'      => $isMine,
-            'vid'       => $t['Variation_ID'],
-            'vnumber'   => $t['Variation_Number'],
-            'vtitle'    => $t['VTitle'],
-            'vstatus'   => $t['VStatus'],
+            'name'           => $t['Task_Name'],
+            'desc'           => $t['TaskDesc'],
+            'stage'          => $t['Stage_Type_Name'] ?? 'Other',
+            'est'            => $est,
+            'logged'         => $logged,
+            'remaining'      => $remaining,
+            'mine'           => $isMine,
+            'assigned_id'    => $assignedId,
+            'assigned_login' => $assignedLogin,
+            'assigned_rate'  => $assignedRate,
+            'quoted_rate'    => $quotedRate,
+            'scaled_est'     => $scaledEst,
+            'scaled_rem'     => $scaledRem,
+            'has_ratio'      => $hasRatio,
+            'vid'            => $t['Variation_ID'],
+            'vnumber'        => $t['Variation_Number'],
+            'vtitle'         => $t['VTitle'],
+            'vstatus'        => $t['VStatus'],
         ];
         if (!isset($projTotals[$pid])) $projTotals[$pid] = ['est'=>0, 'logged'=>0, 'remaining'=>0, 'mine_remaining'=>0, 'unassigned'=>0];
         $projTotals[$pid]['est']       += $est;
         $projTotals[$pid]['logged']    += $logged;
         $projTotals[$pid]['remaining'] += $remaining;
-        if ($isMine) $projTotals[$pid]['mine_remaining'] += max(0, $remaining);
+        // mine_remaining is the staff's adjusted hours-left budget — that's
+        // what they actually need to spend, not the un-scaled quote.
+        if ($isMine) $projTotals[$pid]['mine_remaining'] += max(0, $hasRatio ? $scaledRem : $remaining);
     }
     // Backfill unassigned hours per project (works even for projects with
     // zero Project_Tasks rows — they'd otherwise be missing from $projTotals).
@@ -307,10 +395,28 @@ Click a project heading to collapse/expand. Printing always shows everything.</p
           <?= htmlspecialchars($t['name']) ?>
           <?php if ($t['desc']): ?><span style="color:#666"> — <?= htmlspecialchars($t['desc']) ?></span><?php endif; ?>
           <?php if ($t['mine']): ?><span class="tag-mine">YOU</span><?php endif; ?>
+          <?php if ($t['has_ratio'] && !empty($t['assigned_login'])): ?>
+            <span style="color:#666;font-size:10px" title="This task was priced at $<?= number_format($t['quoted_rate'], 0) ?>/h when quoted. <?= htmlspecialchars($t['assigned_login']) ?> bills at $<?= number_format($t['assigned_rate'], 0) ?>/h, so their hour budget scales by <?= number_format($t['quoted_rate'] / $t['assigned_rate'], 2) ?>× to keep the dollar value fixed.">
+              · <?= htmlspecialchars($t['assigned_login']) ?> @ $<?= number_format($t['assigned_rate'], 0) ?>
+            </span>
+          <?php endif; ?>
         </td>
-        <td class="right"><?= number_format($t['est'], 2) ?>h</td>
+        <td class="right">
+          <?php if ($t['has_ratio']): ?>
+            <strong><?= number_format($t['scaled_est'], 2) ?>h</strong>
+            <span style="color:#999;font-size:10px;text-decoration:line-through;display:block"><?= number_format($t['est'], 2) ?>h quoted</span>
+          <?php else: ?>
+            <?= number_format($t['est'], 2) ?>h
+          <?php endif; ?>
+        </td>
         <td class="right"><?= number_format($t['logged'], 2) ?>h</td>
-        <td class="right"><?= number_format($t['remaining'], 2) ?>h</td>
+        <td class="right">
+          <?php if ($t['has_ratio']): ?>
+            <strong><?= number_format($t['scaled_rem'], 2) ?>h</strong>
+          <?php else: ?>
+            <?= number_format($t['remaining'], 2) ?>h
+          <?php endif; ?>
+        </td>
       </tr>
       <?php endforeach; ?>
     <?php endforeach; ?>

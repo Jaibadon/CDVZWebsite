@@ -101,7 +101,7 @@ $pdo = get_db();
     <td align="Left"><a onMouseOver="window.status='View '; return true" onMouseOut="window.status=''; return true" href="SUBCAT_TYPES.php?Spec_Cat_ID=1"><font color="#FFFFFF">Spec Subcats (Project Element Types)</font></a></td>
   </tr>
   <tr>
-    <td align="Left"><a onMouseOver="window.status='View '; return true" onMouseOut="window.status=''; return true" href="TASK_TYPES.php?stage_id=1"><font color="#FFFFFF">Task Types</font></a></td>
+    <td align="Left"><a onMouseOver="window.status='Edit task types catalog (replaces old per-stage TASK_TYPES.php)'; return true" onMouseOut="window.status=''; return true" href="task_types_admin.php"><font color="#FFFFFF">Task Types</font></a></td>
   </tr>
   <tr>
     <form method="POST" name="job_invoicing" action="invoices_for_job.php">
@@ -166,6 +166,7 @@ $pdo = get_db();
   <tr><td align="Left"><strong>TIMESHEET FUNCTIONS</strong></td></tr>
   <tr><td align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="timesheet_admin1.php"><font color="#FFFFFF">Timesheet Reporting</font></a></td></tr>
   <tr><td align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="staff_hours.php"><font color="#FFFFFF">Staff Hours - Unprocessed</font></a></td></tr>
+  <tr><td align="Left"><a onMouseOver="window.status='Edit staff details (rates, name, email, active)'; return true" onMouseOut="window.status=''; return true" href="staff_admin.php"><font color="#FFFFFF">Staff Admin (rates, contact, active)</font></a></td></tr>
   <tr><td width="652" align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="unprocessed.php"><font color="#FFFFFF">Uprocessed Timesheet Entries</font></a></td></tr>
   <tr><td align="right" width="652"><div align="left"></div></td></tr>
 </table>

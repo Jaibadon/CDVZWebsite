@@ -171,6 +171,35 @@ function clients_has_contact(PDO $pdo): bool {
     return $cached;
 }
 
+/**
+ * The system "TBA" rate — what we charge per hour when a task is quoted
+ * without a specific staff member assigned. Stored in the Staff row for
+ * Employee_ID = 29 (the placeholder "T.B.A." record); changing that
+ * record's `Billing Rate` propagates everywhere.
+ *
+ * Falls back to $90 if Staff ID 29 is missing or has a non-positive rate
+ * (so the system stays usable on installs where someone deleted the
+ * row), but the canonical source of truth is Staff.
+ *
+ * Cached per request — every PHP page that touches pricing calls this
+ * many times.
+ */
+function get_tba_rate(PDO $pdo): float {
+    static $cached = null;
+    if ($cached !== null) return $cached;
+    try {
+        $rate = $pdo->query("SELECT `Billing Rate` FROM Staff WHERE Employee_ID = 29")->fetchColumn();
+        if ($rate === false) {
+            // Older schema may use uppercase column name.
+            $rate = $pdo->query("SELECT `BILLING RATE` FROM Staff WHERE Employee_ID = 29")->fetchColumn();
+        }
+        $cached = ($rate !== false && (float)$rate > 0) ? (float)$rate : 90.00;
+    } catch (Exception $e) {
+        $cached = 90.00;
+    }
+    return $cached;
+}
+
 // ─── Editable email templates ─────────────────────────────────────────
 //
 // Every email body the system sends (single-invoice, manual statement,
@@ -363,8 +392,9 @@ function pick_billing_email($billingEmail, $email): ?string {
  * Skips Project_Variations rows when that table exists — variations are
  * billed separately. Honours Is_Removed (soft-deletes from accepted quotes).
  */
-function compute_project_estimate(PDO $pdo, int $projId, float $multiplier = 1.0, float $baseRate = 90.00): array {
+function compute_project_estimate(PDO $pdo, int $projId, float $multiplier = 1.0, ?float $baseRate = null): array {
     if ($multiplier <= 0) $multiplier = 1.0;
+    if ($baseRate === null || $baseRate <= 0) $baseRate = get_tba_rate($pdo);
     $hasVariations = false;
     try {
         $hasVariations = (bool)$pdo->query("SHOW TABLES LIKE 'Project_Variations'")->fetch();
