@@ -77,6 +77,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset
         $pdo->prepare("DELETE FROM Project_Stages WHERE Proj_ID = ? AND Variation_ID IS NOT NULL")->execute([$proj_id]);
         $pdo->prepare("UPDATE Project_Tasks pt JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID SET pt.Is_Removed = 0, pt.Removed_In_Variation_ID = NULL WHERE ps.Proj_ID = ?")->execute([$proj_id]);
         $pdo->prepare("DELETE FROM Project_Variations WHERE Proj_ID = ?")->execute([$proj_id]);
+
+        // Re-snapshot Quoted_Rate on every surviving original task. Without
+        // this, a task that was frozen at (say) Phil's $120 stays at $120
+        // after the reset — and if the admin re-accepts the quote without
+        // explicitly editing that task, the stale rate carries through to
+        // the new contract. Treat the reset as "wipe the freeze, take a
+        // fresh snapshot from current state" so re-acceptance is honest.
+        try {
+            $hasQR = (bool)$pdo->query("SHOW COLUMNS FROM Project_Tasks LIKE 'Quoted_Rate'")->fetch();
+            if ($hasQR) {
+                $pdo->prepare(
+                    "UPDATE Project_Tasks pt
+                       JOIN Project_Stages ps ON pt.Project_Stage_ID = ps.Project_Stage_ID
+                       LEFT JOIN Staff s_assigned ON pt.Assigned_To       = s_assigned.Employee_ID
+                       LEFT JOIN Staff s_tba      ON s_tba.Employee_ID    = 29
+                          SET pt.Quoted_Rate = COALESCE(
+                                s_assigned.`Billing Rate`,
+                                s_tba.`Billing Rate`,
+                                90.00
+                              )
+                        WHERE ps.Proj_ID = ?
+                          AND ps.Variation_ID IS NULL"
+                )->execute([$proj_id]);
+            }
+        } catch (Exception $qrErr) { /* legacy schema fallback or column name mismatch — non-fatal */ }
+
         $pdo->prepare("UPDATE Projects SET Quote_Status = 'draft' WHERE proj_id = ?")->execute([$proj_id]);
         $pdo->commit();
     } catch (Exception $e) {

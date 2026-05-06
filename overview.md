@@ -105,6 +105,7 @@ The dollar value of the task is preserved either way; the staff's hour budget re
 - `add_task` and `save_variation_task`: always set from current state.
 - `update_task` and `save_stage_all`: refreshed only when `!$isAccepted`. After acceptance, the snapshot is frozen.
 - `assign_stage` and `assign_all`: same — refresh while draft, frozen after acceptance.
+- `reset_to_draft` (in `project_stages.php`): **re-snapshots `Quoted_Rate` from current state** on every original task as part of the reset. Without this, a task that was frozen at Phil's $120 would stay at $120 after the reset, and re-accepting without explicitly editing that task would carry the stale rate into the new contract. The reset wipes the freeze and takes a fresh snapshot.
 - See `migrations/add_quoted_rate.sql` for the backfill rule for pre-existing rows.
 
 **Variation tasks**: `Quoted_Rate` is set on creation and (currently) on every update regardless of variation status — TODO: tighten so it freezes when the variation flips to `approved`.
