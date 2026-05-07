@@ -97,6 +97,7 @@ $activeFilter = $singleProjId > 0 ? '' : 'AND p.Active <> 0';  // single-project
 
 $projsStmt = $pdo->prepare(
     "SELECT DISTINCT p.proj_id, p.JobName, p.Job_Description,
+            p.Manager, p.DP1, p.DP2, p.DP3,
             mgr.Login AS ManagerLogin
        FROM Projects p
        LEFT JOIN Staff mgr ON p.Manager = mgr.Employee_ID
@@ -108,6 +109,55 @@ if ($singleProjId > 0) $bind[':pid'] = $singleProjId;
 if (!$isAdminUser) $bind[':e'] = $empId;
 $projsStmt->execute($bind);
 $projects = $projsStmt->fetchAll();
+
+// ── Perspective state ────────────────────────────────────────────────────
+// Default: every task's hours are scaled to the VIEWER'S rate, so a staff
+// member sees "if I did this, how many hours would it take me at my
+// billing rate". Per-project toggle (gated to whoever is the project's
+// `Manager` row): flips THAT PROJECT to "assigned" perspective where
+// each task scales to its actual assignee's rate. The toggle is per
+// project — so a manager of project A and DP1 of project B sees a
+// toggle on A only and B is locked to viewer perspective.
+//
+// State flows through the URL as ?assigned_projs=123,456 (CSV of
+// proj_ids currently in assigned mode). Toggle buttons add/remove
+// their project from the list.
+$viewerInfo    = $staffBillingRate[$empId] ?? null;
+$viewerRate    = $viewerInfo ? (float)$viewerInfo['rate'] : 0.0;
+$viewerHasRate = $viewerRate > 0.001;
+
+$assignedProjsRaw = (string)($_GET['assigned_projs'] ?? '');
+$assignedProjsRequested = [];
+foreach (explode(',', $assignedProjsRaw) as $tok) {
+    $tok = trim($tok);
+    if ($tok !== '' && ctype_digit($tok)) $assignedProjsRequested[(int)$tok] = true;
+}
+
+// Authoritative per-project perspective map. Only honour the URL flag
+// when the viewer is the actual Manager of that project — non-managers
+// passing assigned_projs in the URL are silently ignored.
+$projectPerspective = [];
+$canToggleForProject = [];
+foreach ($projects as $p) {
+    $pid = (int)$p['proj_id'];
+    $isMgr = ((int)($p['Manager'] ?? 0) === $empId);
+    $canToggleForProject[$pid] = $isMgr;
+    $projectPerspective[$pid] = ($isMgr && !empty($assignedProjsRequested[$pid])) ? 'assigned' : 'viewer';
+}
+
+// Helper: build the URL for toggling a single project's perspective.
+// Preserves any other ?param=value (proj_id, print) in the URL.
+function build_perspective_url(int $pid, bool $turnOn, array $currentlyAssigned): string {
+    $set = $currentlyAssigned;
+    if ($turnOn)  $set[$pid] = true;
+    else          unset($set[$pid]);
+    $list = array_keys(array_filter($set));
+    sort($list);
+    $qs = $_GET;
+    if (empty($list)) unset($qs['assigned_projs']);
+    else              $qs['assigned_projs'] = implode(',', $list);
+    return 'my_checklist.php' . (!empty($qs) ? '?' . http_build_query($qs) : '');
+}
 
 // All tasks for those projects with computed hours remaining
 $projIds = array_column($projects, 'proj_id');
@@ -191,43 +241,82 @@ if (!empty($projIds)) {
         $remaining = $est - $logged;
         $isMine = ((int)$t['Assigned_To'] === $empId);
 
-        // Rate-adjusted hours for the assigned staff member.
+        // Rate-adjusted hours.
         //
         // The dollar budget for the task was locked when the quote was
-        // accepted, at the rate captured in pt.Quoted_Rate (which itself
-        // comes from whoever was assigned at quote time, or TBA if
-        // unassigned). Reassigning a task post-acceptance does NOT change
-        // Quoted_Rate — that's the whole point: variations are how you
-        // change the dollar value, reassignment is just "who does it".
+        // accepted, at the rate captured in pt.Quoted_Rate. We compute
+        // hour figures for TWO perspectives:
         //
-        // Effective hours for the staff doing it = quoted_hours ×
-        // (Quoted_Rate / their_rate). Phil at $120 picking up a TBA-quoted
-        // ($90) task → 0.75× hours. A junior at $75 picking up a Phil-
-        // quoted ($120) task → 1.6× hours.
+        //   ASSIGNED perspective (manager toggle, or unassigned tasks):
+        //     hours = quoted_hours × (Quoted_Rate / assigned_staff_rate)
+        //     "How many hours does Phil get under this task's budget at
+        //      his billing rate?"
         //
-        // When Quoted_Rate is missing (very old rows, migration didn't
-        // backfill it), fall back to the system-wide TBA rate.
+        //   VIEWER perspective (default for everyone):
+        //     hours = quoted_hours × (Quoted_Rate / viewer_rate)
+        //     "If I (the logged-in user) were doing this task, how many
+        //      hours would it take me at MY billing rate to use the same
+        //      dollar budget?"
+        //
+        // The viewer perspective is what most staff actually want to see
+        // — the project as their personal hour-budget. Managers can flip
+        // back to assigned perspective via the toggle to see the truth
+        // for the actual assignees.
+        //
+        // When Quoted_Rate is missing (very old rows the migration
+        // couldn't backfill), fall back to the system-wide TBA rate.
         $assignedId   = (int)($t['Assigned_To'] ?? 0);
         $assignedInfo = $staffBillingRate[$assignedId] ?? null;
         $quotedRate   = ($t['Quoted_Rate'] !== null && (float)$t['Quoted_Rate'] > 0.001)
                           ? (float)$t['Quoted_Rate']
                           : $tbaRate;
-        $scaledEst    = $est;
-        $scaledRem    = $remaining;
-        $assignedRate = 0.0;
-        $assignedLogin = '';
-        $hasRatio     = false;
+
+        // Assigned-perspective scaling (used by manager toggle ON, or
+        // when rendering "real assignment" info anywhere).
+        $assignedScaledEst = $est;
+        $assignedScaledRem = $remaining;
+        $assignedRate      = 0.0;
+        $assignedLogin     = '';
+        $assignedHasRatio  = false;
         if ($assignedInfo && (float)$assignedInfo['rate'] > 0.001) {
             $assignedRate  = (float)$assignedInfo['rate'];
             $assignedLogin = (string)$assignedInfo['login'];
-            $ratio         = $quotedRate / $assignedRate;
-            // Only flag as "hasRatio" when it actually changes the hours
-            // (i.e. quoted rate differs from the assigned staff's rate).
-            if (abs($ratio - 1.0) > 0.001) {
-                $scaledEst = $est * $ratio;
-                $scaledRem = $scaledEst - $logged;
-                $hasRatio  = true;
+            $ar            = $quotedRate / $assignedRate;
+            if (abs($ar - 1.0) > 0.001) {
+                $assignedScaledEst = $est * $ar;
+                $assignedScaledRem = $assignedScaledEst - $logged;
+                $assignedHasRatio  = true;
             }
+        }
+
+        // Viewer-perspective scaling (default render). When the viewer
+        // has no billing rate set (admin without one, or a Staff row
+        // missing the column), fall through to raw quoted hours — we
+        // can't compute a meaningful viewer ratio from a zero rate.
+        $viewerScaledEst = $est;
+        $viewerScaledRem = $remaining;
+        $viewerHasRatio  = false;
+        if ($viewerHasRate) {
+            $vr = $quotedRate / $viewerRate;
+            if (abs($vr - 1.0) > 0.001) {
+                $viewerScaledEst = $est * $vr;
+                $viewerScaledRem = $viewerScaledEst - $logged;
+                $viewerHasRatio  = true;
+            }
+        }
+
+        // Pick which set the renderer will use, based on THIS project's
+        // perspective (managers can flip individual projects via the
+        // per-card toggle; everyone else sees viewer perspective).
+        $thisPerspective = $projectPerspective[$pid] ?? 'viewer';
+        if ($thisPerspective === 'assigned') {
+            $scaledEst = $assignedScaledEst;
+            $scaledRem = $assignedScaledRem;
+            $hasRatio  = $assignedHasRatio;
+        } else {
+            $scaledEst = $viewerScaledEst;
+            $scaledRem = $viewerScaledRem;
+            $hasRatio  = $viewerHasRatio;
         }
 
         $tasksByProject[$pid][] = [
@@ -242,20 +331,27 @@ if (!empty($projIds)) {
             'assigned_login' => $assignedLogin,
             'assigned_rate'  => $assignedRate,
             'quoted_rate'    => $quotedRate,
-            'scaled_est'     => $scaledEst,
-            'scaled_rem'     => $scaledRem,
-            'has_ratio'      => $hasRatio,
+            'scaled_est'     => $scaledEst,        // perspective-aware
+            'scaled_rem'     => $scaledRem,        // perspective-aware
+            'has_ratio'      => $hasRatio,         // perspective-aware
+            'perspective'    => $thisPerspective,  // 'viewer' | 'assigned'
             'vid'            => $t['Variation_ID'],
             'vnumber'        => $t['Variation_Number'],
             'vtitle'         => $t['VTitle'],
             'vstatus'        => $t['VStatus'],
         ];
         if (!isset($projTotals[$pid])) $projTotals[$pid] = ['est'=>0, 'logged'=>0, 'remaining'=>0, 'mine_remaining'=>0, 'unassigned'=>0];
-        $projTotals[$pid]['est']       += $est;
+        // Project totals are aggregated in the chosen perspective so the
+        // proj-card badge is internally consistent with the per-row values
+        // shown below it. Logged hours are real time and aren't scaled.
+        $projTotals[$pid]['est']       += $hasRatio ? $scaledEst : $est;
         $projTotals[$pid]['logged']    += $logged;
-        $projTotals[$pid]['remaining'] += $remaining;
-        // mine_remaining is the staff's adjusted hours-left budget — that's
-        // what they actually need to spend, not the un-scaled quote.
+        $projTotals[$pid]['remaining'] += $hasRatio ? $scaledRem : $remaining;
+        // mine_remaining = the viewer's hours-left budget for tasks they
+        // are explicitly assigned to. In viewer perspective this is the
+        // viewer-scaled remaining; in assigned perspective for $isMine
+        // tasks the assigned and viewer rates are the same person, so
+        // both modes yield the viewer-scaled value either way.
         if ($isMine) $projTotals[$pid]['mine_remaining'] += max(0, $hasRatio ? $scaledRem : $remaining);
     }
     // Backfill unassigned hours per project (works even for projects with
@@ -325,6 +421,25 @@ td { padding:3px 6px; border-bottom:1px solid #eee; vertical-align:top; }
 Variation tasks appear in italic; <span style="color:#c33">unapproved variations</span> show in red.
 Click a project heading to collapse/expand. Printing always shows everything.</p>
 
+<?php
+// ── Perspective banner (page-level) ─────────────────────────────────────
+// Generic note. The actual perspective toggle lives on each project
+// card the viewer manages — see the loop below.
+$anyManaged = false;
+foreach ($canToggleForProject as $b) { if ($b) { $anyManaged = true; break; } }
+?>
+<div class="no-print" style="background:#eef;border:1px solid #b0c4d8;color:#246;padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:10px">
+  <?php if ($viewerHasRate): ?>
+    <strong>Hours shown are from your perspective</strong>
+    &mdash; every task is scaled to your billing rate ($<?= number_format($viewerRate, 0) ?>/h) so the totals reflect "if I did this whole project, how many hours I'd need".
+    <?php if ($anyManaged): ?>
+      Projects you manage have a <em>switch perspective</em> button on the card &mdash; flip individual projects to the per-assignee view.
+    <?php endif; ?>
+  <?php else: ?>
+    <strong>Hours shown un-scaled</strong> &mdash; you don't have a billing rate set, so hours are the raw quoted hours. Ask Erik or Jen to set your rate via <a href="staff_admin.php">staff_admin</a>.
+  <?php endif; ?>
+</div>
+
 <div class="bulk-controls no-print">
   <button onclick="document.querySelectorAll('.proj-card').forEach(c => c.classList.remove('collapsed'))">Expand all</button>
   <button onclick="document.querySelectorAll('.proj-card').forEach(c => c.classList.add('collapsed'))">Collapse all</button>
@@ -355,11 +470,27 @@ Click a project heading to collapse/expand. Printing always shows everything.</p
          style="font-size:11px;background:#246;color:#fff !important;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:8px"
          onclick="event.stopPropagation()">🖨 Print this project</a>
     <?php endif; ?>
+    <?php if ($canToggleForProject[$pid] ?? false):
+        $thisP   = $projectPerspective[$pid] ?? 'viewer';
+        $turnOn  = ($thisP !== 'assigned');  // if currently viewer, toggle turns ON; if assigned, turns OFF
+        $btnUrl  = build_perspective_url($pid, $turnOn, $assignedProjsRequested);
+        $btnText = $turnOn ? '👁 Switch to per-assignee view' : '↩ Back to your perspective';
+        $btnBg   = $turnOn ? '#246' : '#9B9B1B';
+    ?>
+      <a href="<?= htmlspecialchars($btnUrl) ?>"
+         class="no-print"
+         title="You manage this project, so you can flip its hours between &quot;your perspective&quot; (scaled to your rate) and &quot;per-assignee&quot; (each task scaled to whoever's assigned)."
+         style="font-size:11px;background:<?= $btnBg ?>;color:#fff !important;padding:3px 8px;border-radius:3px;text-decoration:none;margin-left:6px"
+         onclick="event.stopPropagation()"><?= $btnText ?></a>
+    <?php endif; ?>
     <span class="toggle">▾</span>
   </h2>
   <div class="proj-body">
   <div class="proj-meta">
     Manager: <?= htmlspecialchars($p['ManagerLogin'] ?? '?') ?>
+    <?php if ($projectPerspective[$pid] === 'assigned'): ?>
+      &middot; <span style="background:#246;color:#fff;padding:1px 6px;border-radius:3px;font-size:10px">PER-ASSIGNEE VIEW</span>
+    <?php endif; ?>
     <?php if ($p['Job_Description']): ?> &middot; <?= htmlspecialchars(mb_substr($p['Job_Description'], 0, 120)) ?><?php endif; ?>
   </div>
 
@@ -395,10 +526,22 @@ Click a project heading to collapse/expand. Printing always shows everything.</p
           <?= htmlspecialchars($t['name']) ?>
           <?php if ($t['desc']): ?><span style="color:#666"> — <?= htmlspecialchars($t['desc']) ?></span><?php endif; ?>
           <?php if ($t['mine']): ?><span class="tag-mine">YOU</span><?php endif; ?>
-          <?php if ($t['has_ratio'] && !empty($t['assigned_login'])): ?>
-            <span style="color:#666;font-size:10px" title="This task was priced at $<?= number_format($t['quoted_rate'], 0) ?>/h when quoted. <?= htmlspecialchars($t['assigned_login']) ?> bills at $<?= number_format($t['assigned_rate'], 0) ?>/h, so their hour budget scales by <?= number_format($t['quoted_rate'] / $t['assigned_rate'], 2) ?>× to keep the dollar value fixed.">
-              · <?= htmlspecialchars($t['assigned_login']) ?> @ $<?= number_format($t['assigned_rate'], 0) ?>
-            </span>
+          <?php if (!empty($t['assigned_login'])): ?>
+            <span style="color:#666;font-size:10px"> · assigned to <?= htmlspecialchars($t['assigned_login']) ?> @ $<?= number_format($t['assigned_rate'], 0) ?></span>
+          <?php endif; ?>
+          <?php if ($t['has_ratio']):
+              // Tooltip explains which perspective this task was scaled in.
+              if (($t['perspective'] ?? 'viewer') === 'viewer' && $viewerRate > 0) {
+                  $ratioPct = number_format($t['quoted_rate'] / $viewerRate, 2);
+                  $tip = "This task was priced at \${$t['quoted_rate']}/h. You bill at \${$viewerRate}/h, so your hour budget is {$ratioPct}× the quoted hours — keeps the dollar value fixed.";
+              } else {
+                  $ratioPct = !empty($t['assigned_rate']) && $t['assigned_rate'] > 0
+                      ? number_format($t['quoted_rate'] / $t['assigned_rate'], 2)
+                      : 'n/a';
+                  $tip = "This task was priced at \${$t['quoted_rate']}/h. Assignee bills at \${$t['assigned_rate']}/h, hour budget scales by {$ratioPct}×.";
+              }
+          ?>
+            <span style="color:#999;font-size:10px;cursor:help" title="<?= htmlspecialchars($tip) ?>"> ⓘ</span>
           <?php endif; ?>
         </td>
         <td class="right">

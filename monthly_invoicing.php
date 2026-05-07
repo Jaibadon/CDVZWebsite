@@ -172,6 +172,7 @@ if ($xeroConnected) {
               WHERE i.Xero_InvoiceID IS NOT NULL
                 AND i.Xero_AmountDue > 0
                 AND i.Xero_Status IN ('AUTHORISED','SUBMITTED')
+                AND COALESCE(i.Paid, 0) = 0  /* hide invoices Akahu (or a manual tick) has already marked paid locally — Xero_AmountDue may still be positive while Xero waits to reconcile */
               ORDER BY i.Xero_DueDate ASC"
         );
         $overdue = $st->fetchAll();

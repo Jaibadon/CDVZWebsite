@@ -92,10 +92,32 @@ if (($_SESSION['UserID'] ?? '') === 'erik') {
                 AND i.Xero_Status = 'AUTHORISED'
                 AND i.Xero_DueDate IS NOT NULL
                 AND DATEDIFF(CURDATE(), i.Xero_DueDate) >= 30
+                AND COALESCE(i.Paid, 0) = 0  /* skip invoices Akahu (or a manual tick) has already marked paid locally */
               ORDER BY days_overdue DESC, i.Xero_AmountDue DESC"
         );
         $callList = $st->fetchAll();
     } catch (Exception $e) { /* Xero columns may not exist on legacy installs */ }
+}
+
+// ── Bank-feed reconciliation alerts (Akahu, alongside Xero) ──────────────
+// Two separate panels. Suppressed entirely when the migration hasn't run
+// or when Akahu hasn't been connected yet — the page should still load
+// for installs that haven't adopted bank feeds.
+$bankNeedsReconciling = [];
+$bankPartialOverdue   = [];
+$bankAlertsAvailable  = false;
+if (in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    try {
+        $bankAlertsAvailable = (bool)$pdo->query("SHOW COLUMNS FROM Invoices LIKE 'AmountPaid'")->fetch();
+    } catch (Exception $e) {}
+    if ($bankAlertsAvailable) {
+        try {
+            require_once __DIR__ . '/bankfeed_match.php';
+            $det = detect_unreconciled($pdo);
+            $bankNeedsReconciling = $det['needs_reconciling'] ?? [];
+            $bankPartialOverdue   = $det['partial_overdue']   ?? [];
+        } catch (Exception $e) {}
+    }
 }
 ?>
 <!DOCTYPE html>
@@ -326,6 +348,92 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
         <a class="btn secondary" href="xero_disconnect.php" style="background:#666">Disconnect Xero</a>
       <?php endif; ?>
     </div>
+
+    <?php if ($bankAlertsAvailable): ?>
+    <h3>Bank feed (Akahu) — alongside Xero</h3>
+    <div class="grid">
+      <a class="btn secondary" href="akahu_connect.php">Akahu connection</a>
+      <a class="btn secondary" href="akahu_sync.php">Sync transactions now</a>
+      <a class="btn secondary" href="bankfeed_reconcile.php">Reconciliation queue</a>
+    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($bankNeedsReconciling)):
+        $totalUnreconciled = 0; foreach ($bankNeedsReconciling as $r) $totalUnreconciled += (float)$r['amount_paid'];
+    ?>
+    <div style="background:#fff3cd;border:2px solid #c8a52e;border-radius:4px;padding:12px 16px;margin-top:16px">
+      <h3 style="margin:0 0 6px;color:#7a5a00;border:none">
+        🔄 <?= count($bankNeedsReconciling) ?> invoice<?= count($bankNeedsReconciling) === 1 ? '' : 's' ?> need reconciling in Xero
+      </h3>
+      <p style="margin:0 0 6px;font-size:11px;color:#7a5a00">
+        Akahu sees bank evidence covering <strong>$<?= number_format($totalUnreconciled, 2) ?></strong> total, but Xero still has these as <em>AUTHORISED</em>.
+        These are already marked <strong>Paid locally</strong> (so the reminder cron won't chase the client) — but Xero's books still need the matching reconciliation.
+        After you reconcile in Xero, the alert clears on the next xero_sync.
+      </p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px">
+        <thead><tr style="background:#fff8de"><th style="padding:4px 6px;text-align:left">Invoice</th><th style="padding:4px 6px;text-align:left">Client</th><th style="padding:4px 6px;text-align:right">Bank evidence</th><th style="padding:4px 6px;text-align:right">Invoice gross</th><th style="padding:4px 6px;text-align:left">Xero</th></tr></thead>
+        <tbody>
+        <?php foreach (array_slice($bankNeedsReconciling, 0, 12) as $r): ?>
+          <tr style="border-bottom:1px solid #fce8aa">
+            <td style="padding:4px 6px"><a href="invoice.php?Invoice_No=<?= (int)$r['Invoice_No'] ?>">CAD-<?= str_pad((string)$r['Invoice_No'], 5, '0', STR_PAD_LEFT) ?></a></td>
+            <td style="padding:4px 6px"><?= htmlspecialchars($r['Client_Name'] ?? '?') ?></td>
+            <td style="padding:4px 6px;text-align:right">$<?= number_format((float)$r['amount_paid'], 2) ?></td>
+            <td style="padding:4px 6px;text-align:right">$<?= number_format((float)$r['gross'], 2) ?></td>
+            <td style="padding:4px 6px;color:#a05a00"><?= htmlspecialchars((string)($r['Xero_Status'] ?? '?')) ?></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php if (count($bankNeedsReconciling) > 12): ?>
+        <p style="font-size:11px;color:#7a5a00;margin-top:6px">+ <?= count($bankNeedsReconciling) - 12 ?> more — see <a href="bankfeed_reconcile.php" style="color:#7a5a00">Reconciliation queue</a> for the full list.</p>
+      <?php endif; ?>
+    </div>
+    <?php endif; ?>
+
+    <?php if (!empty($bankPartialOverdue)):
+        $totalShortfall = 0; foreach ($bankPartialOverdue as $r) $totalShortfall += (float)$r['remaining'];
+    ?>
+    <div style="background:#ffe4d6;border:2px solid #c33;border-radius:4px;padding:12px 16px;margin-top:12px">
+      <h3 style="margin:0 0 6px;color:#a00;border:none">
+        💰 <?= count($bankPartialOverdue) ?> overdue invoice<?= count($bankPartialOverdue) === 1 ? '' : 's' ?> with PARTIAL payment received
+      </h3>
+      <p style="margin:0 0 6px;font-size:11px;color:#7a2200">
+        The bank shows part-payment but the balance is still owed and the due date has passed. Total outstanding: <strong>$<?= number_format($totalShortfall, 2) ?></strong>.
+        Send a "thanks for the partial payment" follow-up, OR write the shortfall off as a credit (negative line + Xero credit note).
+      </p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px">
+        <thead><tr style="background:#fff3cd"><th style="padding:4px 6px;text-align:left">Invoice</th><th style="padding:4px 6px;text-align:left">Client</th><th style="padding:4px 6px;text-align:right">Paid</th><th style="padding:4px 6px;text-align:right">Owing</th><th style="padding:4px 6px;text-align:right">Days late</th><th style="padding:4px 6px;text-align:left">Action</th></tr></thead>
+        <tbody>
+        <?php foreach (array_slice($bankPartialOverdue, 0, 12) as $r): ?>
+          <tr style="border-bottom:1px solid #fce0bf">
+            <td style="padding:4px 6px"><a href="invoice.php?Invoice_No=<?= (int)$r['Invoice_No'] ?>">CAD-<?= str_pad((string)$r['Invoice_No'], 5, '0', STR_PAD_LEFT) ?></a></td>
+            <td style="padding:4px 6px"><?= htmlspecialchars($r['Client_Name'] ?? '?') ?></td>
+            <td style="padding:4px 6px;text-align:right">$<?= number_format((float)$r['amount_paid'], 2) ?></td>
+            <td style="padding:4px 6px;text-align:right;color:#a00"><strong>$<?= number_format((float)$r['remaining'], 2) ?></strong></td>
+            <td style="padding:4px 6px;text-align:right;color:#a00"><strong><?= (int)$r['days_overdue'] ?></strong></td>
+            <td style="padding:4px 6px;font-size:11px">
+              <form method="post" action="partial_payment_action.php" style="display:inline" onsubmit="return confirm('Send the &quot;thank you for the partial payment, balance still owed&quot; email to this client?');">
+                <input type="hidden" name="action" value="send_thanks">
+                <input type="hidden" name="invoice_no" value="<?= (int)$r['Invoice_No'] ?>">
+                <button type="submit" style="background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px">✉ Send thanks</button>
+              </form>
+              <form method="post" action="partial_payment_action.php" style="display:inline" onsubmit="return confirm('Write off the remaining $<?= number_format((float)$r['remaining'], 2) ?> as a CREDIT?\n\nThis will:\n• Add a negative credit line to the local invoice (description: \&quot;credit\&quot;).\n• Create + allocate a credit note in Xero (if connected).\n\nIrreversible — only do this if you\'ve agreed with the client to accept the partial payment as full settlement.');">
+                <input type="hidden" name="action" value="credit_shortfall">
+                <input type="hidden" name="invoice_no" value="<?= (int)$r['Invoice_No'] ?>">
+                <input type="hidden" name="amount"     value="<?= number_format((float)$r['remaining'], 2, '.', '') ?>">
+                <button type="submit" style="background:#c33;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:4px">✂ Credit shortfall</button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php if (count($bankPartialOverdue) > 12): ?>
+        <p style="font-size:11px;color:#a00;margin-top:6px">+ <?= count($bankPartialOverdue) - 12 ?> more — see <a href="bankfeed_reconcile.php" style="color:#a00">Reconciliation queue</a>.</p>
+      <?php endif; ?>
+    </div>
+    <?php endif; ?>
+
     <?php endif; ?>
 
   </div>

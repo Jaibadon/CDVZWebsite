@@ -197,6 +197,60 @@ class XeroClient
         return $resp['OnlineInvoices'][0]['OnlineInvoiceUrl'] ?? null;
     }
 
+    // ── Credit notes (UNTESTED in production — used by partial_payment_action.php) ──
+    //
+    // Reference: https://developer.xero.com/documentation/api/accounting/creditnotes
+    //
+    //   POST /api.xro/2.0/CreditNotes  →  create a credit note
+    //   POST /api.xro/2.0/CreditNotes/{ID}/Allocations  →  allocate it against an invoice
+    //
+    // The OAuth scope `accounting.transactions` (already requested by
+    // xero_connect.php for invoices) covers credit notes too — no extra
+    // scope to add.
+    //
+    // Heads-up on first use: if your Xero org's locked period prevents
+    // back-dating the credit note, the create call will return a
+    // ValidationError. Forward any failure message to the admin
+    // (partial_payment_action.php already catches and surfaces it).
+
+    /**
+     * Create a credit note. $body is the Xero CreditNote body shape:
+     *   ['Type' => 'ACCRECCREDIT', 'Status' => 'AUTHORISED', 'Date' => 'Y-m-d',
+     *    'Contact' => ['ContactID' => '...'] OR ['Name' => '...'],
+     *    'LineItems' => [['Description' => '...', 'Quantity' => 1,
+     *                     'UnitAmount' => 100.00, 'AccountCode' => '240',
+     *                     'TaxType' => 'OUTPUT2'], ...]]
+     * Returns the new credit note's CreditNoteID, or null if Xero
+     * accepted but didn't return one (unusual).
+     */
+    public function postCreditNote(array $body): ?string
+    {
+        $req  = ['CreditNotes' => [$body]];
+        $resp = $this->apiCall('POST', '/CreditNotes?summarizeErrors=false', $req);
+        $row  = $resp['CreditNotes'][0] ?? null;
+        if (!$row) throw new XeroException('Xero did not return a credit note in the response.');
+        if (!empty($row['ValidationErrors'])) {
+            $msgs = array_column($row['ValidationErrors'], 'Message');
+            throw new XeroException('Xero rejected credit note: ' . implode(' · ', $msgs));
+        }
+        return $row['CreditNoteID'] ?? null;
+    }
+
+    /**
+     * Allocate (apply) an existing credit note against an invoice for the
+     * given gross amount. Wraps:
+     *   POST /CreditNotes/{creditNoteId}/Allocations
+     */
+    public function allocateCreditNote(string $creditNoteId, string $invoiceId, float $appliedAmount): array
+    {
+        $body = ['Allocations' => [[
+            'Amount'  => round($appliedAmount, 2),
+            'Date'    => date('Y-m-d'),
+            'Invoice' => ['InvoiceID' => $invoiceId],
+        ]]];
+        return $this->apiCall('POST', '/CreditNotes/' . urlencode($creditNoteId) . '/Allocations', $body);
+    }
+
     /**
      * Fetch the rendered invoice PDF from Xero. Returns raw bytes.
      * Used by xero_invoice_email.php so we can send it ourselves from

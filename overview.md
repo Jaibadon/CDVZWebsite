@@ -18,7 +18,12 @@ This is a PHP 7.4+ app, originally Classic ASP / MSSQL, ported to PHP / MySQL. L
 - **`menu.php`** — main navigation. Different sections for admin vs staff. Shows Xero / SMTP connect status, pending-variation alert, dormancy sweep banner, **and Erik's "📞 30+ days overdue, please call" callout** (red panel listing invoices with `Xero_DueDate` ≥ 30 days past, click-to-call phone links).
 - **`main.php`** — the timesheet entry page. 30 rows, 7-day grid. Task picker is a `<select>` (not free text) populated by JS from `window.PROJECT_TASKS` keyed by proj_id. Submit button turns red + adds JS confirm if `is_employed_staff()` and there are missing weekdays IN THE CURRENT WEEK (future-week or back-fill weeks suppress the alert). Picker option value = `Proj_Task_ID`.
 - **`submit.php`** — handles the timesheet POST. Wraps DELETE+INSERTs in a single transaction, output-buffers the response. Resolves Proj_Task_ID → Task_Type_ID + Variation_ID via Project_Tasks JOIN. Re-checks missing weekdays AFTER the insert and shows red banner if gaps remain. **TS_ID generation:** combines `MAX(TS_ID)` across `Timesheets` AND `Timesheets_HIST` to avoid PK collisions (the AFTER DELETE trigger archives to HIST), with retry-on-duplicate.
-- **`my_checklist.php`** — staff-facing per-project task list. `?proj_id=X` filters to one project; `?print=1` triggers auto print dialog. **Renders rate-adjusted hours**: each task carries a `Project_Tasks.Quoted_Rate` snapshot (the per-hour rate locked in at quote time — see "Pricing & rate-ratio model" below). When an assigned staff member's `Billing Rate` ≠ that task's `Quoted_Rate`, the dollar value stays fixed (= contract with the client) but the staff's hour budget scales by `Quoted_Rate / their_rate`. So a 4h task quoted at TBA $90 (= $360) assigned to Phil at $120/h shows 3h on Phil's checklist (= same $360). A junior at $75/h picking up a Phil-quoted ($120) task shows 6.4h. Estimated and Remaining columns show the scaled value bold + the original quoted value struck-through underneath. Tooltip explains the math.
+- **`my_checklist.php`** — staff-facing per-project task list. `?proj_id=X` filters to one project; `?print=1` triggers auto print dialog. **Renders rate-adjusted hours via two perspectives** (see "Pricing & rate-ratio model" below):
+  - **Viewer perspective** (default for every project): every task is scaled to the LOGGED-IN user's `Billing Rate` regardless of who's actually assigned. Answers "if I did this whole project, how many hours would I need at my rate?". A page-level banner says "Hours shown are from your perspective ($X/h)".
+  - **Assigned perspective** (per-project toggle, gated to whoever is that project's `Manager` row): each task is scaled to its actual assignee's rate (or unscaled if TBA). Answers "what's the real hour budget per assignee?". The toggle button appears in the header of EACH project card the viewer manages — flipping one project doesn't affect the others. State is carried in the URL as `?assigned_projs=123,456` (CSV of flipped project IDs); non-managers in the URL are silently ignored. Admin status (`erik`/`jen`) does NOT grant the toggle — they have to be in `Projects.Manager` like anyone else.
+  - When a project is flipped, the proj-meta line shows a `PER-ASSIGNEE VIEW` badge so it's obvious which projects are in which mode.
+  - Estimated and Remaining columns show the scaled value bold + the original quoted value struck-through underneath. ⓘ on each task opens a perspective-aware tooltip explaining the math (different copy depending on which perspective that project is in).
+  - When the viewer has no `Billing Rate` set, viewer mode falls back to raw quoted hours and the banner notes the missing rate with a link to `staff_admin.php`.
 - **`variation_add.php`** — staff-facing form to request an unapproved variation. Acknowledgment checkbox required.
 
 ### Projects & quote builder (admin only)
@@ -89,17 +94,20 @@ This is a PHP 7.4+ app, originally Classic ASP / MSSQL, ported to PHP / MySQL. L
 
 **Where they diverge:** after acceptance, if Erik reassigns a task from Phil ($120) to a junior ($75), the Display Rate would calculate as $75 × Multiplier = lower price. But Quoted_Rate stays at $120 — that's what was sold. The reassignment doesn't change what the client owes.
 
-**`my_checklist.php` uses Quoted_Rate** (NOT Display Rate) to compute the staff's hour budget:
+**`my_checklist.php` uses Quoted_Rate** (NOT Display Rate) to compute the hour budget. Two perspectives are computed per task:
 
 ```
-staff_effective_hours = quoted_hours × (Quoted_Rate / staff_rate)
+viewer_hours    = quoted_hours × (Quoted_Rate / viewer_rate)
+assigned_hours  = quoted_hours × (Quoted_Rate / assigned_staff_rate)
 ```
 
-So:
-- Phil at $120 picking up a TBA-quoted ($90) task → 0.75× hours.
-- Junior at $75 picking up a Phil-quoted ($120) task → 1.6× hours.
+**Viewer perspective is the default** for every user. So:
+- Phil opens his checklist: every task on every project he can see is shown in HIS hour-budget. A 4h TBA-quoted task on a project where Sam is assigned still shows as 3h to Phil (because that's what 4h × $90 / Phil's $120 works out to). Phil's understanding: "if I did this, here's how it costs me in hours".
+- A junior viewing the same project sees the same tasks at *their* rate — different numbers, same dollar total.
 
-The dollar value of the task is preserved either way; the staff's hour budget rebalances to match their rate.
+**Assigned perspective** (per-project toggle for the project's Manager only): each task scales to its actual assignee's rate. This is the "real" view. The Sam-assigned task on Phil's project shows 3.6h (Sam's $100 ratio of the $360 budget) when in assigned perspective. The toggle is **per-project, not page-level** — flipping project A to assigned-mode leaves project B in viewer-mode. Only the literal `Projects.Manager = $empId` user sees the toggle on a given card; admin status alone doesn't grant it.
+
+The dollar value of the task is preserved in BOTH perspectives — only the hour-units shift between viewer and assignee.
 
 **Where Quoted_Rate gets written:**
 - `add_task` and `save_variation_task`: always set from current state.
@@ -286,25 +294,60 @@ Located in `migrations/`. Apply via phpMyAdmin SQL tab.
 
 ---
 
-## In progress: bank-feeds branch (`bankfeeds-akahu`)
+## Akahu (bank feed) — alongside Xero on main
 
-This is now a real branch, not just a plan. `git switch bankfeeds-akahu` to look at it. The scaffold replaces Xero on the payments side with [Akahu](https://akahu.nz) (NZ open-banking aggregator) for direct bank-transaction feeds. **Not yet smoke-tested against a real Akahu account** — that's the next step before the destructive Xero deletion can land.
+Akahu pulls live bank transactions and matches them to invoices. **Xero remains the books-of-record** for invoice posting/emailing/credit notes, but Akahu now has authority to flip the local `Paid` flag the moment bank evidence covers an invoice's gross amount — so the reminder cron stops chasing clients who actually paid days ago, even if no-one's reconciled in Xero yet (e.g. Erik's on holiday). The "needs reconciling in Xero" menu alert still fires on those invoices until Xero catches up, so the Xero-side action isn't forgotten.
 
-Files added on the branch (all stand-alone; no changes to main-branch files):
-- `migrations/add_akahu_bankfeed.sql` — `Akahu_Tokens`, `Bank_Accounts`, `Bank_Transactions`, `Bank_Allocations`, plus `Invoices.AmountPaid`.
-- `akahu_client.php` — API wrapper. Auth = static App + User token (no OAuth refresh).
-- `akahu_connect.php` — token entry UI (smoke-tests on save).
-- `akahu_sync.php` — pulls accounts + paginated transactions, INSERT IGNOREs into `Bank_Transactions`, then runs `run_auto_match()`. CLI cron + library modes.
-- `bankfeed_match.php` — auto-match: `CAD-NNNNN` regex against description / particulars / code / reference. Partial-payment-aware allocation (`txn < remaining`, `txn == remaining`, `txn > remaining`). `recompute_invoice_paid()` keeps `Invoices.AmountPaid` in sync with `SUM(Bank_Allocations.amount)`. `reverse_allocation()` is the undo path.
-- `bankfeed_reconcile.php` — manual queue UI for transactions the matcher couldn't resolve (wrong reference, no reference, lump-sum payments covering multiple invoices). Allocate / undo / ignore / re-run auto-match.
-- `BANKFEEDS.md` — design doc + Akahu setup steps + cron lines.
-- `SESSION_RESUME.md` — pickup notes for the next session (which Xero files to delete, reminder port to do, email PDF replacement options).
+Column ownership:
+- `Invoices.Paid` + `Invoices.DatePaid` → **dual-writer**:
+  - `xero_sync.php` flips Paid=1 when Xero says PAID. Sticky (CASE WHEN PAID THEN 1 ELSE Paid END — never resets).
+  - `bankfeed_match.php::recompute_invoice_amount_paid()` flips Paid=1 + DatePaid=today **only** when AmountPaid ≥ gross AND DatePaid is currently NULL (= "virgin": never been touched). Guarding on DatePaid IS NULL means a manual un-tick via `invoice_edit.php` (which preserves DatePaid) won't be re-flipped.
+- `Invoices.AmountPaid` → owned by Akahu (cache of `SUM(Bank_Allocations.amount)`).
+- `Invoices.Xero_*` → owned by Xero.
+- `Bank_Transactions` / `Bank_Allocations` → owned by Akahu.
 
-**Coexistence**: `xero_sync.php` and the new `akahu_sync.php` can run side-by-side during transition. Each writes a disjoint column set apart from `Paid` itself — whichever sees the payment first flips `Paid=1`.
+**`Paid` is the unified "is this paid?" gate** that ALL the candidate-selection queries now respect. The query patterns below all gate on `COALESCE(Paid, 0) = 0` in addition to whatever Xero-side checks they were already doing — so the moment Akahu (or a manual tick) flips Paid=1, the invoice drops out of:
+- `xero_send_reminders.php` candidate set (no more reminder emails)
+- `monthly_invoicing.php` outstanding-and-overdue list
+- `menu.php` "30+ days overdue, please call" callout
 
-**Open follow-ups on the branch** (see `SESSION_RESUME.md` for the full list):
-1. Smoke-test against real Westpac via Akahu Genie.
-2. Build `akahu_accounts.php` (account picker for multi-account installs).
-3. Port `xero_send_reminders.php` → `send_reminders.php` reading `Invoices.AmountDue = Subtotal*(1+Tax_Rate) - AmountPaid`. Drop the +1 day buffer (8/15/31/46/61 → 7/14/30/45/60) since direct bank-feed has no lag.
-4. Replace the PDF-from-Xero path in `lib_invoice_email.php` with either a local PDF render (TCPDF single-file drop-in) or HTML emails linking to `/invoice.php?Invoice_No=N`.
-5. Delete `xero_*.php` files. Drop `Invoices.Xero_*` columns. Update `default_email_boilerplate()` to remove the "Xero takes ~1 day" disclaimer.
+**Reminder cron also skips partial payments.** `xero_send_reminders.php`'s candidate filter additionally requires `AmountPaid` (Akahu) AND `Xero_AmountPaid` (Xero) to both be ~$0. The moment ANY payment is recorded against the invoice — full or partial, captured from either source — the auto-cron stops chasing. Partials surface on Erik's menu via the "💰 partial payment received" panel for manual action (send-thanks, credit shortfall) instead. Erik's per-row manual `?invoice_no=N` send still bypasses every filter so he can fire a one-off if needed. `monthly_invoicing.php`'s overdue list and the menu's 30+ overdue callout still SHOW partial-paid invoices (so Erik can see them and call) — only the auto-emailing cron skips them.
+
+Without these changes, an Akahu-flipped Paid would have been ignored by the cron (which used to filter only on `Xero_AmountDue > 0`), and reminders would have continued chasing clients who paid days ago. With the changes, Erik's holiday scenario works: Akahu sees the bank deposit, flips Paid locally (full payment) or just records the allocation (partial), the cron stops chasing in either case, the menu shows "needs reconciling in Xero" / "partial payment received" so Erik catches up the books on his return. xero_sync's "sticky 1" means the local Paid never gets reset back when Xero hasn't yet caught up.
+
+### Files
+- `migrations/add_akahu_bankfeed.sql` — adds `Akahu_Tokens`, `Bank_Accounts`, `Bank_Transactions`, `Bank_Allocations`, and `Invoices.AmountPaid`. Idempotent.
+- `akahu_client.php` — API wrapper (App Token + User Token in headers; no OAuth refresh).
+- `akahu_connect.php` — token entry UI; smoke-tests on save.
+- `akahu_sync.php` — pulls accounts + paginated transactions, runs `run_auto_match()` afterward. Has CLI cron + library mode.
+- `bankfeed_match.php` — matcher with **liberal invoice-ref regex**. Recognises `CAD-01234`, `caD01234`, `INV-1234`, `inv 12345`, and bare `12345` (validated against actual `Invoices.Invoice_No` to suppress dates/amounts/IDs in bank descriptions). Multi-invoice in one description (`cad12345 cad6789`) walks all matches and allocates to each in order. Partial-payment-aware allocation. **Does NOT touch `Invoices.Paid`** — only writes `Invoices.AmountPaid` cache + `Bank_Allocations` rows.
+- `bankfeed_reconcile.php` — manual queue UI for transactions the matcher couldn't fully resolve.
+- `partial_payment_action.php` — POST handler for the menu's per-invoice action buttons (send-thanks email, credit-shortfall write-off).
+
+### Erik/Jen menu callouts (bottom of `menu.php`)
+- **🔄 N invoices may need reconciling in Xero** — Akahu sees full bank-evidence covering the invoice but Xero still has it AUTHORISED. Click into the invoice or open the reconciliation queue.
+- **💰 N overdue invoices with partial payment received** — bank-evidence < gross AND past due date. Two per-row actions:
+  - **✉ Send thanks** — emails the `partial_payment_thanks` template (key in `default_email_templates()`). New template added; admins can edit wording on `email_templates.php`.
+  - **✂ Credit shortfall** — writes off the remaining balance. Local: appends a negative `Timesheets` row tagged "credit" to the invoice and recomputes `Subtotal`; flips local `Paid=1`. Xero: `XeroClient::postCreditNote()` + `allocateCreditNote()` post an ACCRECCREDIT credit note and allocate it against the invoice. **Xero half is UNTESTED in production** — failures are logged + surfaced to the admin so they can manually reconcile.
+
+### Match/allocation rules (per transaction)
+1. Pull description + particulars + code + reference into one blob.
+2. `extract_invoice_refs($pdo, $blob)`: prefixed first (`CAD|INV` + optional dash/space), validated against Invoices. If any prefixed found, only those count. Else fall back to bare digits (validated).
+3. For each ref in order, call `allocate_to_invoice()`:
+   - txn = remaining → fully_matched, full allocation
+   - txn < remaining → partial allocation, txn fully consumed (status fully_matched)
+   - txn > remaining → allocate exactly the remaining, txn status partially_matched (leftover stays for the next ref or manual reconcile)
+
+### Cron line
+```
+30 * * * * cd /home/<user>/public_html && php akahu_sync.php cron >> logs/akahu_sync.log 2>&1
+```
+Hourly bank-feed pull keeps `Invoices.AmountPaid` close to real-time so the menu callouts are accurate. Run this BEFORE the daily `xero_send_reminders.php` so reminders see fresh allocations.
+
+### When to use which view
+- **Reconciliation in Xero** — Erik clicks the menu callout, opens the invoice in Xero (via the Xero badge link), marks it Paid there. Next `xero_sync` run flips local `Paid=1`. Done.
+- **Reconciliation in CADViz** — `bankfeed_reconcile.php` for manual allocation when the matcher couldn't figure it out (wrong reference, no reference, etc).
+- **Partial-payment write-off** — menu's "✂ Credit shortfall" button. Used when client says "that's all you're getting for this one".
+
+### The `bankfeeds-akahu` branch (Xero-replacement variant)
+A separate branch (`git switch bankfeeds-akahu`) is the experimental "drop Xero entirely" cut-over. NOT smoke-tested. The on-main "alongside" version above is the production target; the branch is a possible future direction once Akahu has proven reliable. See `BANKFEEDS.md` and `SESSION_RESUME.md` on that branch for the deletion plan.

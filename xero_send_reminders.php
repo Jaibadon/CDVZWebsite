@@ -108,7 +108,11 @@ if (!$testMode && $singleInvoice <= 0) {
     try {
         $latestSync = $pdo->query("SELECT MAX(Xero_LastSynced) FROM Invoices")->fetchColumn();
         if ($latestSync) {
-            $hoursStale = (time() - strtotime((string)$latestSync)) / 3600;
+            // Xero_LastSynced is stored via UTC_TIMESTAMP() but comes back
+            // as a bare "Y-m-d H:i:s" string. strtotime() interprets it in
+            // PHP's local timezone by default, which on an NZ-timezone
+            // host throws this off by 12-13 hours. Force UTC parsing.
+            $hoursStale = (time() - strtotime((string)$latestSync . ' UTC')) / 3600;
             if ($hoursStale > 36) {
                 $staleSyncAbort = true;
                 error_log(sprintf(
@@ -164,7 +168,10 @@ if (!$testMode && $singleInvoice <= 0) {
 $reminderStages   = [8, 15, 31, 46, 61];
 $reminderHardStop = 61;                    // matches the final-notice stage — no auto-sends past this
 $minGapDays       = (int)(meta_get($pdo, 'reminder_min_gap_days') ?: 6);
-$cap              = (int)($_ENV['CADVIZ_REMINDER_CAP'] ?? 30);
+// Use getenv() — $_ENV is empty in CLI on most production servers
+// (variables_order defaults to 'GPCS', no 'E') so cron-set environment
+// variables wouldn't actually override the default.
+$cap              = (int)(getenv('CADVIZ_REMINDER_CAP') ?: ($_ENV['CADVIZ_REMINDER_CAP'] ?? 30));
 
 // ── Pick candidates ────────────────────────────────────────────────────────
 // Require Xero_InvoiceID (i.e. the invoice has been pushed) and at least
@@ -182,7 +189,18 @@ if (!$testMode || $singleInvoice <= 0) {
     $where .= " AND i.Xero_Status = 'AUTHORISED'
                 AND i.Xero_AmountDue > 0
                 AND i.Xero_DueDate IS NOT NULL
-                AND i.Xero_DueDate < CURDATE()";
+                AND i.Xero_DueDate < CURDATE()
+                AND COALESCE(i.Paid, 0) = 0
+                /* Stop the auto-cron the moment ANY payment has been
+                   received — full or partial, from either source.
+                   Partial payments still appear on Erik's menu (the
+                   '💰 partial payment received' panel) for manual
+                   action; the reminder cron should not pile on top
+                   with another scripted chase. Erik's per-invoice
+                   manual 'Send reminder' button (?invoice_no=N) still
+                   bypasses this filter. */
+                AND COALESCE(i.AmountPaid, 0)      <= 0.005
+                AND COALESCE(i.Xero_AmountPaid, 0) <= 0.005";
 }
 if ($singleInvoice > 0) $where .= " AND i.Invoice_No = " . (int)$singleInvoice;
 
