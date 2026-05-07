@@ -113,8 +113,35 @@ The dollar value of the task is preserved in BOTH perspectives — only the hour
 - `add_task` and `save_variation_task`: always set from current state.
 - `update_task` and `save_stage_all`: refreshed only when `!$isAccepted`. After acceptance, the snapshot is frozen.
 - `assign_stage` and `assign_all`: same — refresh while draft, frozen after acceptance.
+- `reassign_task_keep_price` / `reassign_stage_keep_price` / `reassign_all_keep_price`: **always** rewrites Quoted_Rate to the new staff's rate (even on accepted projects), because Weight is simultaneously scaled to keep `Weight × Quoted_Rate` constant. See "Price-preserving reassignment" below.
 - `reset_to_draft` (in `project_stages.php`): **re-snapshots `Quoted_Rate` from current state** on every original task as part of the reset. Without this, a task that was frozen at Phil's $120 would stay at $120 after the reset, and re-accepting without explicitly editing that task would carry the stale rate into the new contract. The reset wipes the freeze and takes a fresh snapshot.
 - See `migrations/add_quoted_rate.sql` for the backfill rule for pre-existing rows.
+
+### Price-preserving reassignment ("labor-only variation")
+
+When an accepted project needs to be reassigned to different staff WITHOUT touching the contract value with the client, use the new **↔ Reassign (keep $)** buttons in `stages_editor.php`:
+
+- **Per-task** — each task row in the stage editor has a blue `↔ Reassign (keep $)` button next to the regular Save. Picks up the staff from the row's Assigned_To dropdown.
+- **Per-stage** — the stage's "Bulk assign" bar has a second `↔ Reassign stage (keep $)` form alongside the existing "Assign all in stage".
+- **Project-wide** — the project's "Bulk assign entire project" bar has a matching `↔ Reassign all (keep $)` form.
+
+The math (per affected task):
+```
+old_dollars = old_Weight × old_Quoted_Rate × multiplier
+new_Weight  = old_Weight × old_Quoted_Rate / new_staff_rate
+set: Assigned_To = new_staff,
+     Weight       = new_Weight,
+     Quoted_Rate  = new_staff_rate
+new_dollars = new_Weight × new_staff_rate × multiplier == old_dollars  ✓
+```
+
+Net effect: the displayed quote $ on `stages_editor.php` and `quote.php` doesn't move at all; my_checklist's hour-budget ratio stops kicking in for the reassigned tasks (because Quoted_Rate now equals the assignee's rate). The new staff sees the new (scaled) hours directly on their checklist. **No `Project_Variations` row gets created** — there's nothing for the client to see; this is purely an internal labor reshuffle. Works in both draft and accepted modes; bypasses the usual `$isAccepted → routes-into-variation` rule because no contract value changes.
+
+Use case: Phil quoted a project, but is now booked solid; reassign half to Sam without re-quoting. Or: TBA-quoted project gets its actual staff allocated post-acceptance.
+
+Caveats:
+- The button **ignores any Weight you typed in the row form** — Weight is recomputed from the price-preserving math. If you want to manually adjust Weight without scaling, use the regular "Save" button (which DOES change the price if Quoted_Rate is being refreshed in draft mode).
+- Tasks with no Quoted_Rate snapshot (legacy rows the migration couldn't infer) anchor against the system-wide TBA rate when scaling. Run the backfill in `migrations/add_quoted_rate.sql` if you have any.
 
 **Variation tasks**: `Quoted_Rate` is set on creation and (currently) on every update regardless of variation status — TODO: tighten so it freezes when the variation flips to `approved`.
 

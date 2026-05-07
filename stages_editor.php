@@ -218,6 +218,89 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ?$qrSet WHERE Project_Stage_ID IN (SELECT Project_Stage_ID FROM Project_Stages WHERE Proj_ID = ?)")->execute($params);
             }
 
+        } elseif ($action === 'reassign_task_keep_price'
+               || $action === 'reassign_stage_keep_price'
+               || $action === 'reassign_all_keep_price') {
+            // ── Price-preserving reassignment ──────────────────────────
+            // Reassigns one task / a stage's tasks / the whole project's
+            // tasks to a different staff member (or TBA), AND scales
+            // each task's Weight so the dollar value of the line stays
+            // exactly the same.
+            //
+            //   target_$ = old_Weight × old_Quoted_Rate × multiplier
+            //   new_Weight = old_Weight × old_Quoted_Rate / new_rate
+            //   set: Assigned_To, Weight, Quoted_Rate (= new_rate)
+            //
+            // Net: stages_editor / quote.php still display the same $
+            // (Weight × new_rate × multiplier == old_Weight × old_rate ×
+            // multiplier), and my_checklist's ratio doesn't double-scale
+            // because Quoted_Rate now equals the new staff's rate.
+            //
+            // This is the "labor-only variation" the user asked for —
+            // who does the work changes, the contract value with the
+            // client doesn't. Works in both draft and accepted modes;
+            // doesn't go through the Project_Variations system because
+            // there's nothing for the client to see.
+            $assignedTo = (isset($_POST['Assigned_To']) && $_POST['Assigned_To'] !== '') ? (int)$_POST['Assigned_To'] : null;
+            $newRate    = compute_quoted_rate($pdo, $assignedTo, $tbaRateForHandlers);
+            if ($newRate <= 0.005) throw new RuntimeException('Cannot reassign — neither the new staff nor TBA has a positive rate set.');
+
+            // Build the list of target Proj_Task_IDs based on which scope.
+            $targets = [];
+            if ($action === 'reassign_task_keep_price') {
+                $tid = (int)($_POST['Proj_Task_ID'] ?? 0);
+                if ($tid > 0) $targets = [$tid];
+            } elseif ($action === 'reassign_stage_keep_price') {
+                $sid = (int)($_POST['Project_Stage_ID'] ?? 0);
+                if ($sid > 0) {
+                    $st = $pdo->prepare("SELECT Proj_Task_ID FROM `$tasks_table` WHERE Project_Stage_ID = ?"
+                        . ($mode === 'template' ? ' AND Template_ID = ?' : ''));
+                    $st->execute($mode === 'template' ? [$sid, $owner_id] : [$sid]);
+                    $targets = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+                }
+            } else {
+                // reassign_all_keep_price
+                $st = $mode === 'template'
+                    ? $pdo->prepare("SELECT Proj_Task_ID FROM `$tasks_table` WHERE Template_ID = ?")
+                    : $pdo->prepare("SELECT Proj_Task_ID FROM `$tasks_table` WHERE Project_Stage_ID IN (SELECT Project_Stage_ID FROM Project_Stages WHERE Proj_ID = ?)");
+                $st->execute([$owner_id]);
+                $targets = array_map('intval', $st->fetchAll(PDO::FETCH_COLUMN));
+            }
+
+            if (!empty($targets)) {
+                // Read current Weight + Quoted_Rate for each in one query.
+                $in   = implode(',', array_fill(0, count($targets), '?'));
+                $qrCol = $hasQuotedRate ? 'Quoted_Rate' : 'NULL AS Quoted_Rate';
+                $cur  = $pdo->prepare("SELECT Proj_Task_ID, COALESCE(Weight,1) AS Weight, $qrCol FROM `$tasks_table` WHERE Proj_Task_ID IN ($in)");
+                $cur->execute($targets);
+                $upd  = $hasQuotedRate
+                    ? $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ?, Weight = ?, Quoted_Rate = ? WHERE Proj_Task_ID = ?")
+                    : $pdo->prepare("UPDATE `$tasks_table` SET Assigned_To = ?, Weight = ? WHERE Proj_Task_ID = ?");
+
+                $tbaForFallback = $tbaRateForHandlers > 0 ? $tbaRateForHandlers : 90.00;
+                $pdo->beginTransaction();
+                try {
+                    foreach ($cur->fetchAll() as $row) {
+                        $oldWeight = (float)($row['Weight'] ?? 1);
+                        $oldRate   = (float)($row['Quoted_Rate'] ?? 0);
+                        // If a task has no Quoted_Rate snapshot (legacy row),
+                        // assume it was quoted at TBA so the scaling math has
+                        // a sensible anchor.
+                        if ($oldRate <= 0.005) $oldRate = $tbaForFallback;
+                        $newWeight = round($oldWeight * $oldRate / $newRate, 4);
+                        if ($hasQuotedRate) {
+                            $upd->execute([$assignedTo, $newWeight, $newRate, (int)$row['Proj_Task_ID']]);
+                        } else {
+                            $upd->execute([$assignedTo, $newWeight, (int)$row['Proj_Task_ID']]);
+                        }
+                    }
+                    $pdo->commit();
+                } catch (Exception $e) {
+                    $pdo->rollBack();
+                    throw $e;
+                }
+            }
+
         } elseif ($action === 'drop_stage') {
             $sid = (int)$_POST['Project_Stage_ID'];
             if ($mode === 'template') {
@@ -730,13 +813,23 @@ window.addEventListener('DOMContentLoaded', function() {
 <?php if (!empty($stages)): ?>
 <div class="assign-bar">
   <strong>Bulk assign entire project:</strong>
-  <form method="post" class="inline" onsubmit="return confirm('Assign ALL tasks across ALL stages to this person?');">
+  <form method="post" class="inline" onsubmit="return confirm('Assign ALL tasks across ALL stages to this person?\n\nNote: this REPLACES Assigned_To only — it does NOT auto-scale hours, so the displayed quote $ will change if the new staff bills at a different rate. Use the Reassign (keep $) button below if you want price-preserving reassignment.');">
     <input type="hidden" name="action" value="assign_all">
     <select name="Assigned_To" required>
       <?= staffOptions($staff) ?>
     </select>
     <span class="actions"><input type="submit" class="assign-btn" value="Assign all tasks in project"></span>
   </form>
+  <span style="display:inline-block;margin-left:14px">
+    <strong>Reassign (keep $):</strong>
+    <form method="post" class="inline" onsubmit="return confirm('Reassign ALL tasks in this project to the selected person AND auto-scale each task\'s Weight so the quote $ stays exactly the same?\n\nThis is the price-preserving (\&quot;labor-only variation\&quot;) path: hours rebalance to the new staff\'s rate, but the contract value with the client doesn\'t move.');">
+      <input type="hidden" name="action" value="reassign_all_keep_price">
+      <select name="Assigned_To" required>
+        <?= staffOptions($staff) ?>
+      </select>
+      <span class="actions"><input type="submit" class="assign-btn" value="↔ Reassign all (keep $)" style="background:#246"></span>
+    </form>
+  </span>
 </div>
 <?php endif; ?>
 
@@ -832,13 +925,16 @@ foreach ($stages as $stage):
     <td><input type="number" name="Proj_Task_Order" value="<?= htmlspecialchars((string)($t['Proj_Task_Order'] ?? 0)) ?>" style="width:55px"></td>
     <td class="actions">
       <?php if ($isAccepted): ?>
-        <input type="hidden" name="action" value="save_variation_task">
-        <input type="submit" value="Save Variation" title="Saves change as a new task in the latest unapproved variation; original is auto-marked as removed in that variation."
-               style="background:#c33;color:#fff;border:none;border-radius:3px;cursor:pointer;padding:2px 6px;font-size:11px">
+        <button type="submit" name="action" value="save_variation_task"
+                title="Saves change as a new task in the latest unapproved variation; original is auto-marked as removed in that variation."
+                style="background:#c33;color:#fff;border:none;border-radius:3px;cursor:pointer;padding:2px 6px;font-size:11px">Save Variation</button>
       <?php else: ?>
-        <input type="hidden" name="action" value="update_task">
-        <input type="submit" value="Save">
+        <button type="submit" name="action" value="update_task">Save</button>
       <?php endif; ?>
+        <button type="submit" name="action" value="reassign_task_keep_price"
+                onclick="return confirm('Reassign this task to the staff currently picked in the Assigned dropdown AND auto-scale Weight so the quote $ stays exactly the same.\n\nThis ignores any Weight you typed in the row — Weight is recomputed from the price-preserving math. The dollar value the client sees on the quote does not move.');"
+                title="Reassign + auto-scale Weight to preserve the line's quote $. Doesn't go through Project_Variations — purely an internal labor reassignment."
+                style="background:#246;color:#fff;border:none;border-radius:3px;cursor:pointer;padding:2px 6px;font-size:11px;margin-left:3px">↔ Reassign (keep $)</button>
   </form>
       <?php if (!$isAccepted): ?>
         <!-- Draft mode: red X drop button -->
@@ -885,7 +981,7 @@ foreach ($stages as $stage):
 <?php if (!empty($tasks)): ?>
 <div class="assign-stage-bar">
   <strong>Bulk assign this stage:</strong>
-  <form method="post" class="inline" onsubmit="return confirm('Assign all tasks in this stage to the selected person?');">
+  <form method="post" class="inline" onsubmit="return confirm('Assign all tasks in this stage to the selected person?\n\nThis changes Assigned_To only — quote $ may shift if the new staff bills at a different rate. Use Reassign (keep $) to preserve the quote value.');">
     <input type="hidden" name="action" value="assign_stage">
     <input type="hidden" name="Project_Stage_ID" value="<?= $sid ?>">
     <select name="Assigned_To" required>
@@ -893,6 +989,17 @@ foreach ($stages as $stage):
     </select>
     <span class="actions"><input type="submit" class="assign-btn" value="Assign all in stage"></span>
   </form>
+  <span style="display:inline-block;margin-left:14px">
+    <strong>Reassign (keep $):</strong>
+    <form method="post" class="inline" onsubmit="return confirm('Reassign all tasks in this stage to the selected person AND auto-scale each task\'s Weight so the dollar value stays the same?');">
+      <input type="hidden" name="action" value="reassign_stage_keep_price">
+      <input type="hidden" name="Project_Stage_ID" value="<?= $sid ?>">
+      <select name="Assigned_To" required>
+        <?= staffOptions($staff) ?>
+      </select>
+      <span class="actions"><input type="submit" class="assign-btn" value="↔ Reassign stage (keep $)" style="background:#246"></span>
+    </form>
+  </span>
 </div>
 <?php endif; ?>
 </tr>
