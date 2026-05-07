@@ -43,7 +43,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $flash = "Category added (ID $next).";
         } elseif ($action === 'cat_delete') {
             $cid = (int)($_POST['Spec_Cat_ID'] ?? 0);
-            $refs = (int)$pdo->prepare("SELECT COUNT(*) FROM Spec_SubCats WHERE Spec_Cat_ID = ?")->execute([$cid]);
             $rs = $pdo->prepare("SELECT COUNT(*) AS n FROM Spec_SubCats WHERE Spec_Cat_ID = ?");
             $rs->execute([$cid]);
             $refs = (int)$rs->fetchColumn();
@@ -163,16 +162,23 @@ form.inline { display:inline; margin:0; }
             </td>
         </tr>
       <?php endforeach; ?>
-      <tr style="background:#fafafa">
-        <form method="post">
-          <input type="hidden" name="action" value="cat_add">
-          <td><input type="text" class="name" name="Spec_Cat_Name" placeholder="New category name" required></td>
-          <td><input type="number" class="num" name="Spec_Cat_Order"></td>
-          <td colspan="2" class="muted">— new —</td>
-          <td><button class="btn-sm">Add</button></td>
-        </form>
-      </tr>
     </table>
+  </div>
+
+  <!-- ── Add new category (separate form so it survives HTML table parsing) ── -->
+  <div class="card">
+    <h3 style="margin:0 0 8px">Add new category</h3>
+    <form method="post">
+      <input type="hidden" name="action" value="cat_add">
+      <table class="tt">
+        <tr><th>Name</th><th>Order</th><th></th></tr>
+        <tr>
+          <td><input type="text" class="name" name="Spec_Cat_Name" placeholder="e.g. Fire Protection" required></td>
+          <td><input type="number" class="num" name="Spec_Cat_Order" placeholder="50"></td>
+          <td><button class="btn-sm">Add category</button></td>
+        </tr>
+      </table>
+    </form>
   </div>
 
   <!-- ── Sub-categories grouped by parent cat ────────────────────── -->
@@ -220,11 +226,18 @@ form.inline { display:inline; margin:0; }
           </tr>
         <?php endforeach; ?>
       <?php endforeach; ?>
-      <!-- Add-new row -->
-      <tr style="background:#fafafa">
-        <form method="post">
-          <input type="hidden" name="action" value="subcat_add">
-          <td><input type="text" class="name" name="Spec_SubCat_Name" placeholder="New sub-cat name (UPPERCASE convention)" required></td>
+    </table>
+  </div>
+
+  <!-- ── Add new sub-category (separate form, same reason) ────────── -->
+  <div class="card">
+    <h3 style="margin:0 0 8px">Add new sub-category</h3>
+    <form method="post">
+      <input type="hidden" name="action" value="subcat_add">
+      <table class="tt">
+        <tr><th>Name</th><th>Parent category</th><th>Order</th><th>Internal&nbsp;only</th><th></th></tr>
+        <tr>
+          <td><input type="text" class="name" name="Spec_SubCat_Name" placeholder="UPPERCASE convention, e.g. SMOKE ALARMS" required></td>
           <td>
             <select class="cat" name="Spec_Cat_ID" required>
               <option value="">— pick parent —</option>
@@ -233,13 +246,12 @@ form.inline { display:inline; margin:0; }
               <?php endforeach; ?>
             </select>
           </td>
-          <td><input type="number" class="num" name="Spec_SubCat_Order"></td>
-          <td><input type="checkbox" name="Internal_Use_Only"></td>
-          <td class="muted">— new —</td>
-          <td><button class="btn-sm">Add</button></td>
-        </form>
-      </tr>
-    </table>
+          <td><input type="number" class="num" name="Spec_SubCat_Order" placeholder="10"></td>
+          <td><input type="checkbox" name="Internal_Use_Only"> <span class="muted">hide from quote wizard</span></td>
+          <td><button class="btn-sm">Add sub-category</button></td>
+        </tr>
+      </table>
+    </form>
   </div>
 
   <p class="muted"><a href="more.php">← back to More</a> &middot; <a href="task_types_admin.php">Task Types</a> &middot; <a href="quote_from_spec.php">Generate quote from spec</a></p>
