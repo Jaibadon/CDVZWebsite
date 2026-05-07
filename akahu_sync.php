@@ -47,13 +47,22 @@ function run_akahu_sync(PDO $pdo): array
                bank = VALUES(bank), currency = VALUES(currency), last_synced_at = NOW()"
         );
         foreach ($accs as $a) {
+            // Per the /accounts response model:
+            //   _id, name, type, formatted_account, status         → top-level strings
+            //   connection.name, connection.logo                   → bank + logo
+            //   balance.currency                                   → currency code
+            //   attributes                                         → array of strings
+            //                                                        like ["TRANSACTIONS","TRANSFER_TO",
+            //                                                        "PAYMENT_FROM"], not currency!
+            // (The previous code used $a['attributes'][0] for currency — a leftover from misreading
+            // the spec. attributes[0] is "TRANSACTIONS" not "NZD".)
             $upsertAcc->execute([
                 $a['_id'] ?? '',
                 $a['name'] ?? null,
                 $a['type'] ?? null,
                 $a['formatted_account'] ?? null,
                 $a['connection']['name'] ?? ($a['bank'] ?? null),
-                $a['attributes'][0] ?? 'NZD',  // Akahu doesn't expose currency separately on free tier; default NZD
+                $a['balance']['currency'] ?? 'NZD',
             ]);
             $r['accounts']++;
         }
@@ -73,13 +82,18 @@ function run_akahu_sync(PDO $pdo): array
         // Re-pull a 7-day window from the previous run as a safety net for
         // back-dated transactions Akahu sometimes emits late, plus any new
         // ones since.
+        //
+        // The Akahu /transactions endpoint expects ISO-8601 UTC
+        // timestamps with millisecond resolution. start is exclusive,
+        // end is inclusive. We use gmdate so the format is always
+        // UTC-Z regardless of the server's PHP timezone — date('c')
+        // would produce a local-offset string like +12:00 in NZ which
+        // Akahu accepts but is needlessly different from the docs.
         $row = $pdo->query("SELECT last_synced_at FROM Akahu_Tokens WHERE id = 1")->fetch();
-        $start = null;
-        if ($row && !empty($row['last_synced_at'])) {
-            $start = date('c', strtotime($row['last_synced_at']) - 7 * 86400);
-        } else {
-            $start = date('c', strtotime('-90 days'));  // first run
-        }
+        $startEpoch = ($row && !empty($row['last_synced_at']))
+            ? strtotime((string)$row['last_synced_at'] . ' UTC') - 7 * 86400  // assume DB stores UTC (NOW() on UTC server)
+            : strtotime('-90 days');                                          // first run: 90 day backfill
+        $start = gmdate('Y-m-d\TH:i:s.000\Z', $startEpoch);
 
         $insTxn = $pdo->prepare(
             "INSERT IGNORE INTO Bank_Transactions

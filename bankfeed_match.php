@@ -104,11 +104,25 @@ function validate_invoice_refs(PDO $pdo, array $candidates): array
 function run_auto_match(PDO $pdo): int
 {
     $created = 0;
+    // Only auto-match credits that landed in the receivables account
+    // (Bank_Accounts.is_default = 1). Multi-account installs may have
+    // Erik's personal account or KiwiSaver linked too; we don't want
+    // those credits being matched against client invoices. Single-account
+    // installs get their lone account auto-flagged is_default=1 by
+    // akahu_sync.php on the first sync, so this is transparent.
+    //
+    // If NO account is flagged is_default yet (user has multiple accounts
+    // and hasn't picked one), the IN(...) is empty and nothing
+    // auto-matches — which is the safe default.
     $rows = $pdo->query(
         "SELECT bt.*
            FROM Bank_Transactions bt
           WHERE bt.amount > 0
             AND bt.matched_status IN ('unmatched','partially_matched')
+            AND bt.account_id IN (
+                  SELECT akahu_id FROM Bank_Accounts
+                   WHERE is_default = 1 AND COALESCE(Active, 1) = 1
+                )
           ORDER BY bt.txn_date ASC, bt.id ASC"
     )->fetchAll();
 

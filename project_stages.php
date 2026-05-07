@@ -39,6 +39,109 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'accep
     header('Location: project_stages.php?proj_id=' . $proj_id);
     exit;
 }
+
+// ── Duplicate this project ─────────────────────────────────────────────
+// Copies the Projects row + all original-quote stages + all original
+// non-removed tasks into a brand-new project. Variations, invoices,
+// timesheets are NOT copied (they belong to the original project's
+// lifecycle). The new project lands in DRAFT regardless of the
+// original's Quote_Status, with a "Copy of " prefix on the JobName,
+// so it's safe to edit without touching the original quote.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'duplicate_project') {
+    try {
+        $pdo->beginTransaction();
+
+        // 1. Read all source columns dynamically so we don't have to
+        //    enumerate every Projects column (the table grew over the
+        //    years; this stays robust to future schema additions).
+        $src = $pdo->prepare("SELECT * FROM Projects WHERE proj_id = ?");
+        $src->execute([$proj_id]);
+        $srcProj = $src->fetch(PDO::FETCH_ASSOC);
+        if (!$srcProj) throw new RuntimeException('Source project not found.');
+
+        $newProjId = (int)$pdo->query("SELECT COALESCE(MAX(proj_id), 0) + 1 FROM Projects")->fetchColumn();
+
+        // Override / strip a handful of columns on the copy:
+        $srcProj['proj_id']      = $newProjId;
+        $srcProj['JobName']      = 'Copy of ' . (string)($srcProj['JobName'] ?? 'project ' . $proj_id);
+        if (array_key_exists('Quote_Status', $srcProj)) $srcProj['Quote_Status'] = null;        // fresh draft
+        if (array_key_exists('Active',       $srcProj)) $srcProj['Active']       = 1;
+        // Don't carry over a stale "last edited" / sync timestamp if any.
+        foreach (['Last_Modified', 'Date_Modified', 'Modified_At'] as $stale) {
+            if (array_key_exists($stale, $srcProj)) $srcProj[$stale] = null;
+        }
+
+        // Build INSERT INTO Projects (col1, col2, …) VALUES (?, ?, …)
+        $cols = array_keys($srcProj);
+        $ph   = implode(',', array_fill(0, count($cols), '?'));
+        $colSql = '`' . implode('`,`', $cols) . '`';
+        $pdo->prepare("INSERT INTO Projects ($colSql) VALUES ($ph)")
+            ->execute(array_values($srcProj));
+
+        // 2. Copy original-quote stages (Variation_ID IS NULL — variations
+        //    don't carry across, they belong to the original's lifecycle).
+        $srcStages = $pdo->prepare(
+            "SELECT * FROM Project_Stages WHERE Proj_ID = ? AND (Variation_ID IS NULL OR Variation_ID = 0)"
+        );
+        $srcStages->execute([$proj_id]);
+        $stageMap = [];  // old Project_Stage_ID → new Project_Stage_ID
+
+        $nextStageId = (int)$pdo->query("SELECT COALESCE(MAX(Project_Stage_ID), 0) + 1 FROM Project_Stages")->fetchColumn();
+        foreach ($srcStages->fetchAll(PDO::FETCH_ASSOC) as $s) {
+            $oldStageId = (int)$s['Project_Stage_ID'];
+            $s['Project_Stage_ID'] = $nextStageId;
+            $s['Proj_ID']          = $newProjId;
+            if (array_key_exists('Variation_ID', $s)) $s['Variation_ID'] = null;
+            $cols = array_keys($s);
+            $ph   = implode(',', array_fill(0, count($cols), '?'));
+            $colSql = '`' . implode('`,`', $cols) . '`';
+            $pdo->prepare("INSERT INTO Project_Stages ($colSql) VALUES ($ph)")
+                ->execute(array_values($s));
+            $stageMap[$oldStageId] = $nextStageId;
+            $nextStageId++;
+        }
+
+        // 3. Copy original-quote, non-removed tasks. Variations'
+        //    tasks (Variation_ID IS NOT NULL) and removed tasks
+        //    (Is_Removed=1) are skipped. Quoted_Rate snapshot
+        //    is preserved so my_checklist's ratio still works on the
+        //    copy.
+        if (!empty($stageMap)) {
+            $srcTasks = $pdo->prepare(
+                "SELECT * FROM Project_Tasks
+                  WHERE Project_Stage_ID IN (" . implode(',', array_keys($stageMap)) . ")
+                    AND (Variation_ID IS NULL OR Variation_ID = 0)
+                    AND COALESCE(Is_Removed, 0) = 0"
+            );
+            $srcTasks->execute();
+
+            $nextTaskId = (int)$pdo->query("SELECT COALESCE(MAX(Proj_Task_ID), 0) + 1 FROM Project_Tasks")->fetchColumn();
+            foreach ($srcTasks->fetchAll(PDO::FETCH_ASSOC) as $t) {
+                $oldStageId = (int)$t['Project_Stage_ID'];
+                if (!isset($stageMap[$oldStageId])) continue; // defensive
+                $t['Proj_Task_ID']      = $nextTaskId++;
+                $t['Project_Stage_ID']  = $stageMap[$oldStageId];
+                if (array_key_exists('Variation_ID',            $t)) $t['Variation_ID']            = null;
+                if (array_key_exists('Is_Removed',              $t)) $t['Is_Removed']              = 0;
+                if (array_key_exists('Removed_In_Variation_ID', $t)) $t['Removed_In_Variation_ID'] = null;
+                $cols = array_keys($t);
+                $ph   = implode(',', array_fill(0, count($cols), '?'));
+                $colSql = '`' . implode('`,`', $cols) . '`';
+                $pdo->prepare("INSERT INTO Project_Tasks ($colSql) VALUES ($ph)")
+                    ->execute(array_values($t));
+            }
+        }
+
+        $pdo->commit();
+        header('Location: project_stages.php?proj_id=' . $newProjId);
+        exit;
+    } catch (Exception $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        $_SESSION['xero_flash_err'] = 'Duplicate failed: ' . $e->getMessage();
+        header('Location: project_stages.php?proj_id=' . $proj_id);
+        exit;
+    }
+}
 // ── Staffing update (Manager / DP1 / DP2 / DP3) ────────────────────────
 // Mirrors the same fields from updateform_admin1.php so Erik can assign
 // staff straight from the quote builder. Empty value = NULL (unassigned).
@@ -387,6 +490,15 @@ ob_start();
     </form>
     <span style="font-size:11px;color:#666;margin-left:6px">In draft mode you can freely add, edit, and remove tasks.</span>
   <?php endif; ?>
+  <span style="display:inline-block;margin-left:18px;border-left:1px solid #ccc;padding-left:14px">
+    <form method="post" style="display:inline" onsubmit="return confirm('Duplicate this project as a fresh draft?\n\nWill copy: stages, original-quote tasks, Quoted_Rate snapshots, project metadata (Manager, DPs, client, project type, fixed-price settings).\nWill NOT copy: variations, invoices, timesheets, Quote_Status (the copy starts as DRAFT regardless of this project).\n\nThe new project lands at \&quot;Copy of <?= htmlspecialchars(addslashes((string)($proj['JobName'] ?? 'project'))) ?>\&quot; — rename it, then edit freely without touching this one.');">
+      <input type="hidden" name="action" value="duplicate_project">
+      <input type="hidden" name="proj_id" value="<?= $proj_id ?>">
+      <input type="submit" value="📋 Duplicate this project"
+             style="background:#246;color:#fff;border:none;padding:5px 10px;border-radius:3px;cursor:pointer">
+    </form>
+    <span style="font-size:11px;color:#666;margin-left:6px">Copies stages + original tasks into a new draft project. Variations / invoices / timesheets are NOT copied.</span>
+  </span>
 </div>
 <?php
 $quickActions = ob_get_clean();
