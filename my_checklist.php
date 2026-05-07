@@ -431,12 +431,12 @@ foreach ($canToggleForProject as $b) { if ($b) { $anyManaged = true; break; } }
 <div class="no-print" style="background:#eef;border:1px solid #b0c4d8;color:#246;padding:6px 10px;border-radius:4px;font-size:12px;margin-bottom:10px">
   <?php if ($viewerHasRate): ?>
     <strong>Hours shown are from your perspective</strong>
-    &mdash; every task is scaled to your billing rate ($<?= number_format($viewerRate, 0) ?>/h) so the totals reflect "if I did this whole project, how many hours I'd need".
+    &mdash; every task is scaled to your assigned rate so the totals reflect "if I did this whole project, how many hours I'd need".
     <?php if ($anyManaged): ?>
       Projects you manage have a <em>switch perspective</em> button on the card &mdash; flip individual projects to the per-assignee view.
     <?php endif; ?>
   <?php else: ?>
-    <strong>Hours shown un-scaled</strong> &mdash; you don't have a billing rate set, so hours are the raw quoted hours. Ask Erik or Jen to set your rate via <a href="staff_admin.php">staff_admin</a>.
+    <strong>Hours shown un-scaled</strong> &mdash; your rate isn't on file yet, so hours are the raw quoted hours. Ask Erik or Jen to set you up via <a href="staff_admin.php">staff_admin</a>.
   <?php endif; ?>
 </div>
 
@@ -527,18 +527,20 @@ foreach ($canToggleForProject as $b) { if ($b) { $anyManaged = true; break; } }
           <?php if ($t['desc']): ?><span style="color:#666"> — <?= htmlspecialchars($t['desc']) ?></span><?php endif; ?>
           <?php if ($t['mine']): ?><span class="tag-mine">YOU</span><?php endif; ?>
           <?php if (!empty($t['assigned_login'])): ?>
-            <span style="color:#666;font-size:10px"> · assigned to <?= htmlspecialchars($t['assigned_login']) ?> @ $<?= number_format($t['assigned_rate'], 0) ?></span>
+            <span style="color:#666;font-size:10px"> · assigned to <?= htmlspecialchars($t['assigned_login']) ?></span>
           <?php endif; ?>
           <?php if ($t['has_ratio']):
               // Tooltip explains which perspective this task was scaled in.
+              // Deliberately rate-free — staff don't need to see each
+              // other's billing numbers; only the resulting ratio matters.
               if (($t['perspective'] ?? 'viewer') === 'viewer' && $viewerRate > 0) {
                   $ratioPct = number_format($t['quoted_rate'] / $viewerRate, 2);
-                  $tip = "This task was priced at \${$t['quoted_rate']}/h. You bill at \${$viewerRate}/h, so your hour budget is {$ratioPct}× the quoted hours — keeps the dollar value fixed.";
+                  $tip = "Hour budget for this task is {$ratioPct}× the quoted hours, scaled to your rate.";
               } else {
                   $ratioPct = !empty($t['assigned_rate']) && $t['assigned_rate'] > 0
                       ? number_format($t['quoted_rate'] / $t['assigned_rate'], 2)
                       : 'n/a';
-                  $tip = "This task was priced at \${$t['quoted_rate']}/h. Assignee bills at \${$t['assigned_rate']}/h, hour budget scales by {$ratioPct}×.";
+                  $tip = "Hour budget scales by {$ratioPct}× for the assignee's rate.";
               }
           ?>
             <span style="color:#999;font-size:10px;cursor:help" title="<?= htmlspecialchars($tip) ?>"> ⓘ</span>
