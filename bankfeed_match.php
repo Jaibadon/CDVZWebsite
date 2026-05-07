@@ -294,6 +294,35 @@ function allocate_to_invoice(PDO $pdo, int $txnId, int $invoiceNo, bool $manual 
 }
 
 /**
+ * Wipe every AUTO allocation, reset the affected transactions, then
+ * re-run the matcher from scratch. Used by the "Re-evaluate auto-matches"
+ * button on bankfeed_reconcile.php to clean up false-positive matches
+ * after a regex / blacklist tweak in extract_invoice_refs().
+ *
+ * Manual allocations (auto = 0) are preserved — Erik's confirmed
+ * choices don't get undone. Returns {'undone' => N, 'created' => N}.
+ */
+function reevaluate_auto_matches(PDO $pdo): array
+{
+    $undone = 0;
+    try {
+        // Snapshot the IDs first so we don't iterate a moving target.
+        $allocIds = $pdo->query(
+            "SELECT id FROM Bank_Allocations WHERE auto = 1"
+        )->fetchAll(PDO::FETCH_COLUMN);
+        foreach ($allocIds as $id) {
+            try {
+                reverse_allocation($pdo, (int)$id);
+                $undone++;
+            } catch (Exception $e) { /* row may have been removed concurrently — skip */ }
+        }
+    } catch (Exception $e) { /* table missing — skip */ }
+
+    $created = run_auto_match($pdo);
+    return ['undone' => $undone, 'created' => $created];
+}
+
+/**
  * Reverse one Bank_Allocations row. Recomputes the affected invoice's
  * AmountPaid cache and downgrades the source transaction's matched_status
  * appropriately. Used by bankfeed_reconcile.php's "undo" button.

@@ -66,8 +66,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $pdo->prepare("UPDATE Bank_Transactions SET matched_status = 'unmatched' WHERE id = ?")->execute([$txnId]);
             $flash = 'Restored to the queue.';
         } elseif ($action === 'rematch') {
+            // Pick up newly-imported transactions only — does NOT
+            // re-evaluate already-matched ones. Cheap, idempotent.
             $n = run_auto_match($pdo);
-            $flash = "Re-ran auto-match — created $n new allocation(s).";
+            $flash = "Re-ran auto-match — created $n new allocation(s). (Already-matched transactions were not re-evaluated. Use \"Re-evaluate ALL auto-matches\" to undo + redo.)";
+        } elseif ($action === 'reevaluate') {
+            // Wipes every auto-allocated row, sets the txns back to
+            // unmatched, then re-runs the matcher. Manual allocations
+            // (auto=0) survive untouched. Used after tweaking the
+            // matcher's regex or blacklist to clean up false positives.
+            $r = reevaluate_auto_matches($pdo);
+            $flash = sprintf(
+                'Re-evaluated all auto-matches — undid %d existing allocation(s), created %d fresh allocation(s). Manual allocations were preserved.',
+                (int)$r['undone'], (int)$r['created']
+            );
         }
     } catch (Exception $e) { $flashErr = $e->getMessage(); }
 
@@ -156,10 +168,18 @@ select, input[type=number] { padding:3px 6px; font-size:12px; }
         <a href="?filter=all"     class="<?= $filter==='all' ?'active':'' ?>">All credits</a>
         <a href="?filter=ignored" class="<?= $filter==='ignored'?'active':'' ?>">Ignored</a>
       </div>
-      <form method="post" class="inline">
-        <input type="hidden" name="action" value="rematch">
-        <button class="btn-sm">↻ Re-run auto-match</button>
-      </form>
+      <span>
+        <form method="post" class="inline" title="Walks newly-imported transactions and matches any that the regex catches. Does NOT touch already-matched ones — for that use Re-evaluate ALL.">
+          <input type="hidden" name="action" value="rematch">
+          <button class="btn-sm">↻ Re-run auto-match (new only)</button>
+        </form>
+        <form method="post" class="inline"
+              title="Wipes every auto-allocated row, resets the affected transactions to unmatched, and re-runs the matcher. Use this after tweaking the regex / blacklist in extract_invoice_refs() to clean up false-positive matches. Manual allocations (auto=0) are preserved."
+              onsubmit="return confirm('Re-evaluate ALL auto-matches?\n\nThis will:\n  • UNDO every existing auto-allocated row (Bank_Allocations.auto = 1)\n  • Reset the affected transactions to unmatched\n  • Re-run auto-match against current regex + blacklist\n\nManual allocations (those you allocated by hand) are NOT touched.\n\nUseful after the matcher logic has been updated (e.g. new IRD-style blacklist keyword added). Continue?');">
+          <input type="hidden" name="action" value="reevaluate">
+          <button class="btn-sm" style="background:#a05a00">🔄 Re-evaluate ALL auto-matches</button>
+        </form>
+      </span>
     </div>
   </div>
 
