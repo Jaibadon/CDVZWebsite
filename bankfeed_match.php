@@ -32,29 +32,25 @@ require_once __DIR__ . '/helpers.php';
 /**
  * Find candidate invoice numbers in arbitrary bank-text. Returns an
  * associative array:
- *   ['prefixed' => [int...],   // confident matches — allocate freely
- *    'bare'     => [int...]]   // weak matches — only allocate on exact full-balance amount
+ *   ['prefixed' => [int...],   // CAD-/INV- matches
+ *    'bare'     => [int...]]   // bare digit matches
  *
- * Why two buckets: bare digits in bank descriptions are everywhere
- * (dates, account numbers, IRD references, etc). A real-world false
- * positive from the field: an IRD GST refund described as
- * "I.R.D. 082-090-630 D855572272# Inc 31/03/2025" had the chunk "630"
- * picked up and validated against the existing invoice CAD-00630,
- * causing $3.22 to be auto-allocated to a hundreds-of-dollars invoice
- * as a partial payment. Two guards now block that case:
+ * Both buckets get the same allocation treatment in run_auto_match
+ * (full partial-payment support); they're separated only so callers can
+ * tag the allocation source for audit (auto-ref-prefixed vs auto-ref-bare).
  *
- *   (a) Description blacklist: skip bare-matching entirely when the
- *       text is obviously a non-client transaction (IRD, GST, KiwiSaver,
- *       payroll, interest, fee, etc).
- *   (b) Bare allocations are gated in run_auto_match() to only proceed
- *       when txn.amount == invoice's remaining balance (within $0.01).
- *       The "client typed a bare reference" case is overwhelmingly
- *       "I'm paying the full invoice" — partial payments with bare
- *       references are too unreliable to act on. Prefixed matches
- *       (CAD-/INV-) still get full partial-payment support.
+ * Bare-number false-positive control is a description blacklist: skip
+ * the bare pass entirely when the text contains markers of a non-client
+ * transaction. Real-world example that motivated the list — an IRD GST
+ * refund described as "I.R.D. 082-090-630 D855572272# Inc 31/03/2025"
+ * had the chunk "630" picked up by bare-matching and validated against
+ * CAD-00630, causing $3.22 to be auto-allocated as a partial payment
+ * on an invoice many hundreds of dollars in size. The "I.R.D." marker
+ * in the blacklist now blocks that whole class of transaction from
+ * even reaching the bare digit pass.
  *
  * Both buckets are validated against Invoices.Invoice_No so absent
- * invoice numbers don't appear.
+ * invoice numbers never get acted on.
  */
 function extract_invoice_refs(PDO $pdo, string $text): array
 {
@@ -75,9 +71,45 @@ function extract_invoice_refs(PDO $pdo, string $text): array
     // high-confidence, bare adds nothing here.
     if (!empty($out['prefixed'])) return $out;
 
-    // Bare-pass guard: skip on obviously non-client transactions.
-    // Casing-insensitive; dot-tolerant for "I.R.D." style strings.
-    if (preg_match('/\b(?:I\.?R\.?D\.?|inland\s+revenue|GST|kiwisaver|interest|fee|tax|paye|salary|wages|payroll|loan|insurance|rent|rates|atm|eftpos|fx|foreign\s+currency|overdraft)\b/i', $text)) {
+    // Bare-pass guard — list of generic non-client markers. The /i flag
+    // makes every keyword case-insensitive, so "GST", "gst", "Gst",
+    // "G.s.t" (with the dot-tolerant ones) all match. Add new keywords
+    // here as patterns crop up in the wild — Erik can extend this list
+    // without touching any other logic.
+    //
+    // Categories covered: NZ tax / govt agencies (IRD, ACC, MSD, GST,
+    // PAYE, studylink, companies office), bank-internal credits
+    // (interest, fee, charge, transfer, reversal, correction,
+    // adjustment, refund, chargeback, overdraft, direct debit, direct
+    // credit, atm, eftpos), payroll-side (salary, wages, payroll,
+    // kiwisaver, super, holiday pay, bonus, commission, dividend,
+    // termination, redundancy), property / utilities (rent, rates,
+    // council, body corporate), money-movement (loan, mortgage,
+    // foreign currency / FX). Each one is matched as a whole word so
+    // "tax" doesn't catch "taxable" but DOES catch "tax invoice".
+    if (preg_match(
+        '/\b(?:'
+        . 'I\.?R\.?D\.?|inland\s+revenue|'
+        . 'A\.?C\.?C\.?|levy|'
+        . 'M\.?S\.?D\.?|studylink|work\s*and\s*income|'
+        . 'companies\s+office|'
+        . 'GST|PAYE|tax|withholding|'
+        . 'kiwisaver|super(?:annuation)?|'
+        . 'salary|wages|payroll|paye|'
+        . 'holiday\s+pay|leave\s+pay|annual\s+leave|sick\s+leave|'
+        . 'bonus|commission|dividend|termination|redundancy|'
+        . 'interest|fee|service\s+charge|account\s+fee|'
+        . 'transfer|internal\s+transfer|inter[-\s]?account|'
+        . 'reversal|correction|adjustment|chargeback|'
+        . 'refund|rebate|'
+        . 'loan|mortgage|repayment|'
+        . 'direct\s+debit|direct\s+credit|d\.d\.|d\.c\.|'
+        . 'overdraft|'
+        . 'atm|eftpos|cash\s+withdrawal|'
+        . 'rent|rates|council|body\s+corp(?:orate)?|'
+        . 'fx|foreign\s+currency|currency\s+conversion|exchange'
+        . ')\b/ix',
+        $text)) {
         return $out;
     }
 
@@ -152,36 +184,20 @@ function run_auto_match(PDO $pdo): int
         $refs = extract_invoice_refs($pdo, $blob);
         if (empty($refs['prefixed']) && empty($refs['bare'])) continue;
 
-        $txnAmount = round((float)$bt['amount'], 2);
-
-        // Prefixed (high-confidence): allocate freely, partials supported.
+        // Both prefixed and bare matches allocate the same way (with
+        // partial-payment support). The blacklist in
+        // extract_invoice_refs() is what protects bare matching from
+        // the bank-internal / IRD / payroll false-positive class —
+        // anything that gets through the blacklist is fair game. The
+        // 'by' tag distinguishes them in the audit trail
+        // (auto-ref-prefixed vs auto-ref-bare) so you can sanity-check
+        // bare-match outcomes via Bank_Allocations.allocated_by.
         foreach ($refs['prefixed'] as $invNo) {
             if (allocate_to_invoice($pdo, (int)$bt['id'], $invNo, /*manual*/false, /*by*/'auto-ref-prefixed')) {
                 $created++;
             }
         }
-
-        // Bare (low-confidence): only allocate when txn amount equals
-        // the invoice's remaining balance to within 1¢. The "client
-        // typed a bare reference" pattern is "I'm paying this invoice
-        // in full" — partial payments with bare references are too
-        // ambiguous to act on. The IRD-refund false-positive that
-        // sparked this guard ($3.22 IRD credit auto-allocated to a
-        // larger CAD-00630 invoice as a partial) is blocked here
-        // because $3.22 ≠ CAD-00630's actual remaining balance.
         foreach ($refs['bare'] as $invNo) {
-            $st = $pdo->prepare(
-                "SELECT ROUND(Subtotal*(1+COALESCE(Tax_Rate,0)),2) AS gross,
-                        COALESCE(AmountPaid, 0) AS paid
-                   FROM Invoices WHERE Invoice_No = ?"
-            );
-            $st->execute([$invNo]);
-            $row = $st->fetch();
-            if (!$row) continue;
-            $remaining = round((float)$row['gross'] - (float)$row['paid'], 2);
-            if ($remaining <= 0.005) continue;
-            if (abs($txnAmount - $remaining) > 0.01) continue;
-
             if (allocate_to_invoice($pdo, (int)$bt['id'], $invNo, /*manual*/false, /*by*/'auto-ref-bare')) {
                 $created++;
             }
