@@ -143,9 +143,9 @@ try {
 
         $linesText[] = sprintf("  %s  %s  due %s  %s  $%s%s",
             $invNumStr, $invDate ?: '          ', $dueDate ?: '          ', $job, number_format($amount, 2),
-            $payUrl !== '' ? "\r\n      View online: {$payUrl}" : '');
+            $payUrl !== '' ? "\r\n      View / pay online: {$payUrl}" : '');
         $payCell = $payUrl !== ''
-            ? '<a href="' . htmlspecialchars($payUrl) . '" style="color:#0a6;text-decoration:underline">View online</a>'
+            ? '<a href="' . htmlspecialchars($payUrl) . '" style="color:#0a6;text-decoration:underline">View / pay online</a>'
             : '<span style="color:#888">&mdash;</span>';
         $linesHtml[] = '<tr>'
             . '<td style="padding:4px 8px"><strong>' . $invNumStr . '</strong></td>'

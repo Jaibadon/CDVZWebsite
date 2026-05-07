@@ -253,8 +253,8 @@ function default_email_templates(): array {
             'label'        => 'Invoice email (per-invoice "Email from CADViz")',
             'placeholders' => 'name, client_name, invoice_no, amount, pay_by, online_url',
             'subject'      => 'Invoice {invoice_no} from CADViz Limited',
-            'text'         => "Dear {name},\r\n\r\nPlease find attached invoice {invoice_no} from CADViz Limited for {amount} (incl. GST).\r\n\r\nPayment due: {pay_by}\r\n\r\nView online: {online_url}\r\n\r\n{disregard}\r\n\r\nIf you have any other queries please reply to this email.\r\n\r\n{kind_regards}\r\n",
-            'html'         => '<p>Dear {name},</p><p>Please find attached invoice <strong>{invoice_no}</strong> from CADViz Limited for <strong>{amount}</strong> (incl. GST).</p><p><strong>Payment due:</strong> {pay_by}</p><p><a href="{online_url}">View online</a></p>{disregard_html}<p>If you have any other queries please reply to this email.</p>{kind_regards_html}',
+            'text'         => "Dear {name},\r\n\r\nPlease find attached invoice {invoice_no} from CADViz Limited for {amount} (incl. GST).\r\n\r\nPayment due: {pay_by}\r\n\r\nView / pay online: {online_url}\r\n\r\n{disregard}\r\n\r\nIf you have any other queries please reply to this email.\r\n\r\n{kind_regards}\r\n",
+            'html'         => '<p>Dear {name},</p><p>Please find attached invoice <strong>{invoice_no}</strong> from CADViz Limited for <strong>{amount}</strong> (incl. GST).</p><p><strong>Payment due:</strong> {pay_by}</p><p><a href="{online_url}">View / pay invoice online</a></p>{disregard_html}<p>If you have any other queries please reply to this email.</p>{kind_regards_html}',
         ],
         'statement_manual' => [
             'label'        => 'Manual statement (Send Statement button)',

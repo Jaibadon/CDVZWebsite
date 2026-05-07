@@ -512,7 +512,7 @@ function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, ar
             . '<td style="padding:4px 8px;text-align:right">' . (int)$r['days_overdue'] . 'd</td>'
             . '<td style="padding:4px 8px;text-align:right">$' . number_format($amt, 2) . '</td>'
             . '<td style="padding:4px 8px;text-align:center">'
-            . ($online ? '<a href="' . htmlspecialchars($online) . '" style="color:#0a6">View online</a>' : '<span style="color:#888">&mdash;</span>')
+            . ($online ? '<a href="' . htmlspecialchars($online) . '" style="color:#0a6">View / pay online</a>' : '<span style="color:#888">&mdash;</span>')
             . '</td>'
             . '</tr>';
 
