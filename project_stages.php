@@ -499,6 +499,13 @@ ob_start();
     </form>
     <span style="font-size:11px;color:#666;margin-left:6px">Copies stages + original tasks into a new draft project. Variations / invoices / timesheets are NOT copied.</span>
   </span>
+  <?php if ($quoteStatus !== 'accepted'): ?>
+    <span style="display:inline-block;margin-left:18px;border-left:1px solid #ccc;padding-left:14px">
+      <a href="quote_from_spec.php?proj_id=<?= $proj_id ?>"
+         style="background:#5d3a9b;color:#fff;border:none;padding:5px 10px;border-radius:3px;cursor:pointer;text-decoration:none">📐 Generate from spec</a>
+      <span style="font-size:11px;color:#666;margin-left:6px">Pick spec categories &rarr; bulk-add their tasks to this project's stages.</span>
+    </span>
+  <?php endif; ?>
 </div>
 <?php
 $quickActions = ob_get_clean();

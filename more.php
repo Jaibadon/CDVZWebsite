@@ -98,7 +98,7 @@ $pdo = get_db();
   <tr><td width="652" align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="projects_archive1.php"><font color="#FFFFFF">Archived Projects</font></a></td></tr>
   <tr><td align="Left"><a onMouseOver="window.status='View '; return true" onMouseOut="window.status=''; return true" href="project_new.php"><font color="#FFFFFF">New Project</font></a></td></tr>
   <tr>
-    <td align="Left"><a onMouseOver="window.status='View '; return true" onMouseOut="window.status=''; return true" href="SUBCAT_TYPES.php?Spec_Cat_ID=1"><font color="#FFFFFF">Spec Subcats (Project Element Types)</font></a></td>
+    <td align="Left"><a onMouseOver="window.status='Edit Spec Categories + Sub-categories that drive Generate-from-spec'; return true" onMouseOut="window.status=''; return true" href="spec_admin.php"><font color="#FFFFFF">Spec Categories &amp; Sub-categories</font></a></td>
   </tr>
   <tr>
     <td align="Left"><a onMouseOver="window.status='Edit task types catalog (replaces old per-stage TASK_TYPES.php)'; return true" onMouseOut="window.status=''; return true" href="task_types_admin.php"><font color="#FFFFFF">Task Types</font></a></td>
