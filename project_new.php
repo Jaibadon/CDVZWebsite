@@ -190,6 +190,13 @@ if ($_SESSION['UserID'] == "jen") {
 		<Textarea name="Job_Description" rows="4" cols="79">"Enter Description Here"</Textarea></td>
     </tr>
     <tr>
+      <td align="left" colspan="4">&nbsp;<font color=#9B9B1B size="2"><b>Job Address:</b></font></td>
+    </tr>
+    <tr>
+      <td align="center" colspan="4">
+		<Textarea name="Job_Address" rows="3" cols="79" placeholder="Site address (one line per row, e.g. 12 Example St / Auckland 1234) — appears on the printed quote."></Textarea></td>
+    </tr>
+    <tr>
       <td align="center" height="26" width="216"><b><font color=#9B9B1B size="2">Manager</font></b></td>
       <td align="center" height="26" width="126"><font color=#9B9B1B size="2"><b>Team</b></font></td>
       <td align="center" height="26" width="131">&nbsp;</td>

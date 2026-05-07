@@ -31,6 +31,7 @@ $finalDate   = fmtDate(ci_get($rs, ['Final_Date', 'FINAL_DATE']));
 $orderNo     = (string)ci_get($rs, ['Order_No', 'Order_no']);
 $jobNotes    = (string)ci_get($rs, ['Job_Notes', 'Job_NOTES', 'JOB_NOTES']);
 $jobDesc     = (string)ci_get($rs, ['Job_Description']);
+$jobAddress  = (string)ci_get($rs, ['Job_Address']);
 $contactNotes= (string)ci_get($rs, ['Contact_Notes']);
 $status      = (string)ci_get($rs, ['Status']);
 
@@ -190,6 +191,14 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
     <tr>
       <td colspan="4">
         <textarea name="Job_Description" rows="4" cols="79"><?= htmlspecialchars($jobDesc) ?></textarea>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="4" align="left">&nbsp;<font color="#9B9B1B" size="2"><b>Job Address:</b></font></td>
+    </tr>
+    <tr>
+      <td colspan="4">
+        <textarea name="Job_Address" rows="3" cols="79" placeholder="Site address — appears on the printed quote."><?= htmlspecialchars($jobAddress) ?></textarea>
       </td>
     </tr>
     <tr>

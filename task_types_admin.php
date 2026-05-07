@@ -127,8 +127,14 @@ table.tt { width:100%; border-collapse:collapse; }
 table.tt th { background:#f4f4d8; text-align:left; padding:5px 7px; font-size:11px; }
 table.tt td { padding:4px 6px; border-bottom:1px solid #eee; vertical-align:middle; font-size:12px; }
 table.tt input[type=text], table.tt input[type=number], table.tt select { padding:3px 5px; font-size:12px; }
-table.tt input.name { width:96%; }
+table.tt input.name { width:100%; min-width:340px; box-sizing:border-box; }
 table.tt input.num  { width:70px; text-align:right; }
+/* Spec Subcat dropdown: narrow column. Long subcat names get clipped
+   visually but the full name is still selectable / readable on focus. */
+table.tt td.subcat-cell { width:90px; }
+table.tt select.subcat  { width:90px; max-width:90px; }
+/* Make the Task Name column claim the leftover space */
+table.tt th.name-col, table.tt td.name-cell { width:auto; }
 .btn-sm { background:#9B9B1B; color:#fff; border:none; padding:3px 9px; border-radius:3px; cursor:pointer; font-size:11px; }
 .btn-sm.danger { background:#c33; }
 .muted { color:#888; font-size:11px; }
@@ -168,7 +174,7 @@ form.inline { display:inline; margin:0; }
         <th>Order</th>
         <th>Est&nbsp;hrs</th>
         <?php if ($hasFixed):  ?><th>Fixed&nbsp;cost</th><?php endif; ?>
-        <?php if ($hasSubcat): ?><th>Spec subcat</th><?php endif; ?>
+        <?php if ($hasSubcat): ?><th class="subcat-cell">Subcat</th><?php endif; ?>
         <th></th>
       </tr>
       <?php foreach ($rows as $r):
@@ -195,8 +201,8 @@ form.inline { display:inline; margin:0; }
               <td><input type="number" class="num" name="Fixed_Cost" value="<?= (float)$r['Fixed_Cost'] ?>" step="0.01"></td>
             <?php endif; ?>
             <?php if ($hasSubcat): ?>
-              <td>
-                <select name="Spec_Subcat_ID">
+              <td class="subcat-cell">
+                <select name="Spec_Subcat_ID" class="subcat" title="Spec Subcat">
                   <option value="">—</option>
                   <?php foreach ($subcats as $sc): ?>
                     <option value="<?= (int)$sc['Spec_SubCat_ID'] ?>" <?= (int)$sc['Spec_SubCat_ID'] === (int)($r['Spec_Subcat_ID'] ?? 0) ? 'selected' : '' ?>><?= htmlspecialchars($sc['Spec_SubCat_Name']) ?></option>
@@ -229,7 +235,7 @@ form.inline { display:inline; margin:0; }
         <tr>
           <th>Task name</th><th>Stage</th><th>Order</th><th>Est&nbsp;hrs</th>
           <?php if ($hasFixed):  ?><th>Fixed&nbsp;cost</th><?php endif; ?>
-          <?php if ($hasSubcat): ?><th>Spec subcat</th><?php endif; ?>
+          <?php if ($hasSubcat): ?><th class="subcat-cell">Subcat</th><?php endif; ?>
           <th></th>
         </tr>
         <tr>
@@ -248,8 +254,8 @@ form.inline { display:inline; margin:0; }
             <td><input type="number" class="num" name="Fixed_Cost" value="0" step="0.01"></td>
           <?php endif; ?>
           <?php if ($hasSubcat): ?>
-            <td>
-              <select name="Spec_Subcat_ID"><option value="">—</option>
+            <td class="subcat-cell">
+              <select name="Spec_Subcat_ID" class="subcat" title="Spec Subcat"><option value="">—</option>
               <?php foreach ($subcats as $sc): ?><option value="<?= (int)$sc['Spec_SubCat_ID'] ?>"><?= htmlspecialchars($sc['Spec_SubCat_Name']) ?></option><?php endforeach; ?>
               </select>
             </td>

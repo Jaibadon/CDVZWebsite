@@ -62,6 +62,12 @@ $active   = (strtoupper($activeIn) === 'ON') ? 1 : 0;
 $projectType = (isset($_POST['Project_Type']) && $_POST['Project_Type'] !== '')
     ? (int)$_POST['Project_Type'] : null;
 
+// Job_Address column may not exist on legacy installs — feature-detect
+// once and only include the SET clause when the column is actually
+// there, so the update keeps working on either schema.
+$hasAddr = false;
+try { $hasAddr = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Job_Address'")->fetch(); } catch (Exception $e) {}
+
 $sql = "UPDATE Projects SET
     Job_Notes          = ?,
     Status             = ?,
@@ -72,7 +78,7 @@ $sql = "UPDATE Projects SET
     FINAL_DATE         = ?,
     JOBNAME            = ?,
     Job_Description    = ?,
-    Initial_Priority   = ?,
+    " . ($hasAddr ? "Job_Address        = ?,\n    " : "") . "Initial_Priority   = ?,
     Order_No           = ?,
     Client_ID          = ?,
     Manager            = ?,
@@ -88,8 +94,7 @@ $sql = "UPDATE Projects SET
     Project_Type       = ?
 WHERE proj_id = ?";
 
-$stmt = $pdo->prepare($sql);
-$stmt->execute([
+$params = [
     $new_job_notes,
     $new_status,
     $new_cnotes,
@@ -99,6 +104,9 @@ $stmt->execute([
     $final_date,
     $_POST['JOBNAME']           ?? $_POST['JobName'] ?? '',
     $_POST['Job_Description']   ?? '',
+];
+if ($hasAddr) $params[] = trim((string)($_POST['Job_Address'] ?? ''));
+array_push($params,
     $_POST['initial_priority']  ?? '',
     $_POST['Order_No']          ?? $_POST['Order_no'] ?? '',
     (int) ($_POST['Client_box'] ?? 0),
@@ -113,8 +121,11 @@ $stmt->execute([
     $dp3_hours,
     $active,
     $projectType,
-    $proj_id,
-]);
+    $proj_id
+);
+
+$stmt = $pdo->prepare($sql);
+$stmt->execute($params);
 
 header('Location: projects.php');
 exit;

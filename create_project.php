@@ -24,6 +24,7 @@ $cnext     = to_mysql_date(!empty($_POST['Contact_Date_Next']) ? $_POST['Contact
 $ddate     = to_mysql_date(!empty($_POST['DRAFT_DATE'])        ? $_POST['DRAFT_DATE']        : '+7 days');
 $fdate     = to_mysql_date(!empty($_POST['FINAL_DATE'])        ? $_POST['FINAL_DATE']        : '+14 days');
 $jd        = !empty($_POST['Job_Description'])   ? $_POST['Job_Description']   : "Job Entered No Description - " . $_SESSION['UserID'] . " - " . $curdate;
+$jaddr     = trim((string)($_POST['Job_Address'] ?? ''));
 $order_no  = $_POST['Order_No'] ?? $_POST['Order_no'] ?? '';
 if ($order_no === '') $order_no = '-';
 $ip        = $_POST['initial_priority'] ?? '';
@@ -49,11 +50,22 @@ $DP1     = ($DP1     === '' ? null : (int)$DP1);
 $DP2     = ($DP2     === '' ? null : (int)$DP2);
 $DP3     = ($DP3     === '' ? null : (int)$DP3);
 
-$stmt = $pdo->prepare("INSERT INTO Projects (proj_id, JobName, Client_ID, Job_Notes, Status, Contact_Notes, Contact_Date_Last, Contact_Date_Next, Draft_Date, Final_Date, Job_Description, Initial_Priority, Order_No, Manager, DP1, DP2, DP3, Active, Project_Type) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+// Job_Address column may not exist on legacy installs that haven't run
+// the migration. Detect once and fold into the INSERT only when present
+// so the form keeps working on either schema.
+$hasAddr = false;
+try { $hasAddr = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Job_Address'")->fetch(); } catch (Exception $e) {}
+
+$cols = ['proj_id','JobName','Client_ID','Job_Notes','Status','Contact_Notes','Contact_Date_Last','Contact_Date_Next','Draft_Date','Final_Date','Job_Description','Initial_Priority','Order_No','Manager','DP1','DP2','DP3','Active','Project_Type'];
+$vals = [$nextId, $jname, $client_id, $jnotes, $stat, $cnotes, $clast, $cnext, $ddate, $fdate, $jd, $ip, $order_no, $Manager, $DP1, $DP2, $DP3, $ACT, $projType];
+if ($hasAddr) { $cols[] = 'Job_Address'; $vals[] = $jaddr; }
+$ph = implode(',', array_fill(0, count($cols), '?'));
+$stmt = $pdo->prepare("INSERT INTO Projects (`" . implode('`,`', $cols) . "`) VALUES ($ph)");
 $attempts = 0;
 while (true) {
     try {
-        $stmt->execute([$nextId, $jname, $client_id, $jnotes, $stat, $cnotes, $clast, $cnext, $ddate, $fdate, $jd, $ip, $order_no, $Manager, $DP1, $DP2, $DP3, $ACT, $projType]);
+        $vals[0] = $nextId;
+        $stmt->execute($vals);
         break;
     } catch (PDOException $e) {
         $isDupe = ($e->getCode() === '23000' || strpos($e->getMessage(), '1062') !== false);
