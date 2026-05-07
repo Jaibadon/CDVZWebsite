@@ -39,9 +39,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $me     = $client->me();
                 $name   = $me['item']['name'] ?? $me['name'] ?? 'unknown';
                 $accs   = $client->accounts();
-                $flash  = 'Akahu connected. Authenticated as ' . htmlspecialchars((string)$name)
-                        . ', ' . count($accs) . ' account(s) visible. Visit '
-                        . '<a href="akahu_accounts.php">Bank Accounts</a> to mark which one is your receivables account.';
+                $flash = 'Akahu connected. Authenticated as ' . htmlspecialchars((string)$name)
+                       . ', ' . count($accs) . ' account(s) visible.'
+                       . (count($accs) > 1
+                            ? ' Run a sync, then pick the receivables account in the "Connected accounts" table below.'
+                            : ' Run a sync to pull your transactions — your single account will be auto-flagged as the receivables target.');
             } catch (Exception $e) {
                 $flashErr = 'Failed: ' . $e->getMessage();
                 try { $pdo->prepare("UPDATE Akahu_Tokens SET last_error = ? WHERE id = 1")->execute([$e->getMessage()]); } catch (Exception $e2) {}

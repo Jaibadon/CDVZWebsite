@@ -347,7 +347,10 @@ Without these changes, an Akahu-flipped Paid would have been ignored by the cron
 - `akahu_client.php` — API wrapper (App Token + User Token in headers; no OAuth refresh).
 - `akahu_connect.php` — token entry UI; smoke-tests on save.
 - `akahu_sync.php` — pulls accounts + paginated transactions, runs `run_auto_match()` afterward. Has CLI cron + library mode.
-- `bankfeed_match.php` — matcher with **liberal invoice-ref regex**. Recognises `CAD-01234`, `caD01234`, `INV-1234`, `inv 12345`, and bare `12345` (validated against actual `Invoices.Invoice_No` to suppress dates/amounts/IDs in bank descriptions). Multi-invoice in one description (`cad12345 cad6789`) walks all matches and allocates to each in order. Partial-payment-aware allocation. **Does NOT touch `Invoices.Paid`** — only writes `Invoices.AmountPaid` cache + `Bank_Allocations` rows.
+- `bankfeed_match.php` — matcher with **two-tier invoice-ref regex**:
+  - **Prefixed (high-confidence)**: `CAD-01234`, `caD01234`, `INV-1234`, `inv 12345`. Multi-invoice in one description (`cad12345 cad6789`) walks all matches. Partial-payment allocations supported.
+  - **Bare (low-confidence)**: plain `12345` / `1234`. Only matches when (a) the description doesn't contain non-client markers (IRD, GST, kiwisaver, payroll, interest, fee, etc) AND (b) the transaction amount equals the invoice's remaining balance within 1¢. Partial-payment with bare ref is **not allowed** — too ambiguous. The "client typed the bare reference" pattern is "paying the full invoice in full" so the exact-amount gate covers the legitimate use case while blocking false positives like an IRD refund coincidentally containing a chunk that matches an invoice number.
+  - All matches validated against `Invoices.Invoice_No` so non-existent numbers don't get acted on. **Does NOT touch `Invoices.Paid`** — only writes `Invoices.AmountPaid` cache + `Bank_Allocations` rows. Auto-flips `Paid=1` only when AmountPaid ≥ gross AND DatePaid is null (separate guard, see below).
 - `bankfeed_reconcile.php` — manual queue UI for transactions the matcher couldn't fully resolve.
 - `partial_payment_action.php` — POST handler for the menu's per-invoice action buttons (send-thanks email, credit-shortfall write-off).
 

@@ -68,8 +68,8 @@ function run_akahu_sync(PDO $pdo): array
         }
 
         // First-run convenience: if exactly one account exists and none is
-        // marked default, mark it. Multi-account setups need manual flagging
-        // via SQL or a future akahu_accounts.php picker.
+        // marked default, mark it. Multi-account setups pick a default
+        // via the "Connected accounts" table on akahu_connect.php.
         $defCount = (int)$pdo->query("SELECT COUNT(*) FROM Bank_Accounts WHERE is_default = 1")->fetchColumn();
         if ($defCount === 0) {
             $only = $pdo->query("SELECT akahu_id FROM Bank_Accounts WHERE Active = 1")->fetchAll();
