@@ -47,6 +47,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggl
     header('Location: invoice_list.php');
     exit;
 }
+
+// ── Inline "set contact" handler ────────────────────────────────────────
+// Fired from the per-row "⚠ Missing greeting" alert. Saves the Contact
+// string verbatim so the email greeting is "Dear {whatever you typed}".
+// Same field clients.php uses; we just expose a lighter inline form for
+// the moment when Erik realises mid-send-flow.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_contact') {
+    $pdoForToggle = get_db();
+    $cid     = (int)($_POST['client_id'] ?? 0);
+    $contact = trim((string)($_POST['contact'] ?? ''));
+    if ($cid > 0 && clients_has_contact($pdoForToggle)) {
+        try { $pdoForToggle->prepare("UPDATE Clients SET Contact = ? WHERE Client_id = ?")->execute([$contact, $cid]); } catch (Exception $e) {}
+    }
+    header('Location: invoice_list.php');
+    exit;
+}
 ?>
 <script language="Javascript">
 	document.onkeydown = function() {
@@ -162,6 +178,12 @@ $pdo = get_db();
 $grand = 0;
 echo '<div class="inv-list-wrap">';
 
+// Detect Clients.Contact (added by migrations/add_clients_contact.sql)
+// once so the row render can degrade gracefully when the column is
+// missing — we just skip the missing-greeting alert in that case.
+$showContactCol = clients_has_contact($pdo);
+$contactSelect  = $showContactCol ? ', Clients.Contact AS Contact' : ', NULL AS Contact';
+
 // Explicit columns + aliases avoid name-collision when SELECT * over a JOIN
 $sql = "SELECT Invoices.Invoice_No   AS Invoice_No,
                Invoices.Date         AS InvDate,
@@ -169,12 +191,14 @@ $sql = "SELECT Invoices.Invoice_No   AS Invoice_No,
                Invoices.Tax_Rate     AS Tax_Rate,
                Invoices.Status_INV   AS Status_INV,
                Invoices.Sent         AS Sent,
+               Invoices.date_sent    AS date_sent,
                Invoices.Client_ID    AS Client_ID,
                Invoices.Proj_ID      AS Proj_ID,
                Invoices.Xero_InvoiceID AS Xero_InvoiceID,
                Invoices.Xero_Status   AS Xero_Status,
                Invoices.Xero_OnlineUrl AS Xero_OnlineUrl,
-               Clients.Client_Name   AS Client_Name,
+               Clients.Client_Name   AS Client_Name
+               $contactSelect,
                Projects.JobName      AS JobName
           FROM Invoices
           LEFT OUTER JOIN Clients  ON Invoices.Client_ID = Clients.Client_id
@@ -248,6 +272,43 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
     $statusInv = (int)($rs['Status_INV'] ?? 0);
     $clientId  = (int)($rs['Client_ID']  ?? 0);
     $checked   = $statusInv !== 0;
+    $contact   = $showContactCol ? trim((string)($rs['Contact'] ?? '')) : null;
+    $missingContact = $showContactCol && $contact === '';
+
+    // Last-touched-by-email indicator. Two sources:
+    //   - Invoices.date_sent — the invoice/statement email path stamps this.
+    //   - App_Meta['reminder_last_<n>'] — the reminder cron + manual
+    //     "Send reminder" path stamp this. Take the more recent of the two.
+    $lastSentRaw = (string)($rs['date_sent'] ?? '');
+    $lastReminderRaw = (string)(meta_get(get_db(), 'reminder_last_' . (int)$invNo) ?? '');
+    $lastTouched = '';
+    foreach ([$lastSentRaw, $lastReminderRaw] as $cand) {
+        if ($cand !== '' && (strtotime($cand) ?: 0) > (strtotime($lastTouched) ?: 0)) {
+            $lastTouched = $cand;
+        }
+    }
+    if ($lastTouched !== '') {
+        $ts = strtotime($lastTouched);
+        if ($ts) {
+            $daysAgo = floor((time() - $ts) / 86400);
+            $rel    = $daysAgo === 0 ? 'today'
+                    : ($daysAgo === 1 ? 'yesterday'
+                    : "{$daysAgo}d ago");
+            $color  = $daysAgo > 14 ? '#a05a00' : '#666';
+            echo ' <span style="color:' . $color . ';font-size:11px;margin-left:6px" title="Most recent invoice/statement email or reminder for CAD-' . str_pad((string)$invNo, 5, '0', STR_PAD_LEFT) . '. Combines Invoices.date_sent and App_Meta[reminder_last_' . (int)$invNo . ']."><span style="opacity:0.6">last touched</span> '
+               . htmlspecialchars(date('d/m/Y', $ts)) . ' (' . $rel . ')</span>';
+        }
+    }
+
+    if ($missingContact && $clientId > 0) {
+        echo ' <form method="post" action="invoice_list.php" style="display:inline-flex;align-items:center;gap:4px;background:#fff3cd;border:1px solid #c8a52e;border-radius:3px;padding:2px 6px;margin-left:6px">'
+           . '<input type="hidden" name="action" value="set_contact">'
+           . '<input type="hidden" name="client_id" value="' . $clientId . '">'
+           . '<span title="The greeting line on emails (&quot;Dear ___&quot;) reads from Clients.Contact. When empty, emails fall back to &quot;Valued Customer&quot;. Type the first name (e.g. &quot;Jai&quot;) — for joint contacts use ampersand (e.g. &quot;Jai &amp; Erik&quot;)." style="color:#7a5a00;font-size:11px">⚠ no greeting:</span>'
+           . '<input type="text" name="contact" placeholder="Jai &amp; Erik" required style="font-size:11px;width:120px;padding:1px 4px" autocomplete="off">'
+           . '<button type="submit" style="background:#9B9B1B;color:#fff;border:none;border-radius:3px;font-size:11px;padding:1px 6px;cursor:pointer" title="Saves to Clients.Contact for ' . htmlspecialchars((string)$client, ENT_QUOTES) . ' so all current and future emails greet them by name.">save</button>'
+           . '</form>';
+    }
 
     if ($xs) {
         $badgeColor = ($xs === 'PAID') ? '#1a6b1a' : (($xs === 'AUTHORISED') ? '#5577aa' : '#999');
@@ -265,7 +326,7 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
                 echo " <span style=\"color:#1a6b1a;font-size:11px;margin-left:6px\" title=\"This invoice has already been emailed at least once. Clicking again will resend.\">&#9993; Sent</span>";
             }
             $resendNote = $sentFlag !== 0 ? '\\n\\nThis invoice has already been sent — clicking will RESEND.' : '';
-            echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client now from accounts@cadviz.co.nz?\\n\\nThe email asks the client to disregard if already paid.$resendNote\\n\\nContinue?');\">"
+            echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client now from accounts@cadviz.co.nz?$resendNote\\n\\nContinue?');\">"
                . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
                . "<input type=\"submit\" value=\"&#9993; " . ($sentFlag !== 0 ? 'Re-email from CADViz' : 'Email from CADViz') . "\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
                . "</form>";
@@ -311,7 +372,7 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
     //   - The client has >1 unpaid invoice (otherwise the per-invoice
     //     Email button is the right choice)
     if ($checked && $xs && $clientId > 0 && ($unpaidPerClient[$clientId] ?? 0) > 1) {
-        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Send a STATEMENT email to this client now?\\n\\nIncludes PDFs of every unpaid invoice and marks each one as Sent. Note: Xero''s bank feed takes ~1 day to surface payments — invoices the client paid yesterday may still appear here. The email body asks the client to disregard if they paid in the last 24–48h. Continue?');\">"
+        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Send a STATEMENT email to this client now?\\n\\nIncludes PDFs of every unpaid invoice and marks each one as Sent.\\n\\nContinue?');\">"
            . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
            . "<input type=\"submit\" value=\"&#9993; Send Statement\" style=\"background:#5d3a9b;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
            . "</form>";

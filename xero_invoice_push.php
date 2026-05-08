@@ -170,6 +170,44 @@ function push_invoice_to_xero(PDO $pdo, int $invoiceNo): array
 
     if (empty($xeroLines)) throw new Exception("Invoice #$invoiceNo has no line items and no subtotal — nothing to send.");
 
+    // Pre-push validation: zero-amount lines silently break Xero. The
+    // API doesn't reject the request — it accepts the invoice but parks
+    // it in DRAFT instead of AUTHORISED, which looks like a successful
+    // push from our side but means the invoice is invisible to
+    // monthly_invoicing / reminders / Akahu reconciliation. Block the
+    // push and tell the admin exactly which line is the problem.
+    //
+    // Check is on LineAmount = qty × rate, so both "zero hours" and
+    // "zero rate" trip it. Negative × negative = positive (valid),
+    // positive × negative = negative (credit-shortfall, valid). Only
+    // the literal $0 case is rejected.
+    $badLines = [];
+    foreach ($xeroLines as $idx => $line) {
+        $qty    = (float)$line['Quantity'];
+        $rate   = (float)$line['UnitAmount'];
+        $amount = $qty * $rate;
+        if (abs($amount) < 0.005) {
+            $reason = $qty == 0.0    ? 'zero quantity'
+                    : ($rate == 0.0  ? 'zero rate'
+                                     : 'zero line amount');
+            $badLines[] = sprintf(
+                "  \xE2\x80\xA2 Line %d (%s): %s — qty %s \xC3\x97 \$%s",
+                $idx + 1,
+                $reason,
+                $line['Description'] ?: '(no description)',
+                number_format($qty, 2),
+                number_format($rate, 2)
+            );
+        }
+    }
+    if (!empty($badLines)) {
+        throw new Exception(
+            "Invoice #$invoiceNo has " . count($badLines) . " zero-amount line(s) — Xero would silently park the invoice as DRAFT instead of AUTHORISED:\n\n"
+            . implode("\n", $badLines)
+            . "\n\nOpen invoice_edit.php?invoice_no=$invoiceNo and either delete those timesheet rows or set proper hours / rate. Then click Push to Xero again."
+        );
+    }
+
     // Resolve the DueDate from PayBy first; fall back to compute_pay_by()
     // (which honours the "20th of next month, ALWAYS" rule for option 1)
     // and persist it back on Invoices.PayBy so subsequent views agree.

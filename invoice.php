@@ -417,7 +417,7 @@ if (in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)):
         <input type="hidden" name="email" value="0">
         <button type="submit" class="btn-primary">Push to Xero</button>
       </form>
-      <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Push CAD-<?= str_pad((string)$invoice_no, 5, '0', STR_PAD_LEFT) ?> to Xero AND email it to the client now?\n\nThe email goes from accounts@cadviz.co.nz with the Xero PDF attached, and asks the client to disregard if already paid. Continue?');">
+      <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Push CAD-<?= str_pad((string)$invoice_no, 5, '0', STR_PAD_LEFT) ?> to Xero AND email it to the client now?\n\nThe email goes from accounts@cadviz.co.nz with the Xero PDF attached. Continue?');">
         <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
         <input type="hidden" name="email" value="1">
         <button type="submit" class="btn-primary" style="background:#1a6b1a">Push + Email to Client</button>
