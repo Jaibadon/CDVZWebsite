@@ -113,7 +113,7 @@ $projects->execute([':e' => $empId]);
 $projects = $projects->fetchAll();
 
 $stageTypes = $pdo->query("SELECT Stage_Type_ID, Stage_Type_Name FROM Stage_Types ORDER BY Stage_Order, Stage_Type_Name")->fetchAll();
-$taskTypes  = $pdo->query("SELECT Task_ID, Task_Name, Estimated_Time FROM Tasks_Types ORDER BY Task_Name")->fetchAll();
+$taskTypes  = $pdo->query("SELECT Task_ID, Task_Name, Stage_ID, Estimated_Time FROM Tasks_Types ORDER BY Task_Name")->fetchAll();
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -125,7 +125,8 @@ $taskTypes  = $pdo->query("SELECT Task_ID, Task_Name, Estimated_Time FROM Tasks_
 <link href="global.css" rel="stylesheet">
 <style>
 .warn-box { background:#fff3cd; border:1px solid #c33; border-radius:4px; padding:10px 14px; margin:10px 0; color:#7a0000; }
-.task-row { background:#fafafa; padding:6px; margin:4px 0; border-radius:3px; display:grid; grid-template-columns:2fr 2fr 90px 24px; gap:6px; align-items:center; }
+.task-row { background:#fafafa; padding:6px; margin:4px 0; border-radius:3px; display:grid; grid-template-columns:1.4fr 2fr 2fr 90px 24px; gap:6px; align-items:center; }
+.task-search { padding:3px 6px; font-size:12px; }
 .btn-add { background:#5577aa; color:#fff; padding:5px 12px; border:none; border-radius:3px; cursor:pointer; font-size:12px; }
 .btn-submit-red { background:#c33; color:#fff; padding:8px 16px; border:none; border-radius:4px; cursor:pointer; font-weight:bold; font-size:14px; }
 .btn-submit-red:hover { background:#a22; }
@@ -195,6 +196,7 @@ $taskTypes  = $pdo->query("SELECT Task_ID, Task_Name, Estimated_Time FROM Tasks_
     <h3>Tasks &amp; estimated hours</h3>
     <div id="task-rows">
       <div class="task-row">
+        <input type="text" class="task-search" placeholder="🔍 search tasks…">
         <select name="Task_Type_ID[]" required>
           <option value="">— pick task —</option>
           <?php foreach ($taskTypes as $t): ?>
@@ -223,13 +225,88 @@ $taskTypes  = $pdo->query("SELECT Task_ID, Task_Name, Estimated_Time FROM Tasks_
 </div>
 
 <script>
-function addRow() {
-    var src = document.querySelector('.task-row');
-    var clone = src.cloneNode(true);
-    clone.querySelectorAll('input').forEach(function(i) { i.value = ''; });
-    clone.querySelectorAll('select').forEach(function(s) { s.selectedIndex = 0; });
-    document.getElementById('task-rows').appendChild(clone);
+// Task-type catalog with Stage_ID so the dropdown can group "Common in this
+// stage" first (matches the optgroup pattern in stages_editor.php), and so
+// the per-row search box can fuzzy-filter without a server round-trip.
+const TASK_TYPES = <?= json_encode(array_map(function($t){
+    return [
+        'id'    => (int)$t['Task_ID'],
+        'name'  => (string)$t['Task_Name'],
+        'stage' => (int)($t['Stage_ID'] ?? 0),
+        'est'   => (float)$t['Estimated_Time'],
+    ];
+}, $taskTypes), JSON_UNESCAPED_UNICODE) ?>;
+
+function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
+
+// "Fuzzy" = case-insensitive, space-separated AND match (Google-style).
+// "site design" matches "Initial Site Design", "design site", etc.
+// Cheap + intuitive for short task-name lists.
+function matchesQuery(name, query) {
+    if (!query) return true;
+    const lower = name.toLowerCase();
+    return query.toLowerCase().split(/\s+/).filter(Boolean).every(t => lower.indexOf(t) !== -1);
+}
+
+function currentStageId() {
+    const s = document.querySelector('select[name="Stage_Type_ID"]');
+    return s ? parseInt(s.value || '0', 10) : 0;
+}
+
+function renderTaskOptions(selectEl, query) {
+    const stageId = currentStageId();
+    const current = selectEl.value;
+    const here = [], other = [];
+    TASK_TYPES.forEach(t => {
+        if (!matchesQuery(t.name, query)) return;
+        if (stageId > 0 && t.stage === stageId) here.push(t);
+        else other.push(t);
+    });
+    const opt = t => `<option value="${t.id}"${String(t.id) === current ? ' selected' : ''}>${escapeHtml(t.name)} (default ${t.est}h)</option>`;
+    let html = '<option value="">— pick task —</option>';
+    if (stageId > 0 && here.length) {
+        html += `<optgroup label="Common in this stage">${here.map(opt).join('')}</optgroup>`;
+    }
+    if (other.length) {
+        const label = (stageId > 0 && here.length) ? '——————— other task types ———————' : 'All task types';
+        html += `<optgroup label="${label}">${other.map(opt).join('')}</optgroup>`;
+    }
+    if (!here.length && !other.length) html += '<option value="" disabled>(no matches)</option>';
+    selectEl.innerHTML = html;
+}
+
+function wireRow(row) {
+    const search = row.querySelector('.task-search');
+    const select = row.querySelector('select[name="Task_Type_ID[]"]');
+    if (!select) return;
+    if (search) search.addEventListener('input', () => renderTaskOptions(select, search.value));
+    renderTaskOptions(select, search ? search.value : '');
+}
+
+function rerenderAllRows() {
+    document.querySelectorAll('.task-row').forEach(row => {
+        const search = row.querySelector('.task-search');
+        const select = row.querySelector('select[name="Task_Type_ID[]"]');
+        if (select) renderTaskOptions(select, search ? search.value : '');
+    });
+}
+
+function addRow() {
+    const src = document.querySelector('.task-row');
+    const clone = src.cloneNode(true);
+    clone.querySelectorAll('input').forEach(i => i.value = '');
+    clone.querySelectorAll('select').forEach(s => s.selectedIndex = 0);
+    document.getElementById('task-rows').appendChild(clone);
+    wireRow(clone);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    document.querySelectorAll('.task-row').forEach(wireRow);
+    const stageSel = document.querySelector('select[name="Stage_Type_ID"]');
+    if (stageSel) stageSel.addEventListener('change', rerenderAllRows);
+});
 </script>
 </body>
 </html>
