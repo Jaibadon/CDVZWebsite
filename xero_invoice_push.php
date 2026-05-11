@@ -79,6 +79,12 @@ function push_invoice_to_xero(PDO $pdo, int $invoiceNo): array
     // billing rate (the old (proj, task) grouping used MAX(Rate) which
     // could over/under-state the line when two staff with different rates
     // worked the same task).
+    // Hours <> 0 (not > 0): negative-hours rows are how "less deposit paid"
+    // / other credit lines get applied to a mixed-sign invoice. Filtering
+    // them out silently pushed the GROSS amount to Xero with no deposit
+    // credit, while invoice.php and Invoices.Subtotal correctly showed the
+    // net. Sharon Rawlinson: paid $1000.50, Xero chasing $2254 because the
+    // ~$1253 deposit row never made it into the push.
     $lines = $pdo->prepare(
         "SELECT t.proj_id, p.JobName, t.Task, t.Employee_id,
                 s.Login                    AS StaffLogin,
@@ -87,7 +93,7 @@ function push_invoice_to_xero(PDO $pdo, int $invoiceNo): array
            FROM Timesheets t
            LEFT JOIN Projects p ON t.proj_id     = p.proj_id
            LEFT JOIN Staff    s ON t.Employee_id = s.Employee_ID
-          WHERE t.Invoice_No = ? AND t.Hours > 0
+          WHERE t.Invoice_No = ? AND t.Hours <> 0
           GROUP BY t.proj_id, t.Task, t.Employee_id, s.Login
           ORDER BY p.JobName, t.Task, s.Login"
     );
@@ -112,10 +118,12 @@ function push_invoice_to_xero(PDO $pdo, int $invoiceNo): array
     foreach ($items as $li) {
         $hrs  = (float)$li['Hours'];
         $rate = (float)$li['Rate'];
-        if ($rate <= 0) {
+        if ($rate == 0.0) {
             // Fallback: legacy / fixed-cost timesheet rows where Rate
             // wasn't set by invoice_gen.php. Apply the multiplier here
             // because it never had a chance to be applied earlier.
+            // Only fires on a literal 0 — negative rates are valid
+            // (credit / "less deposit paid" lines) and must be preserved.
             $rate = $baseRate * $multiplier;
         }
         // else: $rate already includes the multiplier (baked in by
