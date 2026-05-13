@@ -14,6 +14,7 @@
  */
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';  // we call get_tba_rate(), clients_has_contact(), etc.
 
 if (!in_array($_SESSION['UserID'], ['erik', 'jen'], true)) {
     http_response_code(403);

@@ -1,6 +1,7 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';  // stages_editor.php calls get_tba_rate() etc.
 
 if (!in_array($_SESSION['UserID'], ['erik', 'jen'], true)) {
     http_response_code(403);
