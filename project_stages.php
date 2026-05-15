@@ -395,6 +395,9 @@ ob_start();
      style="background:#246;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Checklist</a>
   <a href="templates.php"
      style="background:#777;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Manage all templates</a>
+  <a href="keynotes_edit.php?proj_id=<?= $proj_id ?>"
+     style="background:#9B9B1B;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none"
+     title="Edit the Revit keynotes.txt file in this project's Drive folder, from the web">📋 Edit Keynotes</a>
 
   <hr style="border:none;border-top:1px solid #eee;margin:8px 0">
 

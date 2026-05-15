@@ -31,6 +31,16 @@ $smtpConnected  = $smtpConfigured && SmtpOAuth::isConnected(get_db());
 $smtpFlash      = $_SESSION['smtp_flash'] ?? '';
 unset($_SESSION['smtp_flash']);
 
+// Google Drive (separate OAuth grant — used for keynotes editor + future
+// server-side Drive file ops like PDF proxying for magic-link reviews)
+require_once 'drive_client.php';
+$driveConfigured = DriveClient::isConfigured();
+$driveConnected  = $driveConfigured;
+try { $driveConnected = $driveConfigured && DriveClient::isConnected(get_db()); } catch (Exception $e) { $driveConnected = false; }
+$driveFlash      = $_SESSION['drive_flash'] ?? '';
+$driveFlashErr   = $_SESSION['drive_flash_err'] ?? '';
+unset($_SESSION['drive_flash'], $_SESSION['drive_flash_err']);
+
 // Pending unapproved variations (admin alert)
 $pendingVariations = [];
 if ($isAdmin) {
@@ -298,7 +308,7 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
     <div class="grid">
       <a class="btn" href="projects.php">My Projects</a>
       <a class="btn" href="projects_archive1.php">Projects Archive</a>
-      <a class="btn" href="clients.php">Clients</a>
+      <a class="btn" href="clients_view.php">Clients</a>
     </div>
 
     <?php if ($isAdmin): ?>
@@ -324,6 +334,8 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
     </div>
 
     <?php if ($smtpFlash): ?><div style="background:#d6f5d6;border:1px solid #1a6b1a;color:#1a6b1a;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($smtpFlash) ?></div><?php endif; ?>
+    <?php if ($driveFlash): ?><div style="background:#d6f5d6;border:1px solid #1a6b1a;color:#1a6b1a;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($driveFlash) ?></div><?php endif; ?>
+    <?php if ($driveFlashErr): ?><div style="background:#ffd6d6;border:1px solid #c33;color:#a00;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($driveFlashErr) ?></div><?php endif; ?>
 
     <h3>Email (Google SMTP / OAuth)</h3>
     <div class="grid">
@@ -333,6 +345,18 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
         <a class="btn" href="smtp_oauth_connect.php" style="background:#4285F4">Connect Google SMTP</a>
       <?php else: ?>
         <span class="btn secondary" style="background:#1a6b1a;cursor:default" title="Connected as <?= htmlspecialchars(SmtpOAuth::authenticatedUser(get_db())) ?>">Google SMTP ✓</span>
+      <?php endif; ?>
+    </div>
+
+    <h3>Google Drive (for keynotes editor + project files)</h3>
+    <div class="grid">
+      <?php if (!$driveConfigured): ?>
+        <span class="btn secondary" style="background:#999;cursor:default" title="Add GOOGLE_OAUTH_DRIVE_REDIRECT_URI to config.php and run migrations/add_drive_oauth.sql">Google Drive — not configured</span>
+      <?php elseif (!$driveConnected): ?>
+        <a class="btn" href="drive_oauth_connect.php" style="background:#0F9D58">Connect Google Drive</a>
+      <?php else: ?>
+        <span class="btn secondary" style="background:#1a6b1a;cursor:default" title="Connected as <?= htmlspecialchars(DriveClient::authenticatedUser(get_db())) ?>">Google Drive ✓</span>
+        <a class="btn secondary" href="drive_oauth_disconnect.php" style="background:#666">Disconnect Drive</a>
       <?php endif; ?>
     </div>
 
