@@ -32,6 +32,7 @@ $orderNo     = (string)ci_get($rs, ['Order_No', 'Order_no']);
 $jobNotes    = (string)ci_get($rs, ['Job_Notes', 'Job_NOTES', 'JOB_NOTES']);
 $jobDesc     = (string)ci_get($rs, ['Job_Description']);
 $jobAddress  = (string)ci_get($rs, ['Job_Address']);
+$driveFolder = (string)ci_get($rs, ['drive_folder_id']);   // DMS — may be absent on legacy installs (ci_get returns '')
 $contactNotes= (string)ci_get($rs, ['Contact_Notes']);
 $status      = (string)ci_get($rs, ['Status']);
 
@@ -199,6 +200,17 @@ input[type=submit],input[type=reset] { padding:4px 12px; cursor:pointer; }
     <tr>
       <td colspan="4">
         <textarea name="Job_Address" rows="3" cols="79" placeholder="Site address — appears on the printed quote."><?= htmlspecialchars($jobAddress) ?></textarea>
+      </td>
+    </tr>
+    <tr>
+      <td colspan="4" align="left">&nbsp;<font color="#9B9B1B" size="2"><b>Google Drive folder (DMS):</b></font></td>
+    </tr>
+    <tr>
+      <td colspan="4">
+        <input type="text" name="drive_folder_id" size="90"
+               value="<?= htmlspecialchars($driveFolder) ?>"
+               placeholder="Paste the project's Drive folder URL or ID — e.g. https://drive.google.com/drive/folders/1AbCdEf…">
+        <br><font color="#888" size="1">Used by the keynotes editor + transmittal/commit pipeline. A pasted full URL is auto-trimmed to the folder ID on save. Leave blank if this project isn't on the DMS yet.</font>
       </td>
     </tr>
     <tr>

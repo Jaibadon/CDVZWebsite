@@ -109,6 +109,35 @@ if (($_SESSION['UserID'] ?? '') === 'erik') {
     } catch (Exception $e) { /* Xero columns may not exist on legacy installs */ }
 }
 
+// ── DMS: commits with un-acknowledged transmittals > 7 days old ─────────
+// The loop-closing visibility: a revision was sent to a 3rd party for
+// review and they still haven't acknowledged it a week later. Feature-
+// detected (Transmittals table may not exist if the DMS migration hasn't
+// been run) so the menu still loads on installs that haven't adopted it.
+$unackedCommits = [];
+if ($isAdmin) {
+    try {
+        $st = $pdo->query(
+            "SELECT t.Commit_ID, t.Transmittal_ID, t.Sent_At,
+                    cm.Revision_Label, cm.Proj_ID,
+                    p.JobName,
+                    COUNT(tr.Recipient_ID) AS recips,
+                    SUM(CASE WHEN tr.Acked_At IS NULL THEN 1 ELSE 0 END) AS unacked,
+                    DATEDIFF(NOW(), MIN(CASE WHEN tr.Acked_At IS NULL THEN tr.Sent_At END)) AS oldest_days
+               FROM Transmittals t
+               INNER JOIN Transmittal_Recipients tr ON tr.Transmittal_ID = t.Transmittal_ID
+               INNER JOIN Commits  cm ON t.Commit_ID = cm.Commit_ID
+               LEFT  JOIN Projects p  ON cm.Proj_ID  = p.proj_id
+              WHERE tr.Acked_At IS NULL
+                AND tr.Sent_At < (NOW() - INTERVAL 7 DAY)
+              GROUP BY t.Transmittal_ID
+              HAVING unacked > 0
+              ORDER BY oldest_days DESC"
+        );
+        $unackedCommits = $st->fetchAll();
+    } catch (Exception $e) { /* DMS tables not present yet — skip the panel */ }
+}
+
 // ── Bank-feed reconciliation alerts (Akahu, alongside Xero) ──────────────
 // Two separate panels. Suppressed entirely when the migration hasn't run
 // or when Akahu hasn't been connected yet — the page should still load
@@ -291,6 +320,45 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
           </li>
         <?php endforeach; ?>
       </ul>
+    </div>
+    <?php endif; ?>
+
+    <?php if ($isAdmin && !empty($unackedCommits)):
+        $worst = (int)($unackedCommits[0]['oldest_days'] ?? 0);
+    ?>
+    <div style="background:#ffe4d6;border:2px solid #c33;border-radius:4px;padding:12px 16px;margin-bottom:16px">
+      <h3 style="margin:0 0 6px;color:#a00;border:none">
+        🔔 <?= count($unackedCommits) ?> transmittal<?= count($unackedCommits) === 1 ? '' : 's' ?> still un-acknowledged after 7+ days
+      </h3>
+      <p style="margin:0 0 6px;font-size:11px;color:#7a2200">
+        A revision was sent to a 3rd party for review and they haven't acknowledged it.
+        Oldest is <strong><?= $worst ?> days</strong> waiting. Chase them — an un-acked revision
+        going to council is exactly the coordination gap this system exists to stop.
+      </p>
+      <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px">
+        <thead><tr style="background:#fff3cd">
+          <th style="padding:4px 6px;text-align:left">Project · Rev</th>
+          <th style="padding:4px 6px;text-align:right">Un-acked</th>
+          <th style="padding:4px 6px;text-align:right">Oldest</th>
+          <th style="padding:4px 6px;text-align:left"></th>
+        </tr></thead>
+        <tbody>
+        <?php foreach (array_slice($unackedCommits, 0, 15) as $uc): ?>
+          <tr style="border-bottom:1px solid #fce0bf">
+            <td style="padding:4px 6px">
+              <?= htmlspecialchars($uc['JobName'] ?? 'Project #' . (int)$uc['Proj_ID']) ?>
+              · Rev <?= htmlspecialchars(trim((string)($uc['Revision_Label'] ?? '')) ?: '#' . (int)$uc['Commit_ID']) ?>
+            </td>
+            <td style="padding:4px 6px;text-align:right"><strong><?= (int)$uc['unacked'] ?></strong> of <?= (int)$uc['recips'] ?></td>
+            <td style="padding:4px 6px;text-align:right;color:<?= ((int)$uc['oldest_days']) >= 14 ? '#a00' : '#7a2200' ?>"><strong><?= (int)$uc['oldest_days'] ?>d</strong></td>
+            <td style="padding:4px 6px"><a href="commit_detail.php?commit_id=<?= (int)$uc['Commit_ID'] ?>" style="color:#a00;font-weight:bold">view / chase →</a></td>
+          </tr>
+        <?php endforeach; ?>
+        </tbody>
+      </table>
+      <?php if (count($unackedCommits) > 15): ?>
+        <p style="font-size:11px;color:#7a2200;margin-top:6px">+ <?= count($unackedCommits) - 15 ?> more.</p>
+      <?php endif; ?>
     </div>
     <?php endif; ?>
 

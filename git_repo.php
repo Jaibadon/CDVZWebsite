@@ -124,6 +124,22 @@ class GitRepo
         if (!is_file($filePath)) throw new GitRepoException("Source file not found: $filePath");
         if ($message === '')     throw new GitRepoException('Commit message is required.');
 
+        // ── Per-project commit lock ──────────────────────────────────────
+        // Transient worktrees stop DIFFERENT projects colliding, but two
+        // commits to the SAME project race on the bare repo's branch ref.
+        // Serialise them with an exclusive flock on a per-repo lock file
+        // (lives inside the git-dir; git ignores unknown top-level files
+        // there). Held for the whole commit, released in finally.
+        $lockPath = $this->repoDir . DIRECTORY_SEPARATOR . 'cadviz-commit.lock';
+        $lockFh = @fopen($lockPath, 'c');
+        if ($lockFh === false) {
+            throw new GitRepoException("Cannot open commit lock: $lockPath");
+        }
+        if (!flock($lockFh, LOCK_EX)) {
+            fclose($lockFh);
+            throw new GitRepoException('Could not acquire commit lock for this project (another publish in progress?).');
+        }
+
         // Use a transient worktree so concurrent commits on different
         // projects don't trip over each other. tempnam + replace-with-dir.
         $workTree = tempnam(sys_get_temp_dir(), 'cadviz_git_wt_');
@@ -187,6 +203,8 @@ class GitRepo
             return $sha;
         } finally {
             $this->rrmdir($workTree);
+            flock($lockFh, LOCK_UN);
+            fclose($lockFh);
         }
     }
 

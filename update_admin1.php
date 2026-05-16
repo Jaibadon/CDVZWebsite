@@ -68,6 +68,26 @@ $projectType = (isset($_POST['Project_Type']) && $_POST['Project_Type'] !== '')
 $hasAddr = false;
 try { $hasAddr = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'Job_Address'")->fetch(); } catch (Exception $e) {}
 
+// drive_folder_id (DMS) — same feature-detect pattern. The form may post a
+// full Drive URL; trim it to the bare folder ID. Empty stays empty.
+$hasDrive = false;
+try { $hasDrive = (bool)$pdo->query("SHOW COLUMNS FROM Projects LIKE 'drive_folder_id'")->fetch(); } catch (Exception $e) {}
+$driveFolderId = null;
+if ($hasDrive) {
+    $raw = trim((string)($_POST['drive_folder_id'] ?? ''));
+    if ($raw === '') {
+        $driveFolderId = null;
+    } elseif (preg_match('#/folders/([A-Za-z0-9_\-]{10,})#', $raw, $m)) {
+        $driveFolderId = $m[1];
+    } elseif (preg_match('#[?&]id=([A-Za-z0-9_\-]{10,})#', $raw, $m)) {
+        $driveFolderId = $m[1];
+    } elseif (preg_match('#^[A-Za-z0-9_\-]{10,}$#', $raw)) {
+        $driveFolderId = $raw;
+    } else {
+        $driveFolderId = $raw;   // store as-is; keynotes_edit will re-validate
+    }
+}
+
 $sql = "UPDATE Projects SET
     Job_Notes          = ?,
     Status             = ?,
@@ -78,7 +98,7 @@ $sql = "UPDATE Projects SET
     FINAL_DATE         = ?,
     JOBNAME            = ?,
     Job_Description    = ?,
-    " . ($hasAddr ? "Job_Address        = ?,\n    " : "") . "Initial_Priority   = ?,
+    " . ($hasAddr ? "Job_Address        = ?,\n    " : "") . ($hasDrive ? "drive_folder_id    = ?,\n    " : "") . "Initial_Priority   = ?,
     Order_No           = ?,
     Client_ID          = ?,
     Manager            = ?,
@@ -105,7 +125,8 @@ $params = [
     $_POST['JOBNAME']           ?? $_POST['JobName'] ?? '',
     $_POST['Job_Description']   ?? '',
 ];
-if ($hasAddr) $params[] = trim((string)($_POST['Job_Address'] ?? ''));
+if ($hasAddr)  $params[] = trim((string)($_POST['Job_Address'] ?? ''));
+if ($hasDrive) $params[] = $driveFolderId;   // matches the drive_folder_id = ? clause position
 array_push($params,
     $_POST['initial_priority']  ?? '',
     $_POST['Order_No']          ?? $_POST['Order_no'] ?? '',

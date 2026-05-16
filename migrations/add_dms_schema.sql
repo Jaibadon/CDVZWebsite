@@ -28,9 +28,12 @@
 -- ── Drop the old DMS-v1 tables if they exist (Documents/Document_Sheets +
 --    the Transmittals/Recipients/Comments rows that pointed at them).
 --    Stakeholders survives — its shape didn't change.
-DROP TABLE IF EXISTS Document_Comments;
-DROP TABLE IF EXISTS Transmittal_Recipients;
-DROP TABLE IF EXISTS Transmittals;
+-- Only the genuinely-obsolete v1 tables are dropped. Transmittals /
+-- Transmittal_Recipients / Commit_Comments are CREATE TABLE IF NOT EXISTS
+-- below — we must NOT drop those, or re-running this file would wipe
+-- transmittal + ack + comment history. (The original v1→v2 cut-over did
+-- drop them because they carried a Document_ID FK; that migration window
+-- has passed — anyone on v2 has Commit_ID-based rows worth keeping.)
 DROP TABLE IF EXISTS Document_Sheets;
 DROP TABLE IF EXISTS Documents;
 
@@ -298,10 +301,17 @@ CREATE TABLE IF NOT EXISTS Transmittals (
 
 -- ── Transmittal_Recipients: per-stakeholder magic link + ack state ───────
 -- Unchanged from DMS v1 except FK target.
+-- Stakeholder_ID is NULLABLE: a recipient is either a project stakeholder
+-- (Stakeholder_ID set) OR an ad-hoc address (Ad_Hoc_Email set, e.g. a
+-- one-off builder/consultant emailed via the manual-email + magic-link
+-- path). add_adhoc_recipients.sql back-fills this on installs created
+-- before the column was nullable.
 CREATE TABLE IF NOT EXISTS Transmittal_Recipients (
     Recipient_ID    INT NOT NULL AUTO_INCREMENT PRIMARY KEY,
     Transmittal_ID  INT NOT NULL,
-    Stakeholder_ID  INT NOT NULL,
+    Stakeholder_ID  INT NULL,
+    Ad_Hoc_Email    VARCHAR(255) NULL,
+    Ad_Hoc_Name     VARCHAR(255) NULL,
     Magic_Token     CHAR(64) NOT NULL,
     Sent_At         DATETIME NOT NULL,
     First_Viewed_At DATETIME,

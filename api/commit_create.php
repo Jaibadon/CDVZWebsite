@@ -2,28 +2,27 @@
 /**
  * POST /api/commit_create.php  →  create a new Commit on a project.
  *
- * STUB (Phase 1, first cut). This endpoint accepts the request shape the
- * SPA will send and writes a Commits row, but the full pipeline isn't
- * wired yet — it'll be completed in the next code turn:
- *
+ * Full pipeline (all implemented):
  *   1. Receive multipart form: ifc file (blob), manifest (JSON string),
- *      pdfs[] (optional blobs), proj_id, rvt_backup_number, rvt_backup_filename,
- *      message, revision_label.
- *   2. Validate proj_id is one the caller can publish to.
- *   3. Save the IFC bytes to a temp file.
- *   4. Hand to git_repo.php → returns the new git SHA.
- *   5. Decode the JSON manifest → write Element_Instances/Parameters/Relationships.
- *   6. Write Blobs rows for the IFC + each PDF (sha256 + Drive id).
- *   7. Write the Commit row + Commit_Blobs.
- *   8. Run coverage rules engine against the diff vs parent commit's
- *      Element_Instances → write Coverage_Rule_Firings + initial
- *      Commit_NZBC_Tags (Source='rule').
- *   9. Return commit_id + git_sha + warnings so the SPA can navigate to
- *      the confirm-tags / send-transmittals page.
+ *      pdf[] (optional blobs), proj_id, rvt_backup_number,
+ *      rvt_backup_filename, message, revision_label,
+ *      manifest_format_version.
+ *   2. Validate proj_id + that the caller is admin or assigned to it.
+ *   3. sha256 + temp the IFC; git-commit it into the project's bare repo
+ *      (git_repo.php creates the repo on first commit). The git commit
+ *      happens BEFORE the DB transaction and is not rollback-able — a
+ *      failed DB transaction just leaves an orphan SHA (harmless).
+ *   4. [TXN] Blobs(IFC) + Commits + Commit_Blobs + Element_Instances/
+ *      Parameters/Relationships + PDF blobs (archived to
+ *      CADVIZ_BLOB_ARCHIVE_PATH). All-or-nothing.
+ *   5. Coverage engine (post-commit, own try/catch — non-fatal) → firings
+ *      + Commit_NZBC_Tags.
+ *   6. Return commit_id, git_sha, element/relationship counts,
+ *      pdfs_stored, coverage summary, warnings.
  *
- * This first cut implements just steps 1, 2, 3, 4, partial 6 (IFC blob),
- * and 7 (minimal Commit row) — enough to verify the end-to-end round-trip
- * works before we add coverage rules and PDF handling.
+ * manifest_format_version is accepted + currently ignored — it future-
+ * proofs the endpoint for the Phase 2 Revit add-in to POST a richer
+ * native manifest shape without breaking the IFC path.
  */
 
 require_once __DIR__ . '/_bootstrap.php';
@@ -99,6 +98,16 @@ $parentRow = $pdo->prepare("SELECT Commit_ID FROM Commits WHERE Proj_ID = ? AND 
 $parentRow->execute([$projId]);
 $prev = $parentRow->fetchColumn();
 if ($prev) $parentCommitId = (int)$prev;
+
+// ── DB writes are transactional ──────────────────────────────────────────
+// The git commit above already happened and can't be rolled back. If any
+// DB write below fails we roll the whole lot back so we DON'T end up with a
+// half-written commit (Commits row but no elements, etc.). The orphaned git
+// SHA is harmless — it's just an unreferenced object; the retry makes a new
+// commit cleanly. Coverage engine runs AFTER commit() in its own try/catch
+// (a coverage failure must not lose the commit itself).
+try {
+    $pdo->beginTransaction();
 
 // ── Write the Blobs row for the IFC ──────────────────────────────────────
 // Idempotent: if the same sha was uploaded before (no-op rebuild) the row
@@ -204,11 +213,77 @@ foreach ($relationships as $r) {
     ]);
 }
 
+// ── PDF outputs ─────────────────────────────────────────────────────────
+// The SPA sends any PDFs it found in the project folder as pdf[] multipart
+// files. We content-address them (sha256) into the blob archive on the
+// host filesystem, so the magic-link review page can serve them to
+// stakeholders WITHOUT a Drive round-trip on every page load. PDFs are
+// outputs (not the source of truth — the .rvt + IFC are), so they don't
+// go into git; the filesystem archive + Blobs row is enough for audit +
+// review. Non-fatal: a PDF that fails to store just produces a warning.
+$pdfWarnings = [];
+$pdfStored = 0;
+if (!empty($_FILES['pdf']) && is_array($_FILES['pdf']['name'] ?? null)) {
+    if (!defined('CADVIZ_BLOB_ARCHIVE_PATH') || CADVIZ_BLOB_ARCHIVE_PATH === '') {
+        $pdfWarnings[] = 'CADVIZ_BLOB_ARCHIVE_PATH not configured — PDFs were uploaded but not stored. Set it in config.php (see config.cadviz.sample.php).';
+    } else {
+        $archiveDir = rtrim(CADVIZ_BLOB_ARCHIVE_PATH, '/\\');
+        if (!is_dir($archiveDir)) { @mkdir($archiveDir, 0750, true); }
+        if (!is_dir($archiveDir) || !is_writable($archiveDir)) {
+            $pdfWarnings[] = "Blob archive dir not writable ($archiveDir) — PDFs not stored.";
+        } else {
+            $insBlob = $pdo->prepare(
+                "INSERT IGNORE INTO Blobs (Sha256, Filesystem_Path, Size_Bytes, Content_Type, First_Seen_At)
+                 VALUES (?, ?, ?, 'application/pdf', NOW())"
+            );
+            $insCommitBlob = $pdo->prepare(
+                "INSERT INTO Commit_Blobs (Commit_ID, Blob_Sha256, Path_In_Project, Role)
+                 VALUES (?, ?, ?, 'pdf_output')"
+            );
+            $names = $_FILES['pdf']['name'];
+            $count = count($names);
+            for ($i = 0; $i < $count; $i++) {
+                if (($_FILES['pdf']['error'][$i] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+                    $pdfWarnings[] = 'PDF "' . ($names[$i] ?? "#$i") . '" upload error code ' . ($_FILES['pdf']['error'][$i] ?? '?');
+                    continue;
+                }
+                $tmp  = $_FILES['pdf']['tmp_name'][$i];
+                $orig = (string)($names[$i] ?? "file$i.pdf");
+                $sha  = hash_file('sha256', $tmp);
+                if (!$sha) { $pdfWarnings[] = "Couldn't hash PDF $orig."; continue; }
+                $dest = $archiveDir . DIRECTORY_SEPARATOR . $sha . '.pdf';
+                // sha-named: if a byte-identical PDF already exists, reuse it
+                if (!file_exists($dest)) {
+                    if (!@move_uploaded_file($tmp, $dest) && !@copy($tmp, $dest)) {
+                        $pdfWarnings[] = "Failed to store PDF $orig to archive.";
+                        continue;
+                    }
+                }
+                // Path relative to the archive root (portable if the dir moves)
+                $insBlob->execute([$sha, $sha . '.pdf', filesize($dest)]);
+                $insCommitBlob->execute([$commitId, $sha, $orig]);
+                $pdfStored++;
+            }
+        }
+    }
+}
+
+    $pdo->commit();
+} catch (\Throwable $txe) {
+    if ($pdo->inTransaction()) $pdo->rollBack();
+    json_err(
+        'Commit DB write failed and was rolled back — no partial commit was saved. '
+        . 'The git commit is an orphan SHA (harmless); just retry the publish. '
+        . 'Detail: ' . $txe->getMessage(),
+        500
+    );
+}
+
 // ── Coverage rule engine ─────────────────────────────────────────────────
 // Compare this commit's Element_Instances against the parent commit's (if
 // any), fire matching rules, write Coverage_Rule_Firings + initial
-// Commit_NZBC_Tags. Wrapped in try/catch — engine failure must not roll
-// back the commit itself.
+// Commit_NZBC_Tags. Runs AFTER the transaction commits — engine failure
+// must not roll back the commit itself (its own try/catch below).
 require_once __DIR__ . '/../coverage_engine.php';
 
 $coverage = ['firings' => 0, 'tags' => [], 'details' => [], 'errors' => []];
@@ -218,12 +293,22 @@ try {
     $coverage['errors'][] = 'Coverage engine threw: ' . $e->getMessage();
 }
 
+// ── Timesheet hook ───────────────────────────────────────────────────────
+// Drop a Hours=0 draft Timesheets row for the author so they don't re-type
+// what they did. Strictly non-fatal — never throws, never affects the
+// commit. Runs post-transaction (it's its own independent write).
+$draftTsId = null;
+try {
+    require_once __DIR__ . '/../timesheet_hook.php';
+    $draftTsId = draft_timesheet_for_commit($pdo, $commitId, $empId);
+} catch (\Throwable $e) { /* non-fatal by contract */ }
+
 // ── Response ─────────────────────────────────────────────────────────────
 $warnings = [];
 if (count($elements) === 0) {
     $warnings[] = 'No elements parsed from the manifest — coverage rules will have nothing to fire on.';
 }
-$warnings = array_merge($warnings, $coverage['errors']);
+$warnings = array_merge($warnings, $coverage['errors'], $pdfWarnings);
 
 json_ok([
     'commit_id'         => $commitId,
@@ -233,6 +318,8 @@ json_ok([
     'ifc_sha256'        => $ifcSha,
     'element_count'     => count($elements),
     'relationship_count'=> count($relationships),
+    'pdfs_stored'       => $pdfStored,
+    'draft_timesheet_id'=> $draftTsId,
     'coverage'          => [
         'firings' => $coverage['firings'],
         'tags'    => $coverage['tags'],

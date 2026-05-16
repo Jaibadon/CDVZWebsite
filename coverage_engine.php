@@ -156,24 +156,51 @@ function load_commit_snapshot(PDO $pdo, int $commitId): array
     }
 
     // One query for ALL parameters of this commit's elements (avoids N+1).
+    // Column is Param_Set (the IFC PSet name), NOT "Pset" — selecting the
+    // wrong name here previously made the whole snapshot load throw, which
+    // silently disabled ALL coverage rules.
     $stmt = $pdo->prepare(
-        "SELECT ei.Ifc_Guid, ep.Pset, ep.Param_Name, ep.Param_Value
+        "SELECT ei.Ifc_Guid, ep.Param_Set, ep.Param_Name, ep.Param_Value
            FROM Element_Parameters ep
            INNER JOIN Element_Instances ei ON ei.Element_Instance_ID = ep.Element_Instance_ID
           WHERE ei.Commit_ID = ?"
     );
     $stmt->execute([$commitId]);
 
+    // Key by composite "pset\x1fname" (both lowercased) so two PSets that
+    // share a property name (e.g. both have "Reference") don't clobber each
+    // other. The \x1f unit-separator can't appear in a real PSet/param name.
     $params = [];
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $p) {
         $guid = $p['Ifc_Guid'];
         if (!$guid) continue;
         if (!isset($params[$guid])) $params[$guid] = [];
-        // Lowercase the name for case-insensitive matching against rules
-        $params[$guid][strtolower((string)$p['Param_Name'])] = (string)($p['Param_Value'] ?? '');
+        $key = strtolower((string)($p['Param_Set'] ?? '')) . "\x1f" . strtolower((string)$p['Param_Name']);
+        $params[$guid][$key] = (string)($p['Param_Value'] ?? '');
     }
 
     return ['elements' => $elements, 'params' => $params];
+}
+
+/** The bare param name from a composite "pset\x1fname" key. */
+function cov_param_basename(string $compositeKey): string
+{
+    $pos = strpos($compositeKey, "\x1f");
+    return $pos === false ? $compositeKey : substr($compositeKey, $pos + 1);
+}
+
+/**
+ * Look up a param value by bare name (case-insensitive), ignoring which
+ * PSet it's in. Returns the first match, or null. Used by the rule
+ * "param": {Name: Value} filter, which doesn't specify a PSet.
+ */
+function cov_param_value(array $paramsMap, string $name): ?string
+{
+    $want = strtolower($name);
+    foreach ($paramsMap as $compositeKey => $val) {
+        if (cov_param_basename($compositeKey) === $want) return (string)$val;
+    }
+    return null;
 }
 
 /**
@@ -216,6 +243,11 @@ function compute_element_diff(array $current, array $parent): array
     return ['added' => $added, 'removed' => $removed, 'modified' => $modified];
 }
 
+/**
+ * Distinct bare param NAMES whose value changed between two composite-keyed
+ * param maps. Returns lowercased bare names so filter_coverage_param_changed
+ * can do a simple in_array() against a rule's param_name.
+ */
 function changed_param_names(array $prev, array $curr): array
 {
     $changed = [];
@@ -223,9 +255,9 @@ function changed_param_names(array $prev, array $curr): array
     foreach ($allKeys as $k) {
         $a = $prev[$k] ?? null;
         $b = $curr[$k] ?? null;
-        if ((string)$a !== (string)$b) $changed[] = $k;
+        if ((string)$a !== (string)$b) $changed[cov_param_basename((string)$k)] = true;
     }
-    return $changed;
+    return array_keys($changed);
 }
 
 function evaluate_coverage_rule(string $triggerType, array $selector, array $diff): array
@@ -265,8 +297,9 @@ function matches_coverage_param_filter(array $element, array $selector): bool
     if (!is_array($filter) || empty($filter)) return true;
     $params = $element['params'] ?? [];
     foreach ($filter as $name => $wantedValue) {
-        $actual = $params[strtolower((string)$name)] ?? null;
-        if (strcasecmp((string)$actual, (string)$wantedValue) !== 0) return false;
+        // Look the param up by bare name across any PSet (composite keys).
+        $actual = cov_param_value($params, (string)$name);
+        if ($actual === null || strcasecmp($actual, (string)$wantedValue) !== 0) return false;
     }
     return true;
 }
