@@ -42,10 +42,13 @@ function load_commit_pdf_attachments(PDO $pdo, int $commitId): array
     // Warn ONCE for the archive-unset case (it'd be redundant per row).
     $archiveWarned = false;
 
+    // Build file_list ONLY from files that actually attached. That way the
+    // recipient's email body never lists a PDF they didn't get — silent
+    // graceful degradation, per the project policy of not surfacing
+    // attach-failures to recipients. Staff still see every miss via the
+    // returned `warnings` array.
     foreach ($rows as $pr) {
         $label = (string)$pr['Path_In_Project'];
-        $fileListText .= "  • $label\r\n";
-        $fileListHtml .= '<li>' . htmlspecialchars($label) . '</li>';
 
         if (empty($pr['Filesystem_Path'])) {
             $warnings[] = "PDF \"$label\" has no Filesystem_Path on its Blob row — Drive-only blobs aren't supported as attachments yet. Skipped.";
@@ -72,16 +75,26 @@ function load_commit_pdf_attachments(PDO $pdo, int $commitId): array
             $warnings[] = "PDF \"$label\" file_get_contents returned false ($abs). Skipped.";
             continue;
         }
+        // SmtpMailer reads name/mime/data (NOT filename/content) — using the
+        // wrong keys silently produces an attachment of empty bytes named
+        // "attachment.bin", which was the real reason DMS PDFs were never
+        // landing in the recipient's email.
         $attachments[] = [
-            'filename' => $label !== '' ? $label : ($pr['Sha256'] . '.pdf'),
-            'content'  => $bytes,
-            'mime'     => 'application/pdf',
+            'name' => $label !== '' ? $label : ($pr['Sha256'] . '.pdf'),
+            'mime' => 'application/pdf',
+            'data' => $bytes,
         ];
+        // Only now (post-success) does this file appear in the body list.
+        $fileListText .= "  • $label\r\n";
+        $fileListHtml .= '<li>' . htmlspecialchars($label) . '</li>';
     }
     $fileListHtml .= '</ul>';
-    if ($totalRegistered === 0) {
-        $fileListText = "  (no PDFs attached — review the model summary via the link)\r\n";
-        $fileListHtml = '<p style="font-size:13px;color:#888">(no PDFs attached — review the model summary via the link)</p>';
+    if (empty($attachments)) {
+        // Either no PDFs registered at all, or every one failed to attach.
+        // Either way the recipient sees the same neutral message — they
+        // have the review-link to inspect the model.
+        $fileListText = "  (review the drawings + model summary via the link)\r\n";
+        $fileListHtml = '<p style="font-size:13px;color:#888">(review the drawings + model summary via the link)</p>';
     }
 
     return [

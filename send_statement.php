@@ -181,16 +181,13 @@ try {
         . '</tr></thead><tbody>'
         . implode('', $linesHtml)
         . '</tbody></table>';
-    if (!empty($missingPdf)) {
-        $invoiceTableHtml .= '<p style="color:#a00">PDF attachments could not be retrieved for: '
-                          . implode(', ', array_map(fn($n) => 'CAD-' . str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf))
-                          . '. Please reply to this email if you need copies.</p>';
-    }
     $linesTextStr = implode("\r\n", $linesText);
+    // PDF-retrieval failures are silent for the recipient — the "View / pay
+    // online" link on each row is still there so they can download the PDF
+    // themselves from Xero. Surfaced internally below via flash + error_log.
     if (!empty($missingPdf)) {
-        $linesTextStr .= "\r\n(PDF attachments could not be retrieved for: CAD-"
-                       . implode(', CAD-', array_map(fn($n) => str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf))
-                       . ". Please contact us if you need copies.)";
+        $missingStr = implode(', ', array_map(fn($n) => 'CAD-' . str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf));
+        error_log("send_statement: PDF retrieval failed for $missingStr (to: {$cli['Client_Name']}) — email sent without those attachments.");
     }
 
     $vars = array_merge(default_email_boilerplate(), [
@@ -236,17 +233,27 @@ try {
         $markedCount = 0;
     }
 
+    // Internal-only warning string when some PDFs couldn't be retrieved.
+    // The recipient gets no note about it — they have the "View / pay online"
+    // link to pull each invoice from Xero directly if they want.
+    $pdfWarn = '';
+    if (!empty($missingPdf)) {
+        $missingStr = implode(', ', array_map(fn($n) => 'CAD-' . str_pad((string)$n, 5, '0', STR_PAD_LEFT), $missingPdf));
+        $pdfWarn = ' ⚠ PDF retrieval failed for ' . count($missingPdf) . ' invoice(s) (' . $missingStr . ') — these were NOT attached but the recipient still has the Xero "View / pay online" link per row. Check Xero connection if this recurs.';
+    }
+
     if ($isTest) {
         echo "<!DOCTYPE html><html><body style=\"font-family:Arial;padding:18px\">"
            . "<h2 style=\"color:#7a4d00\">&#129514; Test statement sent</h2>"
            . "<p>Diverted to <code>" . htmlspecialchars($billto) . "</code>. "
            . count($invoices) . " invoice(s), " . count($attachments) . " PDF(s) attached. "
            . "Sent / Status_INV flags NOT updated.</p>"
+           . ($pdfWarn !== '' ? '<p style="background:#fff3cd;border:1px solid #c8a52e;color:#7a5a00;padding:8px 12px;border-radius:3px">' . htmlspecialchars(trim($pdfWarn)) . '</p>' : '')
            . "<p><a href=\"" . htmlspecialchars($back) . "\">&larr; Back</a></p>"
            . "</body></html>";
         exit;
     }
-    $_SESSION['xero_flash'] = "Statement emailed to {$billto} (" . count($invoices) . " invoice(s), " . count($attachments) . " PDF(s) attached, {$markedCount} newly marked Sent).";
+    $_SESSION['xero_flash'] = "Statement emailed to {$billto} (" . count($invoices) . " invoice(s), " . count($attachments) . " PDF(s) attached, {$markedCount} newly marked Sent)." . $pdfWarn;
 } catch (Exception $e) {
     $_SESSION['xero_flash_err'] = 'Statement email failed: ' . $e->getMessage();
 }

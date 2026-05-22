@@ -384,13 +384,16 @@ foreach ($byClient as $cid => $g) {
 
         try {
             $maxDays = max(array_map(fn($r) => (int)$r['days_overdue'], $overdueRows));
-            sendOverdueStatement($pdo, $first, $overdueRows, $toAddrs, $subjectTestPrefix);
+            $missedPdfNos = sendOverdueStatement($pdo, $first, $overdueRows, $toAddrs, $subjectTestPrefix);
             if (!$testMode) {
                 meta_set($pdo, 'reminder_statement_last_' . $cid, date('Y-m-d H:i:s'));
                 foreach ($overdueRows as $r) {
                     $invNo = (int)$r['Invoice_No'];
                     meta_set($pdo, 'reminder_last_' . $invNo, date('Y-m-d H:i:s'));
-                    $sent[$invNo] = "covered in statement to {$toLabel} ({$maxDays}d worst-overdue)";
+                    $pdfNote = in_array('CAD-' . str_pad((string)$invNo, 5, '0', STR_PAD_LEFT), $missedPdfNos, true)
+                             ? ' ⚠ PDF NOT attached for this invoice (sent in statement body-only)'
+                             : '';
+                    $sent[$invNo] = "covered in statement to {$toLabel} ({$maxDays}d worst-overdue)" . $pdfNote;
                 }
             } else {
                 foreach ($overdueRows as $r) {
@@ -419,19 +422,22 @@ foreach ($byClient as $cid => $g) {
     if ($dryRun) { $sent[$invNo] = '(dry-run) would have reminded ' . $toLabel; continue; }
 
     try {
-        sendReminder($pdo, $r, $toAddrs, $subjectTestPrefix);
+        $pdfOk = sendReminder($pdo, $r, $toAddrs, $subjectTestPrefix);
+        $pdfNote = $pdfOk ? '' : ' ⚠ Xero PDF NOT attached (sent body-only; client has online-pay link)';
         if (!$testMode) {
             meta_set($pdo, 'reminder_last_' . $invNo, date('Y-m-d H:i:s'));
-            $sent[$invNo] = 'sent to ' . $toLabel . " ({$days}d overdue)";
+            $sent[$invNo] = 'sent to ' . $toLabel . " ({$days}d overdue)" . $pdfNote;
         } else {
-            $sent[$invNo] = "[TEST] reminder sent to {$toLabel} ({$days}d overdue, tone preview)";
+            $sent[$invNo] = "[TEST] reminder sent to {$toLabel} ({$days}d overdue, tone preview)" . $pdfNote;
         }
     } catch (Exception $e) {
         $skipped[$invNo] = 'FAILED: ' . $e->getMessage();
     }
 }
 
-function sendReminder(PDO $pdo, array $r, array $toAddrs, string $testPrefix = ''): void {
+/** Returns true if the Xero PDF was attached, false if it was missed
+ *  (email still goes out body-only; caller surfaces the miss in the report). */
+function sendReminder(PDO $pdo, array $r, array $toAddrs, string $testPrefix = ''): bool {
     $invNumStr = 'CAD-' . str_pad((string)$r['Invoice_No'], 5, '0', STR_PAD_LEFT);
     $name      = client_first_name($r['Contact'] ?? null);
     $days      = (int)$r['days_overdue'];
@@ -460,14 +466,37 @@ function sendReminder(PDO $pdo, array $r, array $toAddrs, string $testPrefix = '
     $text    = render_email_template(email_template_get($pdo, $tplKey, 'text'),    $vars);
     $html    = render_email_template(email_template_get($pdo, $tplKey, 'html'),    $vars);
 
+    // Attach the Xero PDF for this invoice. Soft-fails SILENTLY for the
+    // recipient if the PDF fetch errors — the email still goes out, the
+    // online_url link in the template still works, and the client can
+    // pull the PDF from Xero themselves. The failure is logged for staff
+    // via error_log + surfaced in the run's $skipped/$sent report.
+    $attachments = [];
+    if (!empty($r['Xero_InvoiceID'])) {
+        try {
+            require_once __DIR__ . '/xero_client.php';
+            $xc = new XeroClient($pdo);
+            $pdf = $xc->getInvoicePdf($r['Xero_InvoiceID']);
+            $attachments[] = [
+                'name' => $invNumStr . '.pdf',
+                'mime' => 'application/pdf',
+                'data' => $pdf,
+            ];
+        } catch (Exception $e) {
+            error_log("sendReminder: Xero PDF fetch failed for $invNumStr — sending body-only. " . $e->getMessage());
+        }
+    }
+
     SmtpMailer::send([
-        'to'       => $toAddrs,
-        'bcc'      => ['accounts@cadviz.co.nz'],
-        'reply_to' => 'accounts@cadviz.co.nz',
-        'subject'  => $testPrefix . $subject,
-        'text'     => $text,
-        'html'     => $html,
+        'to'          => $toAddrs,
+        'bcc'         => ['accounts@cadviz.co.nz'],
+        'reply_to'    => 'accounts@cadviz.co.nz',
+        'subject'     => $testPrefix . $subject,
+        'text'        => $text,
+        'html'        => $html,
+        'attachments' => $attachments,
     ]);
+    return !empty($attachments);
 }
 
 /**
@@ -477,7 +506,11 @@ function sendReminder(PDO $pdo, array $r, array $toAddrs, string $testPrefix = '
  * off the WORST-overdue invoice in the bundle (so a client with one 60d
  * + four 7d invoices gets a final-notice tone, not a gentle one).
  */
-function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, array $toAddrs, string $testPrefix = ''): void {
+/** Returns the list of Invoice_No values whose PDFs could not be attached
+ *  (statement email still went out — every row in the table has an online
+ *  link so the recipient is never stranded). Caller surfaces these in the
+ *  run report so staff can see which invoices missed an attachment. */
+function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, array $toAddrs, string $testPrefix = ''): array {
     require_once __DIR__ . '/xero_client.php';
     $xc = new XeroClient($pdo);
 
@@ -546,8 +579,13 @@ function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, ar
         . '</tr></thead><tbody>'
         . implode('', $linesHtml)
         . '</tbody></table>';
+    // PDF-retrieval failures are SILENT for the recipient — every row in
+    // the table already carries an "Online" link to view/pay each invoice
+    // in Xero, so they're not stranded. The miss is recorded for staff
+    // via error_log + propagated to the run report below.
     if (!empty($missingPdf)) {
-        $invoiceTableHtml .= '<p style="color:#a00">PDF attachments could not be retrieved for: ' . htmlspecialchars(implode(', ', $missingPdf)) . '. Please reply to this email if you need copies.</p>';
+        error_log("sendOverdueStatement: PDF retrieval failed for " . implode(', ', $missingPdf)
+            . " (to: $clientName) — email sent without those attachments.");
     }
 
     $tplKey = 'overdue_statement_' . ($tone === 'reminder' ? 'gentle' : $tone);
@@ -558,7 +596,7 @@ function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, ar
         'total_due'         => $totalStr,
         'days_overdue'      => (string)$maxDays,
         'invoice_table_html'=> $invoiceTableHtml,
-        'invoice_lines_text'=> implode("\r\n", $linesText) . (!empty($missingPdf) ? "\r\n(PDF attachments could not be retrieved for: " . implode(', ', $missingPdf) . ". Please reply if you need copies.)" : ''),
+        'invoice_lines_text'=> implode("\r\n", $linesText),
         'example_ref'       => $exampleRef,
     ]);
 
@@ -575,6 +613,7 @@ function sendOverdueStatement(PDO $pdo, array $clientRow, array $overdueRows, ar
         'html'        => $html,
         'attachments' => $attachments,
     ]);
+    return $missingPdf;
 }
 
 // ── Output ────────────────────────────────────────────────────────────────

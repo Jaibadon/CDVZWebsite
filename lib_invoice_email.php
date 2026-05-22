@@ -87,7 +87,18 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     }
 
     $client = new XeroClient($pdo);
-    $pdf    = $client->getInvoicePdf($row['Xero_InvoiceID']);
+    // PDF fetch is best-effort. If Xero is having a wobble, send the email
+    // body-only — the recipient still gets {online_url} in the template to
+    // pull the PDF directly from Xero, and we surface the miss to staff
+    // via error_log + the return-message suffix below.
+    $pdf    = null;
+    $pdfMissReason = '';
+    try {
+        $pdf = $client->getInvoicePdf($row['Xero_InvoiceID']);
+    } catch (Exception $e) {
+        $pdfMissReason = $e->getMessage();
+        error_log("send_invoice_email_via_smtp: Xero PDF fetch failed for invoice {$invoiceNo} — sending body-only. " . $e->getMessage());
+    }
 
     // Fetch the live invoice from Xero in the same round-trip so the
     // amount we put in the email body matches the PDF the client sees.
@@ -157,6 +168,14 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
     $textBody = render_email_template(email_template_get($pdo, 'invoice', 'text'),    $vars);
     $htmlBody = render_email_template(email_template_get($pdo, 'invoice', 'html'),    $vars);
 
+    $attachments = [];
+    if ($pdf !== null && $pdf !== '') {
+        $attachments[] = [
+            'name' => "{$invNumStr}.pdf",
+            'mime' => 'application/pdf',
+            'data' => $pdf,
+        ];
+    }
     SmtpMailer::send([
         'to'          => $toAddrs,
         'cc'          => $isTest ? [] : ($ccErik ? ['erik@cadviz.co.nz'] : []),
@@ -165,11 +184,7 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
         'subject'     => ($isTest ? '[TEST] ' : '') . $subject,
         'text'        => $textBody,
         'html'        => $htmlBody,
-        'attachments' => [[
-            'name' => "{$invNumStr}.pdf",
-            'mime' => 'application/pdf',
-            'data' => $pdf,
-        ]],
+        'attachments' => $attachments,
     ]);
 
     if (!$isTest) {
@@ -180,5 +195,12 @@ function send_invoice_email_via_smtp(PDO $pdo, int $invoiceNo, bool $ccErik = fa
         $pdo->prepare("UPDATE Invoices SET Sent = 1, date_sent = NOW(), Status_INV = 2 WHERE Invoice_No = ?")->execute([$invoiceNo]);
     }
 
-    return ($isTest ? '[TEST] ' : '') . "Invoice {$invNumStr} sent from accounts@cadviz.co.nz to " . implode(', ', $toAddrs) . '.';
+    $msg = ($isTest ? '[TEST] ' : '') . "Invoice {$invNumStr} sent from accounts@cadviz.co.nz to " . implode(', ', $toAddrs) . '.';
+    if ($pdfMissReason !== '') {
+        // Surfaced to the sender (e.g. flashed by the calling button handler).
+        // The recipient saw no mention of the missing attachment — they have
+        // {online_url} in the template body to pull the PDF from Xero themselves.
+        $msg .= " ⚠ Xero PDF could not be retrieved and was NOT attached (" . $pdfMissReason . "). Check Xero connection if this recurs.";
+    }
+    return $msg;
 }
