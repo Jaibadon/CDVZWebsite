@@ -67,10 +67,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'resen
         if (!defined('TRANSMITTAL_RESEND_LIBRARY_ONLY')) define('TRANSMITTAL_RESEND_LIBRARY_ONLY', true);
         require_once __DIR__ . '/transmittal_resend.php';
         $rr = resend_transmittal($pdo, $tid, $user, true);
-        $_SESSION['cd_flash'] = 'Re-sent transmittal #' . $tid . ' to ' . count($rr['sent'])
+        $msg = 'Re-sent transmittal #' . $tid . ' to ' . count($rr['sent'])
             . ' un-acknowledged recipient(s)'
             . ($rr['skipped_acked'] ? ', skipped ' . $rr['skipped_acked'] . ' already-acked' : '')
-            . (count($rr['failed']) ? ', ' . count($rr['failed']) . ' failed' : '') . '.';
+            . (count($rr['failed']) ? ', ' . count($rr['failed']) . ' failed' : '')
+            . '. PDFs attached: ' . ($rr['pdfs_attached'] ?? 0) . ' of ' . ($rr['pdfs_registered'] ?? 0) . '.';
+        if (!empty($rr['warnings'])) {
+            $msg .= "\nPDF warnings:\n  • " . implode("\n  • ", $rr['warnings']);
+        }
+        $_SESSION['cd_flash'] = $msg;
     } catch (Exception $e) {
         $_SESSION['cd_flash'] = 'Re-send failed: ' . $e->getMessage();
     }
@@ -174,8 +179,10 @@ th { background:#f4f4f4; }
 
 <div class="page">
 
-  <?php if ($resendFlash): ?>
-    <div style="background:#d6f5d6;border:1px solid #1a6b1a;color:#1a6b1a;padding:8px 12px;border-radius:4px;margin:10px 0"><?= htmlspecialchars($resendFlash) ?></div>
+  <?php if ($resendFlash):
+      $hasWarn = strpos($resendFlash, 'warnings') !== false || strpos($resendFlash, 'failed') !== false;
+  ?>
+    <div style="background:<?= $hasWarn ? '#fff3cd' : '#d6f5d6' ?>;border:1px solid <?= $hasWarn ? '#c8a52e' : '#1a6b1a' ?>;color:<?= $hasWarn ? '#7a5a00' : '#1a6b1a' ?>;padding:8px 12px;border-radius:4px;margin:10px 0;white-space:pre-line"><?= htmlspecialchars($resendFlash) ?></div>
   <?php endif; ?>
 
   <div class="card">

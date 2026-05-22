@@ -130,30 +130,16 @@ function send_manual_email(
     }
     if (empty($recips)) throw new Exception('No valid recipients (pick stakeholders and/or enter valid extra emails).');
 
-    // Optional PDF attachments
-    $attachments = []; $pdfNames = [];
+    // Optional PDF attachments via the shared helper (returns explicit
+    // warnings if any registered PDF can't be loaded — archive path unset,
+    // file missing, unreadable, etc. — instead of silently dropping it).
+    $attachments = []; $pdfNames = []; $pdfWarnings = [];
     if ($attachPdfs) {
-        $archiveDir = (defined('CADVIZ_BLOB_ARCHIVE_PATH') && CADVIZ_BLOB_ARCHIVE_PATH !== '')
-            ? rtrim(CADVIZ_BLOB_ARCHIVE_PATH, '/\\') : '';
-        if ($archiveDir !== '') {
-            $pq = $pdo->prepare(
-                "SELECT cb.Path_In_Project, b.Filesystem_Path
-                   FROM Commit_Blobs cb INNER JOIN Blobs b ON b.Sha256 = cb.Blob_Sha256
-                  WHERE cb.Commit_ID = ? AND cb.Role = 'pdf_output' ORDER BY cb.Path_In_Project"
-            );
-            $pq->execute([$commitId]);
-            foreach ($pq->fetchAll() as $pr) {
-                $abs = $archiveDir . DIRECTORY_SEPARATOR . (string)$pr['Filesystem_Path'];
-                if (!empty($pr['Filesystem_Path']) && is_file($abs)) {
-                    $attachments[] = [
-                        'filename' => (string)$pr['Path_In_Project'],
-                        'content'  => file_get_contents($abs),
-                        'mime'     => 'application/pdf',
-                    ];
-                    $pdfNames[] = (string)$pr['Path_In_Project'];
-                }
-            }
-        }
+        require_once __DIR__ . '/commit_pdf_helper.php';
+        $pdfPack = load_commit_pdf_attachments($pdo, $commitId);
+        $attachments = $pdfPack['attachments'];
+        $pdfWarnings = $pdfPack['warnings'];
+        foreach ($attachments as $a) $pdfNames[] = $a['filename'];
     }
 
     // If magic links requested, create ONE Transmittals row up-front; each
@@ -264,6 +250,7 @@ function send_manual_email(
         'sent'           => $sent,
         'failed'         => $failed,
         'pdf_count'      => count($attachments),
+        'warnings'       => $pdfWarnings,
         'transmittal_id' => $isTest ? null : $transmittalId,
         'linked_count'   => $linkedCount,
         'test'           => $isTest,

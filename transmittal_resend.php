@@ -73,29 +73,15 @@ function resend_transmittal(
     $tags = array_column($tagStmt->fetchAll(), 'Clause_Code');
     $nzbcTags = empty($tags) ? '(none flagged)' : implode(', ', $tags);
 
-    // PDF attachments (same archive as the original send)
-    $attachments = []; $fileListText = ''; $fileListHtml = '<ul style="font-size:13px;margin:4px 0">';
-    $archiveDir = (defined('CADVIZ_BLOB_ARCHIVE_PATH') && CADVIZ_BLOB_ARCHIVE_PATH !== '')
-        ? rtrim(CADVIZ_BLOB_ARCHIVE_PATH, '/\\') : '';
-    $pq = $pdo->prepare(
-        "SELECT cb.Path_In_Project, b.Filesystem_Path
-           FROM Commit_Blobs cb INNER JOIN Blobs b ON b.Sha256 = cb.Blob_Sha256
-          WHERE cb.Commit_ID = ? AND cb.Role = 'pdf_output' ORDER BY cb.Path_In_Project"
-    );
-    $pq->execute([$commitId]);
-    foreach ($pq->fetchAll() as $pr) {
-        $label = (string)$pr['Path_In_Project'];
-        $fileListText .= "  • $label\r\n";
-        $fileListHtml .= '<li>' . htmlspecialchars($label) . '</li>';
-        if ($archiveDir !== '' && !empty($pr['Filesystem_Path'])) {
-            $abs = $archiveDir . DIRECTORY_SEPARATOR . $pr['Filesystem_Path'];
-            if (is_file($abs)) {
-                $attachments[] = ['filename' => $label, 'content' => file_get_contents($abs), 'mime' => 'application/pdf'];
-            }
-        }
-    }
-    $fileListHtml .= '</ul>';
-    if (empty($attachments)) { $fileListText = "  (no PDFs)\r\n"; $fileListHtml = '<p style="font-size:13px;color:#888">(no PDFs)</p>'; }
+    // PDF attachments via the shared helper (returns explicit warnings if
+    // any registered PDF can't be loaded — archive path unset, file missing,
+    // etc. — instead of silently dropping it).
+    require_once __DIR__ . '/commit_pdf_helper.php';
+    $pdfPack = load_commit_pdf_attachments($pdo, $commitId);
+    $attachments  = $pdfPack['attachments'];
+    $fileListText = $pdfPack['file_list_text'];
+    $fileListHtml = $pdfPack['file_list_html'];
+    $pdfWarnings  = $pdfPack['warnings'];
 
     // Sender reply-to
     $senderEmail = ''; $senderName = $sentBy;
@@ -190,7 +176,15 @@ function resend_transmittal(
         } catch (Exception $e) { /* best-effort */ }
     }
 
-    return ['sent' => $sent, 'failed' => $failed, 'skipped_acked' => $skippedAcked, 'test' => $isTest];
+    return [
+        'sent'            => $sent,
+        'failed'          => $failed,
+        'skipped_acked'   => $skippedAcked,
+        'warnings'        => $pdfWarnings,
+        'pdfs_attached'   => $pdfPack['attached'],
+        'pdfs_registered' => $pdfPack['total_registered'],
+        'test'            => $isTest,
+    ];
 }
 
 if (defined('TRANSMITTAL_RESEND_LIBRARY_ONLY')) return;

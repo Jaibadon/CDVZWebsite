@@ -70,42 +70,16 @@ function send_transmittal(
     $tags = array_column($tagStmt->fetchAll(), 'Clause_Code');
     $nzbcTags = empty($tags) ? '(none flagged)' : implode(', ', $tags);
 
-    // ── PDF attachments (from the blob archive) ──────────────────────────
-    $pdfStmt = $pdo->prepare(
-        "SELECT cb.Path_In_Project, b.Sha256, b.Filesystem_Path, b.Size_Bytes
-           FROM Commit_Blobs cb
-           INNER JOIN Blobs b ON b.Sha256 = cb.Blob_Sha256
-          WHERE cb.Commit_ID = ? AND cb.Role = 'pdf_output'
-          ORDER BY cb.Path_In_Project"
-    );
-    $pdfStmt->execute([$commitId]);
-    $pdfRows = $pdfStmt->fetchAll();
-
-    $attachments = [];
-    $fileListText = '';
-    $fileListHtml = '<ul style="font-size:13px;margin:4px 0">';
-    $archiveDir = (defined('CADVIZ_BLOB_ARCHIVE_PATH') && CADVIZ_BLOB_ARCHIVE_PATH !== '')
-        ? rtrim(CADVIZ_BLOB_ARCHIVE_PATH, '/\\') : '';
-    foreach ($pdfRows as $pr) {
-        $label = (string)$pr['Path_In_Project'];
-        $fileListText .= "  • $label\r\n";
-        $fileListHtml .= '<li>' . htmlspecialchars($label) . '</li>';
-        if ($archiveDir !== '' && !empty($pr['Filesystem_Path'])) {
-            $abs = $archiveDir . DIRECTORY_SEPARATOR . $pr['Filesystem_Path'];
-            if (is_file($abs)) {
-                $attachments[] = [
-                    'filename' => $label ?: ($pr['Sha256'] . '.pdf'),
-                    'content'  => file_get_contents($abs),
-                    'mime'     => 'application/pdf',
-                ];
-            }
-        }
-    }
-    $fileListHtml .= '</ul>';
-    if (empty($pdfRows)) {
-        $fileListText = "  (no PDFs attached — review the model summary via the link)\r\n";
-        $fileListHtml = '<p style="font-size:13px;color:#888">(no PDFs attached — review the model summary via the link)</p>';
-    }
+    // ── PDF attachments (centralised — see commit_pdf_helper.php) ────────
+    // Returns explicit warnings when a registered PDF can't be loaded
+    // (archive path unset, file missing, unreadable, etc.) so silent drops
+    // stop happening.
+    require_once __DIR__ . '/commit_pdf_helper.php';
+    $pdfPack = load_commit_pdf_attachments($pdo, $commitId);
+    $attachments  = $pdfPack['attachments'];
+    $fileListText = $pdfPack['file_list_text'];
+    $fileListHtml = $pdfPack['file_list_html'];
+    $pdfWarnings  = $pdfPack['warnings'];
 
     // ── Sender reply-to: prefer the staff member's real email ────────────
     $senderEmail = '';
@@ -206,6 +180,7 @@ function send_transmittal(
         'transmittal_id' => $isTest ? null : $transmittalId,
         'sent'           => $sent,
         'failed'         => $failed,
+        'warnings'       => $pdfWarnings,
         'test'           => $isTest,
         'pdf_count'      => count($attachments),
     ];
