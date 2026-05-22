@@ -120,6 +120,7 @@ $pdo = get_db();
   <tr><td align="Left"><a onMouseOver="window.status='View list of Outstanding Invoices'; return true" onMouseOut="window.status=''; return true" href="invoice_list.php"><font color="#FFFFFF">Current Invoice List</font></a></td></tr>
   <tr><td width="652" align="Left"><a onMouseOver="window.status='View list of Old Invoices'; return true" onMouseOut="window.status=''; return true" href="invoice_archive.php"><font color="#FFFFFF">Archived Invoices</font></a></td></tr>
   <tr><td width="652" align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="monthly_invoicing.php"><font color="#FFFFFF">Monthly Invoicing (12mths)</font></a></td></tr>
+  <tr><td width="652" align="Left"><a onMouseOver="window.status='Revenue by employee, date range + council-fee disbursement filter (for PI insurance)'; return true" onMouseOut="window.status=''; return true" href="revenue_report.php"><font color="#FFFFFF">Revenue Report (by employee, FY-to-date, disbursement filter)</font></a></td></tr>
   <tr><td width="652" align="Left"><a onMouseOver="window.status='Edit the wording of every outbound email'; return true" onMouseOut="window.status=''; return true" href="email_templates.php"><font color="#FFFFFF">Email Templates (edit wording + per-tone tests)</font></a></td></tr>
   <tr>
     <td width="652" align="Left"><font color="#FFFFFF">Generate Invoice for:
