@@ -20,9 +20,9 @@
  * api/transmittal_send.php). Script mode (?test=1&...) is a manual tester.
  */
 
-require_once __DIR__ . '/db_connect.php';
-require_once __DIR__ . '/helpers.php';
-require_once __DIR__ . '/smtp_mailer.php';
+require_once __DIR__ . '/../db_connect.php';
+require_once __DIR__ . '/../helpers.php';
+require_once __DIR__ . '/../smtp_mailer.php';
 
 /**
  * @param int[]  $recipientStakeholderIds  Project_Stakeholders.Stakeholder_ID to send to
@@ -116,9 +116,11 @@ function send_transmittal(
 
     $baseUrl = transmittal_base_url();
 
+    // Recipients of a transmittal are required approvers by default — their
+    // approval/request-changes decision gates the issue (see dms/approval.php).
     $insRecipient = $pdo->prepare(
-        "INSERT INTO Transmittal_Recipients (Transmittal_ID, Stakeholder_ID, Magic_Token, Sent_At, View_Count)
-         VALUES (?, ?, ?, NOW(), 0)"
+        "INSERT INTO Transmittal_Recipients (Transmittal_ID, Stakeholder_ID, Is_Required, Magic_Token, Sent_At, View_Count)
+         VALUES (?, ?, 1, ?, NOW(), 0)"
     );
 
     $sent = []; $failed = [];
@@ -139,7 +141,7 @@ function send_transmittal(
             'sender_name'      => $senderName,
             'nzbc_tags'        => $nzbcTags,
             'file_list'        => $fileListText,
-            'review_url'       => $baseUrl . 'transmittal_view.php?t=' . $token,
+            'review_url'       => $baseUrl . 'dms/transmittal_view.php?t=' . $token,
         ];
         $varsHtml = $vars;
         $varsHtml['file_list'] = $fileListHtml;
@@ -201,7 +203,7 @@ function transmittal_base_url(): string
 if (defined('TRANSMITTAL_SEND_LIBRARY_ONLY')) return;
 
 // ── Script mode: manual tester ───────────────────────────────────────────
-require_once __DIR__ . '/auth_check.php';
+require_once __DIR__ . '/../auth_check.php';
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403); die('Admin only.');
 }

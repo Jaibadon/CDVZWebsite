@@ -22,8 +22,8 @@
  * by default for files in Workspace shared drives).
  */
 
-if (!defined('GOOGLE_OAUTH_CLIENT_ID') && file_exists(__DIR__ . '/config.php')) {
-    require_once __DIR__ . '/config.php';
+if (!defined('GOOGLE_OAUTH_CLIENT_ID') && file_exists(__DIR__ . '/../config.php')) {
+    require_once __DIR__ . '/../config.php';
 }
 
 class DriveOAuthException extends \Exception {}

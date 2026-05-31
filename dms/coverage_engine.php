@@ -42,27 +42,24 @@
 
 if (!function_exists('run_coverage_rules')) {
 
-function run_coverage_rules(PDO $pdo, int $commitId, ?int $parentCommitId): array
+function run_coverage_rules(PDO $pdo, int $commitId, ?int $parentCommitId, ?array $precomputedDiff = null): array
 {
     $rules = $pdo->query("SELECT * FROM Coverage_Rules WHERE Active = 1")->fetchAll(PDO::FETCH_ASSOC);
     if (empty($rules)) return ['firings'=>0, 'tags'=>[], 'details'=>[], 'errors'=>[]];
 
     $errors = [];
 
-    // Build per-commit snapshots — one SQL query each for elements, one for params
-    try {
-        $currentSnap = load_commit_snapshot($pdo, $commitId);
-    } catch (Exception $e) {
-        return ['firings'=>0, 'tags'=>[], 'details'=>[], 'errors'=>['Load current snapshot failed: ' . $e->getMessage()]];
+    // Reuse the diff commit_create already built for Commit_Diffs, else build it
+    // here (standalone call). Either way snapshots load once per commit.
+    if ($precomputedDiff !== null) {
+        $diff = $precomputedDiff;
+    } else {
+        try {
+            $diff = compute_commit_diff($pdo, $commitId, $parentCommitId);
+        } catch (Exception $e) {
+            return ['firings'=>0, 'tags'=>[], 'details'=>[], 'errors'=>['Diff build failed: ' . $e->getMessage()]];
+        }
     }
-
-    $parentSnap = ['elements' => [], 'params' => []];
-    if ($parentCommitId) {
-        try { $parentSnap = load_commit_snapshot($pdo, $parentCommitId); }
-        catch (Exception $e) { $errors[] = 'Load parent snapshot failed: ' . $e->getMessage(); }
-    }
-
-    $diff = compute_element_diff($currentSnap, $parentSnap);
 
     $firings = 0;
     $tagsSet = [];   // Clause_Code => true
@@ -135,7 +132,9 @@ function run_coverage_rules(PDO $pdo, int $commitId, ?int $parentCommitId): arra
 function load_commit_snapshot(PDO $pdo, int $commitId): array
 {
     $stmt = $pdo->prepare(
-        "SELECT Element_Instance_ID, Ifc_Guid, Category, Name, Type_Name, Level_Name
+        "SELECT Element_Instance_ID,
+                COALESCE(Element_Uid, Ifc_Guid) AS Guid,
+                Category, Name, Type_Name, Level_Name, Geometry_Hash
            FROM Element_Instances
           WHERE Commit_ID = ?"
     );
@@ -143,15 +142,16 @@ function load_commit_snapshot(PDO $pdo, int $commitId): array
 
     $elements = [];
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $e) {
-        $guid = $e['Ifc_Guid'];
+        $guid = $e['Guid'];
         if (!$guid) continue;
         $elements[$guid] = [
             'element_instance_id' => (int)$e['Element_Instance_ID'],
-            'ifc_guid'            => $guid,
+            'ifc_guid'            => $guid,   // unified identity (Element_Uid or Ifc_Guid)
             'category'            => (string)($e['Category'] ?? ''),
             'name'                => $e['Name'],
             'type_name'           => $e['Type_Name'],
             'level'               => $e['Level_Name'],
+            'geometry_hash'       => $e['Geometry_Hash'],
         ];
     }
 
@@ -160,7 +160,7 @@ function load_commit_snapshot(PDO $pdo, int $commitId): array
     // wrong name here previously made the whole snapshot load throw, which
     // silently disabled ALL coverage rules.
     $stmt = $pdo->prepare(
-        "SELECT ei.Ifc_Guid, ep.Param_Set, ep.Param_Name, ep.Param_Value
+        "SELECT COALESCE(ei.Element_Uid, ei.Ifc_Guid) AS Guid, ep.Param_Set, ep.Param_Name, ep.Param_Value
            FROM Element_Parameters ep
            INNER JOIN Element_Instances ei ON ei.Element_Instance_ID = ep.Element_Instance_ID
           WHERE ei.Commit_ID = ?"
@@ -172,7 +172,7 @@ function load_commit_snapshot(PDO $pdo, int $commitId): array
     // other. The \x1f unit-separator can't appear in a real PSet/param name.
     $params = [];
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $p) {
-        $guid = $p['Ifc_Guid'];
+        $guid = $p['Guid'];
         if (!$guid) continue;
         if (!isset($params[$guid])) $params[$guid] = [];
         $key = strtolower((string)($p['Param_Set'] ?? '')) . "\x1f" . strtolower((string)$p['Param_Name']);
@@ -220,15 +220,17 @@ function compute_element_diff(array $current, array $parent): array
             $prev = $parent['elements'][$guid];
             $prev['params'] = $parent['params'][$guid] ?? [];
             $changedParams = changed_param_names($prev['params'], $el['params']);
+            $geometryChanged = ((string)($prev['geometry_hash'] ?? '') !== (string)($el['geometry_hash'] ?? ''));
             $structuralChange = ($prev['category']  !== $el['category'])
                              || ($prev['name']      !== $el['name'])
                              || ($prev['type_name'] !== $el['type_name'])
                              || ($prev['level']     !== $el['level']);
-            if (!empty($changedParams) || $structuralChange) {
+            if (!empty($changedParams) || $structuralChange || $geometryChanged) {
                 $modified[] = [
-                    'current'        => $el,
-                    'parent'         => $prev,
-                    'changed_params' => $changedParams,
+                    'current'         => $el,
+                    'parent'          => $prev,
+                    'changed_params'  => $changedParams,
+                    'geometry_changed'=> $geometryChanged,
                 ];
             }
         }
@@ -248,6 +250,67 @@ function compute_element_diff(array $current, array $parent): array
  * param maps. Returns lowercased bare names so filter_coverage_param_changed
  * can do a simple in_array() against a rule's param_name.
  */
+/**
+ * Load current + parent snapshots and compute the structured diff. Shared by
+ * run_coverage_rules() and build_and_persist_commit_diff() so snapshots load
+ * via one code path.
+ */
+function compute_commit_diff(PDO $pdo, int $commitId, ?int $parentCommitId): array
+{
+    $current = load_commit_snapshot($pdo, $commitId);
+    $parent  = $parentCommitId ? load_commit_snapshot($pdo, $parentCommitId) : ['elements' => [], 'params' => []];
+    return compute_element_diff($current, $parent);
+}
+
+/**
+ * Compute + persist the changeset to Commit_Diffs / Commit_Diff_Params and
+ * return the diff (so the caller can pass it to run_coverage_rules without a
+ * second snapshot load). Identity is the unified COALESCE(Element_Uid, Ifc_Guid).
+ */
+function build_and_persist_commit_diff(PDO $pdo, int $commitId, ?int $parentCommitId): array
+{
+    $diff = compute_commit_diff($pdo, $commitId, $parentCommitId);
+
+    $insDiff = $pdo->prepare(
+        "INSERT INTO Commit_Diffs
+           (Commit_ID, Parent_Commit_ID, Element_Uid, Change_Type, Category, Name,
+            Changed_Param_Count, Geometry_Changed, Created_At)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())"
+    );
+    $insParam = $pdo->prepare(
+        "INSERT INTO Commit_Diff_Params
+           (Diff_ID, Param_Set, Param_Name, Old_Value, New_Value, Old_Num, New_Num)
+         VALUES (?, NULL, ?, ?, ?, ?, ?)"
+    );
+
+    foreach ($diff['added'] as $el) {
+        $insDiff->execute([$commitId, $parentCommitId, $el['ifc_guid'] ?? '', 'added',
+            $el['category'] ?? null, $el['name'] ?? null, 0, 0]);
+    }
+    foreach ($diff['removed'] as $el) {
+        $insDiff->execute([$commitId, $parentCommitId, $el['ifc_guid'] ?? '', 'removed',
+            $el['category'] ?? null, $el['name'] ?? null, 0, 0]);
+    }
+    foreach ($diff['modified'] as $m) {
+        $cur = $m['current']; $prev = $m['parent'];
+        $changed = $m['changed_params'] ?? [];
+        $insDiff->execute([$commitId, $parentCommitId, $cur['ifc_guid'] ?? '', 'modified',
+            $cur['category'] ?? null, $cur['name'] ?? null,
+            count($changed), !empty($m['geometry_changed']) ? 1 : 0]);
+        $diffId = (int)$pdo->lastInsertId();
+        foreach ($changed as $pname) {
+            $old = cov_param_value($prev['params'] ?? [], $pname);
+            $new = cov_param_value($cur['params'] ?? [], $pname);
+            $insParam->execute([
+                $diffId, $pname, $old, $new,
+                ($old !== null && is_numeric($old)) ? (float)$old : null,
+                ($new !== null && is_numeric($new)) ? (float)$new : null,
+            ]);
+        }
+    }
+    return $diff;
+}
+
 function changed_param_names(array $prev, array $curr): array
 {
     $changed = [];

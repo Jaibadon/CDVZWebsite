@@ -12,13 +12,14 @@
  *                              token-auth'd streamer for stakeholders).
  */
 
-require_once 'auth_check.php';
-require_once 'db_connect.php';
+require_once __DIR__ . '/../auth_check.php';
+require_once __DIR__ . '/../db_connect.php';
+require_once __DIR__ . '/approval.php';
 
 $pdo  = get_db();
 $user = $_SESSION['UserID'] ?? '';
 $commitId = (int)($_GET['commit_id'] ?? 0);
-if ($commitId <= 0) die('<p>Missing commit_id. <a href="projects.php">Back</a></p>');
+if ($commitId <= 0) die('<p>Missing commit_id. <a href="../projects.php">Back</a></p>');
 
 // ── PDF download (staff, session-auth'd) ─────────────────────────────────
 if (isset($_GET['dl'])) {
@@ -53,7 +54,7 @@ $c = $pdo->prepare(
 );
 $c->execute([$commitId]);
 $cm = $c->fetch();
-if (!$cm) die('<p>Commit not found. <a href="projects.php">Back</a></p>');
+if (!$cm) die('<p>Commit not found. <a href="../projects.php">Back</a></p>');
 
 $projId   = (int)$cm['Proj_ID'];
 $revision = trim((string)($cm['Revision_Label'] ?? '')) ?: ('#' . $commitId);
@@ -78,6 +79,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'resen
         $_SESSION['cd_flash'] = $msg;
     } catch (Exception $e) {
         $_SESSION['cd_flash'] = 'Re-send failed: ' . $e->getMessage();
+    }
+    header('Location: commit_detail.php?commit_id=' . $commitId);
+    exit;
+}
+
+// ── Issue / release the revision (gated by the per-project approval policy) ─
+// The gate guards the Status transition to a released state — NOT the sending
+// of review transmittals (those are how reviewers approve). See dms/approval.php.
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'issue') {
+    $target = (string)($_POST['target_status'] ?? '');
+    $valid  = ['wip', 'for_review', 'issued', 'for_council', 'for_construction', 'superseded'];
+    if (!in_array($target, $valid, true)) {
+        $_SESSION['cd_flash'] = 'Issue failed: invalid target status.';
+    } else {
+        $policy = cadviz_project_approval_policy($pdo, $projId);
+        $state  = cadviz_approval_state($pdo, $commitId);
+        $gate   = cadviz_issue_gate($policy, $target, $state);
+        if (!$gate['allowed']) {
+            $_SESSION['cd_flash'] = 'Cannot issue under "' . $policy . '" policy: ' . $gate['reason'];
+        } else {
+            $pdo->prepare("UPDATE Commits SET Status = ? WHERE Commit_ID = ?")->execute([$target, $commitId]);
+            $_SESSION['cd_flash'] = 'Revision status set to "' . $target . '".'
+                . ($gate['reason'] !== '' ? ' Note: ' . $gate['reason'] : '');
+        }
     }
     header('Location: commit_detail.php?commit_id=' . $commitId);
     exit;
@@ -135,6 +160,10 @@ $cc = $pdo->prepare("SELECT Author_Name, Body, Posted_At, Stakeholder_ID FROM Co
 $cc->execute([$commitId]);
 $comments = $cc->fetchAll();
 
+// Approval policy + rollup for the issue gate panel.
+$approvalPolicy = cadviz_project_approval_policy($pdo, $projId);
+$approvalState  = cadviz_approval_state($pdo, $commitId);
+
 function fmtdt($v): string { $t = $v ? strtotime((string)$v) : 0; return $t ? date('j M Y g:i a', $t) : '—'; }
 ?>
 <!DOCTYPE html>
@@ -143,7 +172,7 @@ function fmtdt($v): string { $t = $v ? strtotime((string)$v) : 0; return $t ? da
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Commit #<?= $commitId ?> — <?= htmlspecialchars((string)$cm['JobName']) ?></title>
-<link href="site.css" rel="stylesheet">
+<link href="../site.css" rel="stylesheet">
 <style>
 body { background:#fafafa; margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; font-size:13px; color:#222; }
 .topbar { background:#9B9B1B; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
@@ -172,8 +201,8 @@ th { background:#f4f4f4; }
   <h1>Commit #<?= $commitId ?> — <?= htmlspecialchars((string)$cm['JobName']) ?> · Rev <?= htmlspecialchars($revision) ?></h1>
   <div>
     <a href="commit_history.php?proj_id=<?= $projId ?>">← Project history</a>
-    &nbsp;·&nbsp; <a href="project_stages.php?proj_id=<?= $projId ?>">Stages</a>
-    &nbsp;·&nbsp; <a href="menu.php">Menu</a>
+    &nbsp;·&nbsp; <a href="../project_stages.php?proj_id=<?= $projId ?>">Stages</a>
+    &nbsp;·&nbsp; <a href="../menu.php">Menu</a>
   </div>
 </div>
 
@@ -196,6 +225,31 @@ th { background:#f4f4f4; }
       <div class="k">Revit backup</div><div><?= $cm['Rvt_Backup_Number'] !== null ? 'project.' . str_pad((string)$cm['Rvt_Backup_Number'], 4, '0', STR_PAD_LEFT) . '.rvt' : '<span class="muted">not recorded</span>' ?></div>
       <div class="k">Parent commit</div><div><?= $cm['Parent_Commit_ID'] ? '<a href="commit_detail.php?commit_id=' . (int)$cm['Parent_Commit_ID'] . '">#' . (int)$cm['Parent_Commit_ID'] . '</a>' : '<span class="muted">none (first commit)</span>' ?></div>
     </div>
+  </div>
+
+  <?php $st = $approvalState; $statuses = ['for_review'=>'For review (internal)', 'issued'=>'Issued', 'for_council'=>'For council', 'for_construction'=>'For construction']; ?>
+  <div class="card">
+    <h2>Issue / release</h2>
+    <div class="muted" style="margin-bottom:8px">
+      Policy <code><?= htmlspecialchars($approvalPolicy) ?></code> ·
+      required reviewers approved <strong><?= (int)$st['approved'] ?>/<?= (int)$st['required'] ?></strong>
+      <?= $st['changes_requested'] > 0 ? ' · <span style="color:#a86500">' . (int)$st['changes_requested'] . ' requested changes</span>' : '' ?>
+      · <?= $st['complete'] ? '<span class="badge-ok">approvals complete</span>' : '<span class="badge-wait">approvals pending</span>' ?>
+    </div>
+    <form method="post" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input type="hidden" name="action" value="issue">
+      <select name="target_status">
+        <?php foreach ($statuses as $sv => $sl): ?>
+          <option value="<?= $sv ?>"<?= (string)$cm['Status'] === $sv ? ' selected' : '' ?>><?= htmlspecialchars($sl) ?></option>
+        <?php endforeach; ?>
+      </select>
+      <button type="submit" class="btn" onclick="return confirm('Set this revision\'s status?');">Set status</button>
+      <span class="muted">current: <code><?= htmlspecialchars((string)$cm['Status']) ?></code></span>
+    </form>
+    <p class="muted" style="font-size:11px;margin:8px 0 0">
+      Releasing to council / construction is gated when reviewers haven't all approved (per the policy above).
+      Review links are always sendable — that's how reviewers approve. Set the policy per job on the project edit form.
+    </p>
   </div>
 
   <div class="card">

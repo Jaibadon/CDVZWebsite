@@ -33,7 +33,7 @@ unset($_SESSION['smtp_flash']);
 
 // Google Drive (separate OAuth grant — used for keynotes editor + future
 // server-side Drive file ops like PDF proxying for magic-link reviews)
-require_once 'drive_client.php';
+require_once __DIR__ . '/dms/drive_client.php';
 $driveConfigured = DriveClient::isConfigured();
 $driveConnected  = $driveConfigured;
 try { $driveConnected = $driveConfigured && DriveClient::isConnected(get_db()); } catch (Exception $e) { $driveConnected = false; }
@@ -351,7 +351,7 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
             </td>
             <td style="padding:4px 6px;text-align:right"><strong><?= (int)$uc['unacked'] ?></strong> of <?= (int)$uc['recips'] ?></td>
             <td style="padding:4px 6px;text-align:right;color:<?= ((int)$uc['oldest_days']) >= 14 ? '#a00' : '#7a2200' ?>"><strong><?= (int)$uc['oldest_days'] ?>d</strong></td>
-            <td style="padding:4px 6px"><a href="commit_detail.php?commit_id=<?= (int)$uc['Commit_ID'] ?>" style="color:#a00;font-weight:bold">view / chase →</a></td>
+            <td style="padding:4px 6px"><a href="dms/commit_detail.php?commit_id=<?= (int)$uc['Commit_ID'] ?>" style="color:#a00;font-weight:bold">view / chase →</a></td>
           </tr>
         <?php endforeach; ?>
         </tbody>

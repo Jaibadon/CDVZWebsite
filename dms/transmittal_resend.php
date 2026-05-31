@@ -17,9 +17,9 @@
  * Library mode: define TRANSMITTAL_RESEND_LIBRARY_ONLY before requiring.
  */
 
-require_once __DIR__ . '/db_connect.php';
-require_once __DIR__ . '/helpers.php';
-require_once __DIR__ . '/smtp_mailer.php';
+require_once __DIR__ . '/../db_connect.php';
+require_once __DIR__ . '/../helpers.php';
+require_once __DIR__ . '/../smtp_mailer.php';
 
 if (!function_exists('cadviz_base_url')) {
     function cadviz_base_url(): string
@@ -139,7 +139,7 @@ function resend_transmittal(
             'sender_name'      => $senderName,
             'nzbc_tags'        => $nzbcTags,
             'file_list'        => $fileListText,
-            'review_url'       => $baseUrl . 'transmittal_view.php?t=' . $r['Magic_Token'],
+            'review_url'       => $baseUrl . 'dms/transmittal_view.php?t=' . $r['Magic_Token'],
         ];
         $varsHtml = $vars; $varsHtml['file_list'] = $fileListHtml;
 
@@ -190,7 +190,7 @@ function resend_transmittal(
 if (defined('TRANSMITTAL_RESEND_LIBRARY_ONLY')) return;
 
 // ── Script-mode tester ───────────────────────────────────────────────────
-require_once __DIR__ . '/auth_check.php';
+require_once __DIR__ . '/../auth_check.php';
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403); die('Admin only.');
 }

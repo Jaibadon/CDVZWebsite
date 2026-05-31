@@ -135,7 +135,7 @@ function send_manual_email(
     // file missing, unreadable, etc. — instead of silently dropping it).
     $attachments = []; $pdfNames = []; $pdfWarnings = [];
     if ($attachPdfs) {
-        require_once __DIR__ . '/commit_pdf_helper.php';
+        require_once __DIR__ . '/dms/commit_pdf_helper.php';
         $pdfPack = load_commit_pdf_attachments($pdo, $commitId);
         $attachments = $pdfPack['attachments'];
         $pdfWarnings = $pdfPack['warnings'];
@@ -179,7 +179,7 @@ function send_manual_email(
         $linkText = ''; $linkHtml = ''; $linked = false; $token = null;
         if ($includeMagicLink) {
             $token = bin2hex(random_bytes(32));
-            $url = $baseUrl . 'transmittal_view.php?t=' . $token;
+            $url = $baseUrl . 'dms/transmittal_view.php?t=' . $token;
             $linkText = "\r\n\r\nReview & acknowledge this revision (private link, no login):\r\n{$url}\r\n";
             $linkHtml = '<p style="margin:18px 0"><a href="' . htmlspecialchars($url)
                       . '" style="background:#9B9B1B;color:#fff;padding:10px 18px;border-radius:3px;text-decoration:none;font-weight:bold">Review &amp; acknowledge this revision &rarr;</a></p>';

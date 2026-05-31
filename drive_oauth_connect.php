@@ -1,6 +1,6 @@
 <?php
 require_once 'auth_check.php';
-require_once 'drive_client.php';
+require_once __DIR__ . '/dms/drive_client.php';
 
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403); die('Admin only.');

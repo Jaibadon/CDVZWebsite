@@ -7,12 +7,12 @@
  * un-acked age). Links into commit_detail.php for the full record.
  */
 
-require_once 'auth_check.php';
-require_once 'db_connect.php';
+require_once __DIR__ . '/../auth_check.php';
+require_once __DIR__ . '/../db_connect.php';
 
 $pdo  = get_db();
 $proj_id = (int)($_GET['proj_id'] ?? 0);
-if ($proj_id <= 0) die('<p>Missing proj_id. <a href="projects.php">Back</a></p>');
+if ($proj_id <= 0) die('<p>Missing proj_id. <a href="../projects.php">Back</a></p>');
 
 $proj = $pdo->prepare("SELECT proj_id, JobName, Client_ID FROM Projects WHERE proj_id = ?");
 $proj->execute([$proj_id]);
@@ -70,7 +70,7 @@ function dtdays($v): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Revision history — <?= htmlspecialchars((string)$proj['JobName']) ?></title>
-<link href="site.css" rel="stylesheet">
+<link href="../site.css" rel="stylesheet">
 <style>
 body { background:#fafafa; margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; font-size:13px; color:#222; }
 .topbar { background:#9B9B1B; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
@@ -93,7 +93,7 @@ a.rev:hover { text-decoration:underline; }
 <body>
 <div class="topbar">
   <h1>📂 Revision history — <?= htmlspecialchars((string)$proj['JobName']) ?><?= $cl ? ' · ' . htmlspecialchars($cl) : '' ?></h1>
-  <div><a href="project_stages.php?proj_id=<?= $proj_id ?>">← Stages</a> &nbsp;·&nbsp; <a href="menu.php">Menu</a></div>
+  <div><a href="../project_stages.php?proj_id=<?= $proj_id ?>">← Stages</a> &nbsp;·&nbsp; <a href="../menu.php">Menu</a></div>
 </div>
 
 <div class="page">
