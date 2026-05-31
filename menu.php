@@ -41,6 +41,22 @@ $driveFlash      = $_SESSION['drive_flash'] ?? '';
 $driveFlashErr   = $_SESSION['drive_flash_err'] ?? '';
 unset($_SESSION['drive_flash'], $_SESSION['drive_flash_err']);
 
+// ── DMS auto-provisioning settings (admin) ───────────────────────────────
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_dms_provisioning' && $isAdmin) {
+    $pdo = get_db();
+    meta_set($pdo, 'dms_autoprovision', isset($_POST['dms_autoprovision']) ? '1' : '0');
+    $grp = (($_POST['dms_folder_grouping'] ?? 'client') === 'standalone') ? 'standalone' : 'client';
+    meta_set($pdo, 'dms_folder_grouping', $grp);
+    $rootRaw = trim((string)($_POST['dms_drive_root_folder_id'] ?? ''));
+    if ($rootRaw !== '') {
+        $fid = DriveClient::extractFolderId($rootRaw);
+        if ($fid) meta_set($pdo, 'dms_drive_root_folder_id', $fid);
+    }
+    $_SESSION['drive_flash'] = 'DMS auto-provisioning settings saved.';
+    header('Location: menu.php');
+    exit;
+}
+
 // Pending unapproved variations (admin alert)
 $pendingVariations = [];
 if ($isAdmin) {
@@ -400,6 +416,7 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
       <a class="btn secondary" href="staff_workload.php">Staff Workload</a>
       <a class="btn secondary" href="monthly_invoicing.php">Monthly Invoicing</a>
       <a class="btn secondary" href="task_analytics.php">Task Analytics</a>
+      <a class="btn" href="analytics.php" style="background:#5d3a9b">&#128202; Analytics Hub</a>
     </div>
 
     <?php if ($smtpFlash): ?><div style="background:#d6f5d6;border:1px solid #1a6b1a;color:#1a6b1a;padding:8px 12px;border-radius:4px;margin-bottom:12px"><?= htmlspecialchars($smtpFlash) ?></div><?php endif; ?>
@@ -428,6 +445,32 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
         <a class="btn secondary" href="drive_oauth_disconnect.php" style="background:#666">Disconnect Drive</a>
       <?php endif; ?>
     </div>
+
+    <?php
+      $apOn   = (meta_get(get_db(), 'dms_autoprovision', '0') === '1');
+      $apGrp  = (string)meta_get(get_db(), 'dms_folder_grouping', 'client');
+      $apRoot = (string)meta_get(get_db(), 'dms_drive_root_folder_id', '');
+    ?>
+    <h3>DMS &mdash; auto-provision project Drive folders</h3>
+    <form method="post" class="card" style="font-size:13px;max-width:660px;background:#fff;border:1px solid #ddd;border-radius:5px;padding:12px 14px">
+      <input type="hidden" name="action" value="save_dms_provisioning">
+      <label style="display:block;margin-bottom:10px">
+        <input type="checkbox" name="dms_autoprovision" value="1" <?= $apOn ? 'checked' : '' ?>>
+        <strong>Auto-create a Drive folder</strong> (with a <code>PDFS/</code> subfolder) when a new project is created
+      </label>
+      <label style="display:block;margin-bottom:10px">Grouping for new folders:
+        <select name="dms_folder_grouping">
+          <option value="client"     <?= $apGrp !== 'standalone' ? 'selected' : '' ?>>Under the client's folder</option>
+          <option value="standalone" <?= $apGrp === 'standalone' ? 'selected' : '' ?>>Standalone (directly under the root)</option>
+        </select>
+        <span style="color:#888">&mdash; if a client already has a folder, new jobs always join it regardless of this setting.</span>
+      </label>
+      <label style="display:block;margin-bottom:10px">Drive root folder (paste the Shared Drive folder URL or ID):<br>
+        <input type="text" name="dms_drive_root_folder_id" value="<?= htmlspecialchars($apRoot) ?>" style="width:90%;padding:5px;font-family:Consolas,Menlo,monospace" placeholder="https://drive.google.com/drive/folders/...">
+      </label>
+      <button type="submit" class="btn">Save provisioning settings</button>
+      <?php if (!$driveConnected): ?><div style="color:#a05a00;margin-top:8px">&#9888; Connect Google Drive above first &mdash; provisioning uses that connection (use a dedicated/shared account, not a personal Drive).</div><?php endif; ?>
+    </form>
 
     <h3>Xero</h3>
     <div class="grid">

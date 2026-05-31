@@ -131,6 +131,9 @@ unset($_SESSION['xero_flash'], $_SESSION['xero_flash_err']);
 <p></p>
 
 <?php
+// Council fee staffer (App_Meta, default 46) — to show net design revenue.
+$councilEmp = (int)meta_get($pdo, 'council_fee_employee_id', '46');
+
 // Last 12 months of invoices grouped by year/month
 $sql = "SELECT YEAR(`date`) AS yr, MONTH(`date`) AS mnth, SUM(subtotal) AS subtotal
         FROM Invoices
@@ -140,6 +143,19 @@ $sql = "SELECT YEAR(`date`) AS yr, MONTH(`date`) AS mnth, SUM(subtotal) AS subto
 
 $stmt = $pdo->query($sql);
 $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+// Council fees billed in the same window (labour under the council staffer) —
+// a pass-through, so subtract it to show net design revenue.
+$councilGrand = 0.0;
+try {
+    $cstmt = $pdo->prepare(
+        "SELECT SUM(t.Hours * COALESCE(t.Rate,0))
+           FROM Timesheets t INNER JOIN Invoices i ON t.Invoice_No = i.Invoice_No
+          WHERE t.Employee_id = ? AND i.`date` > DATE_SUB(NOW(), INTERVAL 12 MONTH)"
+    );
+    $cstmt->execute([$councilEmp]);
+    $councilGrand = (float)$cstmt->fetchColumn();
+} catch (Exception $e) { /* non-fatal */ }
 
 $grand = 0.0;
 foreach ($rows as $row) {
@@ -151,6 +167,10 @@ foreach ($rows as $row) {
     echo '$' . number_format($tot, 2);
 }
 echo '<br><strong>GRAND TOTAL [excl]......$' . number_format($grand, 2) . '</strong>';
+if ($councilGrand > 0) {
+    echo '<br>Council fees (staff #' . (int)$councilEmp . ')......-$' . number_format($councilGrand, 2);
+    echo '<br><strong>NET DESIGN REVENUE......$' . number_format($grand - $councilGrand, 2) . '</strong>';
+}
 
 // ── Xero overdue follow-up list ───────────────────────────────────────
 require_once 'xero_client.php';

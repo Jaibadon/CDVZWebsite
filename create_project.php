@@ -75,6 +75,18 @@ while (true) {
     }
 }
 
+// ── Auto-provision the project's Drive folder (if enabled) ────────────────
+// Non-fatal: the project is created regardless; a failure here just leaves
+// drive_folder_id unset (link it later from the project edit / keynotes page).
+try {
+    if (meta_get($pdo, 'dms_autoprovision', '0') === '1') {
+        require_once __DIR__ . '/dms/drive_provision.php';
+        provision_project_drive_folder($pdo, $nextId);
+    }
+} catch (Exception $e) {
+    $_SESSION['drive_flash_err'] = 'Project created, but Drive folder auto-provisioning failed: ' . $e->getMessage();
+}
+
 header('Location: main.php');
 exit;
 ?>

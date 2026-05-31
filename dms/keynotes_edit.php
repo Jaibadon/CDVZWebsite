@@ -39,6 +39,14 @@ $proj = $proj->fetch();
 if (!$proj) die('<p>Project not found. <a href="../projects.php">Back</a></p>');
 
 $folderId = trim((string)($proj['drive_folder_id'] ?? ''));
+
+// ── Verify folder contents (?verify=1) — confirms drive_folder_id points at
+// the real project folder (same one the .rvt + add-in use). ─────────────────
+$verifyList = null; $verifyErr = '';
+if ($folderId !== '' && isset($_GET['verify'])) {
+    try { $verifyList = DriveClient::listFolder($pdo, $folderId); }
+    catch (Exception $e) { $verifyErr = $e->getMessage(); }
+}
 $flash = ''; $flashErr = '';
 
 // ── Encoding helpers ─────────────────────────────────────────────────────
@@ -365,12 +373,46 @@ body { background:#fafafa; margin:0; padding:0; font-family:-apple-system,BlinkM
       <?php else: ?>
         &nbsp;·&nbsp;<span style="color:#a00">No keynotes.txt yet — saving will create one (UTF-16 LE, the Revit default).</span>
       <?php endif; ?>
+      &nbsp;·&nbsp;<a href="keynotes_edit.php?proj_id=<?= $proj_id ?>&verify=1" style="font-size:11px">🔍 Verify folder</a>
       <form method="post" style="display:inline;margin-left:10px">
         <input type="hidden" name="action" value="set_folder">
         <input type="text" name="drive_folder_input" placeholder="Re-link folder…" style="font-size:11px;padding:2px 6px;width:200px">
         <button type="submit" class="btn-danger" style="font-size:10px">Change folder</button>
       </form>
     </div>
+
+    <?php if ($verifyErr): ?>
+      <div class="flash-err">Folder check failed: <?= htmlspecialchars($verifyErr) ?></div>
+    <?php elseif ($verifyList !== null):
+        $hasKeynotes = false; $hasPdfs = false; $hasRvt = false;
+        foreach ($verifyList as $vf) {
+            $nm = strtolower((string)($vf['name'] ?? ''));
+            $isFolder = (($vf['mimeType'] ?? '') === 'application/vnd.google-apps.folder');
+            if ($nm === 'keynotes.txt')      $hasKeynotes = true;
+            if ($isFolder && $nm === 'pdfs') $hasPdfs = true;
+            if (substr($nm, -4) === '.rvt')  $hasRvt = true;
+        }
+        $vchk = function ($b) { return $b ? '<span style="color:#1a6b1a">&#10003;</span>' : '<span style="color:#a00">&#10007;</span>'; };
+    ?>
+      <div class="card" style="font-size:12px">
+        <strong>Folder contents check</strong> — <?= count($verifyList) ?> item(s)
+        <div style="margin:6px 0">
+          <?= $vchk($hasKeynotes) ?> keynotes.txt &nbsp;·&nbsp;
+          <?= $vchk($hasPdfs) ?> PDFS/ subfolder &nbsp;·&nbsp;
+          <?= $vchk($hasRvt) ?> a .rvt model present
+        </div>
+        <?php if (!$hasRvt): ?>
+          <div style="color:#a05a00">&#9888; No .rvt here — confirm this is the same folder the model lives in. The add-in keys off the .rvt's folder, so the linked folder and the model's folder must be the same one.</div>
+        <?php endif; ?>
+        <details><summary style="cursor:pointer;color:#888">list all items</summary>
+          <ul style="margin:6px 0 0 16px;padding:0">
+            <?php foreach ($verifyList as $vf): ?>
+              <li><?= (($vf['mimeType'] ?? '') === 'application/vnd.google-apps.folder') ? '&#128193;' : '&#128196;' ?> <?= htmlspecialchars((string)($vf['name'] ?? '')) ?></li>
+            <?php endforeach; ?>
+          </ul>
+        </details>
+      </div>
+    <?php endif; ?>
 
     <?php if ($loadErr): ?>
       <div class="flash-err"><strong>Failed to load keynotes.txt:</strong> <?= htmlspecialchars($loadErr) ?></div>

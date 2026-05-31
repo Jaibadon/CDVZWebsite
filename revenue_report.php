@@ -29,12 +29,14 @@
 
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 $user = $_SESSION['UserID'] ?? '';
 if (!in_array($user, ['erik', 'jen'], true)) {
     http_response_code(403); die('Admin only. <a href="menu.php">Back</a>');
 }
 $pdo = get_db();
+$councilEmp = (int)meta_get($pdo, 'council_fee_employee_id', '46');
 
 // ── NZ financial year default (1 April – 31 March) ──────────────────────
 function nz_fy_dates(): array {
@@ -48,7 +50,8 @@ $from         = trim((string)($_GET['from'] ?? $defaultFrom));
 $to           = trim((string)($_GET['to']   ?? $defaultTo));
 $employeeId   = (int)($_GET['employee_id'] ?? 0);
 $taskQ        = trim((string)($_GET['task'] ?? ''));
-$subtractDisb = !empty($_GET['subtract']);          // treat matched rows as disbursement (subtract from revenue)
+$subtractDisb = !empty($_GET['subtract']);            // treat task-match rows as disbursement (subtract)
+$subtractCouncil = !empty($_GET['subtract_council']); // also subtract the council staffer's rows (structured)
 $asCsv        = ($_GET['format'] ?? '') === 'csv';
 
 // Sanity-check date format (defensive)
@@ -90,20 +93,28 @@ $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 // ── Classify each row: is it a disbursement match? ──────────────────────
 $taskQLow = strtolower($taskQ);
 foreach ($rows as &$r) {
-    $r['_match'] = ($taskQ !== '' && $r['Task'] !== null
+    $r['_match']   = ($taskQ !== '' && $r['Task'] !== null
         && stripos((string)$r['Task'], $taskQ) !== false);
+    $r['_council'] = ((int)$r['Employee_id'] === $councilEmp);
+    // What actually gets subtracted = union of the two opted-in mechanisms
+    // (a row matched by BOTH is only subtracted once).
+    $r['_sub']     = ($subtractDisb && $r['_match']) || ($subtractCouncil && $r['_council']);
 }
 unset($r);
 
 // ── Aggregates ──────────────────────────────────────────────────────────
 $totalAll = 0.0; $hoursAll = 0.0;
 $totalDisb = 0.0; $hoursDisb = 0.0;
+$totalCouncil = 0.0; $hoursCouncil = 0.0;
+$totalSub = 0.0;
 $byEmp = [];   // login => ['hours' => ..., 'amount' => ..., 'disb_amount' => ..., 'pay' => Pay_Rate]
 foreach ($rows as $r) {
     $amt = (float)$r['Amnt'];
     $hrs = (float)$r['Hours'];
     $totalAll += $amt; $hoursAll += $hrs;
-    if ($r['_match']) { $totalDisb += $amt; $hoursDisb += $hrs; }
+    if ($r['_match'])   { $totalDisb    += $amt; $hoursDisb    += $hrs; }
+    if ($r['_council']) { $totalCouncil += $amt; $hoursCouncil += $hrs; }
+    if ($r['_sub'])     { $totalSub     += $amt; }
     $lg = (string)$r['Login'];
     if (!isset($byEmp[$lg])) $byEmp[$lg] = ['hours' => 0.0, 'amount' => 0.0, 'disb_amount' => 0.0, 'pay' => (float)($r['Pay_Rate'] ?? 0)];
     $byEmp[$lg]['hours']  += $hrs;
@@ -112,7 +123,8 @@ foreach ($rows as $r) {
 }
 ksort($byEmp);
 
-$netRevenue = $subtractDisb ? ($totalAll - $totalDisb) : $totalAll;
+// Net = gross minus the union of subtracted rows (task-match and/or council).
+$netRevenue = $totalAll - $totalSub;
 
 // ── CSV output ──────────────────────────────────────────────────────────
 if ($asCsv) {
@@ -122,7 +134,7 @@ if ($asCsv) {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $fname . '"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['TS_DATE','Login','Employee_id','Client','Invoice_No','Task','Hours','Rate','Amount','Pay_Rate','Notes','TaskMatch']);
+    fputcsv($out, ['TS_DATE','Login','Employee_id','Client','Invoice_No','Task','Hours','Rate','Amount','Pay_Rate','Notes','TaskMatch','Council']);
     foreach ($rows as $r) {
         fputcsv($out, [
             $r['TS_DATE'], $r['Login'], $r['Employee_id'],
@@ -131,15 +143,14 @@ if ($asCsv) {
             number_format((float)$r['Rate'], 2, '.', ''),
             number_format((float)$r['Amnt'], 2, '.', ''),
             number_format((float)($r['Pay_Rate'] ?? 0), 2, '.', ''),
-            (string)($r['Notes'] ?? ''), $r['_match'] ? '1' : '0',
+            (string)($r['Notes'] ?? ''), $r['_match'] ? '1' : '0', $r['_council'] ? '1' : '0',
         ]);
     }
     fputcsv($out, []);
-    fputcsv($out, ['', '', '', '', '', '', 'TOTAL HOURS', '', number_format($totalAll, 2, '.', '')]);
-    if ($taskQ !== '') {
-        fputcsv($out, ['', '', '', '', '', '', "Matches \"$taskQ\"", '', number_format($totalDisb, 2, '.', '')]);
-        if ($subtractDisb) fputcsv($out, ['', '', '', '', '', '', 'NET REVENUE (excl. matched)', '', number_format($netRevenue, 2, '.', '')]);
-    }
+    fputcsv($out, ['', '', '', '', '', '', 'TOTAL', '', number_format($totalAll, 2, '.', '')]);
+    if ($taskQ !== '')        fputcsv($out, ['', '', '', '', '', '', "Matches \"$taskQ\"", '', number_format($totalDisb, 2, '.', '')]);
+    if ($totalCouncil > 0)    fputcsv($out, ['', '', '', '', '', '', "Council fees (staff #$councilEmp)", '', number_format($totalCouncil, 2, '.', '')]);
+    if ($subtractDisb || $subtractCouncil) fputcsv($out, ['', '', '', '', '', '', 'NET REVENUE (excl. disbursements)', '', number_format($netRevenue, 2, '.', '')]);
     fclose($out); exit;
 }
 
@@ -228,8 +239,14 @@ tr.match td { background:#fff8e0; }
       <div style="grid-column:1/-1;font-size:11px;color:#888">
         <label style="display:inline;cursor:pointer">
           <input type="checkbox" name="subtract" value="1" <?= $subtractDisb ? 'checked' : '' ?>>
-          Treat task-match rows as <strong>disbursements</strong> and subtract from revenue
-          <span class="muted">(use for council fees / pass-throughs that aren't your income for PI insurance purposes)</span>
+          Subtract <strong>task-match</strong> rows
+          <span class="muted">(fuzzy — matches the “task contains” text above)</span>
+        </label>
+        &nbsp;&nbsp;&nbsp;
+        <label style="display:inline;cursor:pointer">
+          <input type="checkbox" name="subtract_council" value="1" <?= $subtractCouncil ? 'checked' : '' ?>>
+          Subtract <strong>council fees</strong> (staff #<?= $councilEmp ?>)
+          <span class="muted">(structured — the staffer council fees are billed under; set via App_Meta <code>council_fee_employee_id</code>)</span>
         </label>
       </div>
     </form>
@@ -242,17 +259,24 @@ tr.match td { background:#fff8e0; }
       </div>
       <?php if ($taskQ !== ''): ?>
         <div class="metric disb">
-          <div class="label">Matches “<?= htmlspecialchars($taskQ) ?>”<?= $subtractDisb ? ' (treated as disbursement)' : '' ?></div>
+          <div class="label">Matches “<?= htmlspecialchars($taskQ) ?>”<?= $subtractDisb ? ' (subtracted)' : '' ?></div>
           <div class="value"><?= fmt_money($totalDisb) ?></div>
           <div class="muted"><?= number_format($hoursDisb, 1) ?> hours</div>
         </div>
-        <?php if ($subtractDisb): ?>
-          <div class="metric net">
-            <div class="label">Net revenue (excl. matched)</div>
-            <div class="value"><?= fmt_money($netRevenue) ?></div>
-            <div class="muted">use this figure for PI insurance</div>
-          </div>
-        <?php endif; ?>
+      <?php endif; ?>
+      <?php if ($totalCouncil > 0 || $subtractCouncil): ?>
+        <div class="metric disb">
+          <div class="label">Council fees · staff #<?= $councilEmp ?><?= $subtractCouncil ? ' (subtracted)' : '' ?></div>
+          <div class="value"><?= fmt_money($totalCouncil) ?></div>
+          <div class="muted"><?= number_format($hoursCouncil, 1) ?> hours</div>
+        </div>
+      <?php endif; ?>
+      <?php if ($subtractDisb || $subtractCouncil): ?>
+        <div class="metric net">
+          <div class="label">Net revenue (excl. disbursements)</div>
+          <div class="value"><?= fmt_money($netRevenue) ?></div>
+          <div class="muted">use this figure for PI insurance</div>
+        </div>
       <?php endif; ?>
     </div>
 
@@ -319,7 +343,7 @@ tr.match td { background:#fff8e0; }
         </tr></thead>
         <tbody>
           <?php foreach ($rows as $r): ?>
-            <tr class="<?= $r['_match'] ? 'match' : '' ?>">
+            <tr class="<?= $r['_sub'] ? 'match' : '' ?>">
               <td><?= htmlspecialchars((string)$r['TS_DATE']) ?></td>
               <td><?= htmlspecialchars((string)$r['Login']) ?></td>
               <td><?= htmlspecialchars((string)($r['Client_Name'] ?? '')) ?></td>

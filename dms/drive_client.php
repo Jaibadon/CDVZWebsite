@@ -238,6 +238,67 @@ class DriveClient
         return self::httpJsonGet($url, $token);
     }
 
+    /** List all (non-trashed) children of a folder, paged. Returns [{id,name,mimeType,...}]. */
+    public static function listFolder(PDO $pdo, string $folderId): array
+    {
+        $token = self::getAccessToken($pdo);
+        $fEsc = str_replace("'", "\\'", $folderId);
+        $q = "'$fEsc' in parents and trashed = false";
+        $out = []; $pageToken = '';
+        do {
+            $params = [
+                'q'        => $q,
+                'fields'   => 'nextPageToken, files(id,name,mimeType,modifiedTime,size)',
+                'pageSize' => 200,
+                'supportsAllDrives'         => 'true',
+                'includeItemsFromAllDrives' => 'true',
+            ];
+            if ($pageToken !== '') $params['pageToken'] = $pageToken;
+            $resp = self::httpJsonGet(self::FILES_API . '?' . http_build_query($params), $token);
+            foreach (($resp['files'] ?? []) as $f) $out[] = $f;
+            $pageToken = (string)($resp['nextPageToken'] ?? '');
+        } while ($pageToken !== '');
+        return $out;
+    }
+
+    /** Find a SUBFOLDER by name within a parent. Returns its id, or null. */
+    public static function findSubfolder(PDO $pdo, string $parentId, string $name): ?string
+    {
+        $token = self::getAccessToken($pdo);
+        $pEsc = str_replace("'", "\\'", $parentId);
+        $nEsc = str_replace("'", "\\'", $name);
+        $q = "name = '$nEsc' and '$pEsc' in parents and mimeType = 'application/vnd.google-apps.folder' and trashed = false";
+        $resp = self::httpJsonGet(self::FILES_API . '?' . http_build_query([
+            'q' => $q, 'fields' => 'files(id,name)', 'pageSize' => 5,
+            'supportsAllDrives' => 'true', 'includeItemsFromAllDrives' => 'true',
+        ]), $token);
+        $files = $resp['files'] ?? [];
+        return !empty($files) ? (string)$files[0]['id'] : null;
+    }
+
+    /** Create a folder under a parent. Returns the new folder id. */
+    public static function createFolder(PDO $pdo, string $parentId, string $name): string
+    {
+        $token = self::getAccessToken($pdo);
+        $metadata = json_encode([
+            'name'     => $name,
+            'parents'  => [$parentId],
+            'mimeType' => 'application/vnd.google-apps.folder',
+        ], JSON_UNESCAPED_SLASHES);
+        $resp = self::httpUpload(self::FILES_API . '?supportsAllDrives=true&fields=id', 'POST',
+                                 $token, 'application/json; charset=UTF-8', $metadata);
+        $json = json_decode($resp, true);
+        if (!is_array($json) || empty($json['id'])) throw new DriveOAuthException('createFolder returned: ' . $resp);
+        return (string)$json['id'];
+    }
+
+    /** Find-or-create a subfolder by name; returns its id. */
+    public static function ensureSubfolder(PDO $pdo, string $parentId, string $name): string
+    {
+        $existing = self::findSubfolder($pdo, $parentId, $name);
+        return $existing ?? self::createFolder($pdo, $parentId, $name);
+    }
+
     // ── HTTP helpers ────────────────────────────────────────────────────
 
     private static function httpForm(string $url, array $form): array
