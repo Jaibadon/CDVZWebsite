@@ -64,7 +64,9 @@ function provision_project_drive_folder(PDO $pdo, int $projId): array
         // mode === 'standalone' and no existing client folder → parent stays root.
     }
 
-    $projName   = drive_safe_name((string)$proj['JobName'], 'Project ' . $projId);
+    // Suffix the proj_id so two projects with the same JobName don't collide
+    // into one folder (ensureSubfolder reuses an existing folder by name).
+    $projName   = drive_safe_name((string)$proj['JobName'], 'Project ' . $projId) . ' (#' . $projId . ')';
     $projFolder = DriveClient::ensureSubfolder($pdo, $parentId, $projName);
     try { DriveClient::ensureSubfolder($pdo, $projFolder, 'PDFS'); } catch (Exception $e) { /* non-fatal */ }
 

@@ -79,8 +79,9 @@ while (true) {
 // Non-fatal: the project is created regardless; a failure here just leaves
 // drive_folder_id unset (link it later from the project edit / keynotes page).
 try {
-    if (meta_get($pdo, 'dms_autoprovision', '0') === '1') {
-        require_once __DIR__ . '/dms/drive_provision.php';
+    $provFile = __DIR__ . '/dms/drive_provision.php';
+    if (meta_get($pdo, 'dms_autoprovision', '0') === '1' && is_file($provFile)) {
+        require_once $provFile;
         provision_project_drive_folder($pdo, $nextId);
     }
 } catch (Exception $e) {
