@@ -172,6 +172,10 @@ class DriveClient
                 'q'      => $q,
                 'fields' => 'files(id,name,mimeType,modifiedTime,size)',
                 'pageSize' => 50,
+                // Required for the connected account's Shared Drives to be
+                // visible at all — without these, only My Drive is searched.
+                'supportsAllDrives'         => 'true',
+                'includeItemsFromAllDrives' => 'true',
             ]),
             $token
         );
@@ -182,7 +186,7 @@ class DriveClient
     public static function getFileContent(PDO $pdo, string $fileId): string
     {
         $token = self::getAccessToken($pdo);
-        $url = self::FILES_API . '/' . rawurlencode($fileId) . '?alt=media';
+        $url = self::FILES_API . '/' . rawurlencode($fileId) . '?alt=media&supportsAllDrives=true';
         return self::httpRawGet($url, $token);
     }
 
@@ -190,7 +194,7 @@ class DriveClient
     public static function updateFileContent(PDO $pdo, string $fileId, string $content, string $mimeType = 'text/plain'): void
     {
         $token = self::getAccessToken($pdo);
-        $url = self::UPLOAD_API . '/' . rawurlencode($fileId) . '?uploadType=media';
+        $url = self::UPLOAD_API . '/' . rawurlencode($fileId) . '?uploadType=media&supportsAllDrives=true';
         self::httpUpload($url, 'PATCH', $token, $mimeType, $content);
     }
 
@@ -217,7 +221,7 @@ class DriveClient
         $body .= $content . "\r\n";
         $body .= "--$boundary--";
 
-        $url = self::UPLOAD_API . '?uploadType=multipart&fields=id,name';
+        $url = self::UPLOAD_API . '?uploadType=multipart&fields=id,name&supportsAllDrives=true';
         $resp = self::httpUpload($url, 'POST', $token, "multipart/related; boundary=$boundary", $body);
         $json = json_decode($resp, true);
         if (!is_array($json) || empty($json['id'])) {
@@ -230,7 +234,7 @@ class DriveClient
     public static function getFileMeta(PDO $pdo, string $fileId): array
     {
         $token = self::getAccessToken($pdo);
-        $url = self::FILES_API . '/' . rawurlencode($fileId) . '?fields=id,name,mimeType,modifiedTime,size,parents,webViewLink';
+        $url = self::FILES_API . '/' . rawurlencode($fileId) . '?fields=id,name,mimeType,modifiedTime,size,parents,webViewLink&supportsAllDrives=true';
         return self::httpJsonGet($url, $token);
     }
 
