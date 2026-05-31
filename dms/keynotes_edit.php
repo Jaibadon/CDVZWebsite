@@ -19,14 +19,14 @@
  * Line endings: CRLF on save (Revit's tools write CRLF; we follow suit).
  */
 
-require_once 'auth_check.php';
-require_once 'db_connect.php';
-require_once 'drive_client.php';
+require_once __DIR__ . '/../auth_check.php';
+require_once __DIR__ . '/../db_connect.php';
+require_once __DIR__ . '/drive_client.php';
 
 $pdo  = get_db();
 $user = $_SESSION['UserID'] ?? '';
 $proj_id = (int)($_GET['proj_id'] ?? 0);
-if ($proj_id <= 0) die('<p>Missing proj_id. <a href="projects.php">Back to projects</a></p>');
+if ($proj_id <= 0) die('<p>Missing proj_id. <a href="../projects.php">Back to projects</a></p>');
 
 $proj = $pdo->prepare(
     "SELECT p.proj_id, p.JobName, p.drive_folder_id, p.Project_Type, c.Client_Name
@@ -36,7 +36,7 @@ $proj = $pdo->prepare(
 );
 $proj->execute([$proj_id]);
 $proj = $proj->fetch();
-if (!$proj) die('<p>Project not found. <a href="projects.php">Back</a></p>');
+if (!$proj) die('<p>Project not found. <a href="../projects.php">Back</a></p>');
 
 $folderId = trim((string)($proj['drive_folder_id'] ?? ''));
 $flash = ''; $flashErr = '';
@@ -275,7 +275,7 @@ $totalItems = array_sum(array_map(fn($s) => count($s['items']), $sections)) + co
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Keynotes — <?= htmlspecialchars((string)$proj['JobName']) ?></title>
-<link href="site.css" rel="stylesheet">
+<link href="../site.css" rel="stylesheet">
 <style>
 body { background:#fafafa; margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; font-size:13px; color:#222; }
 .topbar { background:#9B9B1B; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
@@ -318,11 +318,11 @@ body { background:#fafafa; margin:0; padding:0; font-family:-apple-system,BlinkM
 <div class="topbar">
   <h1>📋 Keynotes — <?= htmlspecialchars((string)$proj['JobName']) ?></h1>
   <div>
-    <a href="project_stages.php?proj_id=<?= $proj_id ?>">← Stages</a>
+    <a href="../project_stages.php?proj_id=<?= $proj_id ?>">← Stages</a>
     &nbsp;·&nbsp;
     <a href="keynotes_copy.php?proj_id=<?= $proj_id ?>">↻ Copy from similar</a>
     &nbsp;·&nbsp;
-    <a href="menu.php">Menu</a>
+    <a href="../menu.php">Menu</a>
   </div>
 </div>
 
@@ -339,7 +339,7 @@ body { background:#fafafa; margin:0; padding:0; font-family:-apple-system,BlinkM
     <div class="card" style="background:#fff3cd;border-color:#c8a52e;color:#7a5a00">
       <strong>Google Drive isn't connected.</strong>
       <?php if (in_array($user, ['erik','jen'], true)): ?>
-        <a href="drive_oauth_connect.php" class="btn">Connect Google Drive</a>
+        <a href="../drive_oauth_connect.php" class="btn">Connect Google Drive</a>
       <?php else: ?>
         Ask Erik or Jen to connect it from the main menu.
       <?php endif; ?>

@@ -19,8 +19,8 @@
  * correctly invalidates the previous sign-off.
  */
 
-require_once __DIR__ . '/db_connect.php';
-require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/../db_connect.php';
+require_once __DIR__ . '/../helpers.php';
 
 $pdo = get_db();
 
@@ -34,6 +34,7 @@ if (!preg_match('/^[0-9a-f]{64}$/', $token)) {
 $q = $pdo->prepare(
     "SELECT tr.Recipient_ID, tr.Transmittal_ID, tr.Stakeholder_ID, tr.Magic_Token,
             tr.First_Viewed_At, tr.View_Count, tr.Acked_At, tr.Ack_Comment,
+            tr.Approval_Status, tr.Approval_At,
             t.Commit_ID, t.Revision_Label, t.Sent_At, t.Sent_By, t.Subject, t.Message AS TransMessage,
             cm.Proj_ID, cm.Message AS CommitMessage, cm.Ifc_Git_Sha, cm.Created_At AS CommitCreatedAt,
             cm.Rvt_Backup_Number,
@@ -128,6 +129,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               WHERE Recipient_ID = ? AND Acked_At IS NULL"
         )->execute([$ackComment !== '' ? $ackComment : null, (int)$ctx['Recipient_ID']]);
         $flash = 'Thank you — your acknowledgement has been recorded.';
+    } elseif ($action === 'approve' || $action === 'request_changes') {
+        // The reviewer's decision. Approve also counts as an acknowledgement.
+        $decision = ($action === 'approve') ? 'approved' : 'changes_requested';
+        $note = trim((string)($_POST['ack_comment'] ?? ''));
+        $pdo->prepare(
+            "UPDATE Transmittal_Recipients
+                SET Approval_Status = ?, Approval_At = NOW(),
+                    Acked_At    = COALESCE(Acked_At, NOW()),
+                    Ack_Comment = COALESCE(NULLIF(?, ''), Ack_Comment)
+              WHERE Recipient_ID = ?"
+        )->execute([$decision, $note, (int)$ctx['Recipient_ID']]);
+        // A change request is also dropped into the comment thread so it's visible.
+        if ($decision === 'changes_requested' && $note !== '') {
+            $pdo->prepare(
+                "INSERT INTO Commit_Comments
+                   (Commit_ID, Stakeholder_ID, Author_Name, Author_Email, Body, Posted_At, Posted_From_IP)
+                 VALUES (?, ?, ?, ?, ?, NOW(), ?)"
+            )->execute([
+                $commitId,
+                $ctx['Stakeholder_ID'] !== null ? (int)$ctx['Stakeholder_ID'] : null,
+                $recipName, $recipEmail, '[Changes requested] ' . $note, $ip,
+            ]);
+        }
+        $flash = ($decision === 'approved') ? 'Approved — thank you.' : 'Recorded — you requested changes.';
     }
     // PRG: redirect back so refresh doesn't re-post
     header('Location: transmittal_view.php?t=' . urlencode($token) . ($flash ? '&done=1' : ''));
@@ -144,7 +169,9 @@ $pdo->prepare(
 )->execute([(int)$ctx['Recipient_ID']]);
 
 // Re-fetch ack state (the UPDATE above doesn't change it, but a prior POST might have)
-$alreadyAcked = !empty($ctx['Acked_At']);
+$alreadyAcked   = !empty($ctx['Acked_At']);
+$approvalStatus = (string)($ctx['Approval_Status'] ?? 'pending');
+$decided        = in_array($approvalStatus, ['approved', 'changes_requested'], true);
 
 // ── Load commit's PDFs, NZBC tags, and the comment thread ───────────────
 $pdfs = $pdo->prepare(
@@ -219,9 +246,10 @@ textarea { width:100%; border:1px solid #ccc; border-radius:3px; padding:8px; fo
     <div class="flash">Saved. Thank you.</div>
   <?php endif; ?>
 
-  <?php if ($alreadyAcked): ?>
-    <div class="acked-banner">
-      ✓ You acknowledged this revision on <?= htmlspecialchars(date('j M Y, g:i a', strtotime((string)$ctx['Acked_At']))) ?>.
+  <?php if ($decided): ?>
+    <div class="acked-banner" style="<?= $approvalStatus === 'changes_requested' ? 'background:#fff3cd;border-color:#c8a52e;color:#7a5a00' : '' ?>">
+      <?= $approvalStatus === 'approved' ? '✓ You approved this revision' : '✎ You requested changes on this revision' ?>
+      on <?= htmlspecialchars(date('j M Y, g:i a', strtotime((string)($ctx['Approval_At'] ?: $ctx['Acked_At'])))) ?>.
       <?php if (!empty($ctx['Ack_Comment'])): ?><br><span style="font-size:13px;color:#444">Your note: “<?= htmlspecialchars((string)$ctx['Ack_Comment']) ?>”</span><?php endif; ?>
       <br><span style="font-size:12px;color:#555">You can still post comments below. If a newer revision is issued you'll get a fresh link.</span>
     </div>
@@ -261,21 +289,27 @@ textarea { width:100%; border:1px solid #ccc; border-radius:3px; padding:8px; fo
     <?php endforeach; endif; ?>
   </div>
 
-  <?php if (!$alreadyAcked): ?>
+  <?php if (!$decided): ?>
   <div class="card" style="border:2px solid #1a6b1a">
-    <h2 style="color:#1a6b1a;border-color:#cbe8cb">Acknowledge this revision</h2>
+    <h2 style="color:#1a6b1a;border-color:#cbe8cb">Review decision</h2>
     <p style="font-size:13px;color:#444;margin-top:0">
-      Clicking confirms you've reviewed this revision and assessed its impact on your discipline.
-      This is logged with a timestamp and forms the coordination record. If the change affects your
-      design, note it below and we'll coordinate before this goes to council.
+      Record your decision on this revision. <strong>Approve</strong> confirms you've assessed the
+      impact on your discipline and are happy for it to proceed. <strong>Request changes</strong>
+      flags an issue that must be resolved before this revision is released to council / construction.
+      Your decision is logged with a timestamp and forms the coordination record.
     </p>
     <form method="post">
       <input type="hidden" name="t" value="<?= htmlspecialchars($token) ?>">
-      <input type="hidden" name="action" value="ack">
-      <textarea name="ack_comment" rows="3" placeholder="Optional: any impact on your design / conditions of your sign-off"></textarea>
-      <div style="margin-top:10px">
-        <button type="submit" class="btn btn-ack" onclick="return confirm('Confirm you have reviewed Revision <?= htmlspecialchars($revision) ?> and assessed its impact on your design?');">
-          ✓ I've reviewed &amp; acknowledge this revision
+      <textarea name="ack_comment" rows="3" placeholder="Optional note (please add one if requesting changes): impact on your design / conditions of your sign-off"></textarea>
+      <div style="margin-top:10px;display:flex;gap:10px;flex-wrap:wrap">
+        <button type="submit" name="action" value="approve" class="btn btn-ack"
+          onclick="return confirm('Approve Revision <?= htmlspecialchars($revision) ?>?');">
+          ✓ Approve this revision
+        </button>
+        <button type="submit" name="action" value="request_changes" class="btn"
+          style="background:#a86500"
+          onclick="return confirm('Request changes to Revision <?= htmlspecialchars($revision) ?>?');">
+          ✎ Request changes
         </button>
       </div>
     </form>

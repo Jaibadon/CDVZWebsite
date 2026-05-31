@@ -13,15 +13,15 @@
  * preserves Transmittal_Recipients references.
  */
 
-require_once 'auth_check.php';
-require_once 'db_connect.php';
-require_once 'helpers.php';
+require_once __DIR__ . '/../auth_check.php';
+require_once __DIR__ . '/../db_connect.php';
+require_once __DIR__ . '/../helpers.php';
 
 $pdo  = get_db();
 $user = $_SESSION['UserID'] ?? '';
 $empId = (int)($_SESSION['Employee_id'] ?? 0);
 $proj_id = (int)($_GET['proj_id'] ?? 0);
-if ($proj_id <= 0) die('<p>Missing proj_id. <a href="projects.php">Back to projects</a></p>');
+if ($proj_id <= 0) die('<p>Missing proj_id. <a href="../projects.php">Back to projects</a></p>');
 
 $proj = $pdo->prepare(
     "SELECT p.proj_id, p.JobName, c.Client_Name, c.Client_id
@@ -182,7 +182,7 @@ function render_stakeholder_form(array $s, array $roleLabels): void {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Stakeholders — <?= htmlspecialchars((string)$proj['JobName']) ?></title>
-<link href="site.css" rel="stylesheet">
+<link href="../site.css" rel="stylesheet">
 <style>
 body { background:#fafafa; margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; font-size:13px; color:#222; }
 .topbar { background:#9B9B1B; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; align-items:center; }
@@ -214,9 +214,9 @@ input[type="text"]:focus, input[type="email"]:focus, select:focus, textarea:focu
 <div class="topbar">
   <h1>🤝 Stakeholders — <?= htmlspecialchars((string)$proj['JobName']) ?></h1>
   <div>
-    <a href="project_stages.php?proj_id=<?= $proj_id ?>">← Stages</a>
+    <a href="../project_stages.php?proj_id=<?= $proj_id ?>">← Stages</a>
     &nbsp;·&nbsp;
-    <a href="menu.php">Menu</a>
+    <a href="../menu.php">Menu</a>
   </div>
 </div>
 

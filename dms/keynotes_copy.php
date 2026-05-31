@@ -14,14 +14,14 @@
  * (>1 row) unless the user confirms — protects against accidental wipe.
  */
 
-require_once 'auth_check.php';
-require_once 'db_connect.php';
-require_once 'drive_client.php';
+require_once __DIR__ . '/../auth_check.php';
+require_once __DIR__ . '/../db_connect.php';
+require_once __DIR__ . '/drive_client.php';
 
 $pdo  = get_db();
 $user = $_SESSION['UserID'] ?? '';
 $proj_id = (int)($_GET['proj_id'] ?? $_POST['proj_id'] ?? 0);
-if ($proj_id <= 0) die('<p>Missing proj_id. <a href="projects.php">Back</a></p>');
+if ($proj_id <= 0) die('<p>Missing proj_id. <a href="../projects.php">Back</a></p>');
 
 // Load target project
 $target = $pdo->prepare(
@@ -117,7 +117,7 @@ $otherCandidates = $st->fetchAll();
 <head>
 <meta charset="utf-8">
 <title>Copy Keynotes — <?= htmlspecialchars((string)$target['JobName']) ?></title>
-<link href="site.css" rel="stylesheet">
+<link href="../site.css" rel="stylesheet">
 <style>
 body { background:#fafafa; margin:0; padding:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; font-size:13px; }
 .topbar { background:#9B9B1B; color:#fff; padding:10px 16px; display:flex; justify-content:space-between; }
@@ -137,7 +137,7 @@ table tr:hover { background:#fafad2; }
 <body>
 <div class="topbar">
   <h1>↻ Copy keynotes — <?= htmlspecialchars((string)$target['JobName']) ?></h1>
-  <div><a href="keynotes_edit.php?proj_id=<?= $proj_id ?>">← Keynotes editor</a> &nbsp;·&nbsp; <a href="menu.php">Menu</a></div>
+  <div><a href="keynotes_edit.php?proj_id=<?= $proj_id ?>">← Keynotes editor</a> &nbsp;·&nbsp; <a href="../menu.php">Menu</a></div>
 </div>
 
 <div class="page">

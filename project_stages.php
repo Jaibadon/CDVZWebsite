@@ -395,13 +395,13 @@ ob_start();
      style="background:#246;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Print Checklist</a>
   <a href="templates.php"
      style="background:#777;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none">Manage all templates</a>
-  <a href="keynotes_edit.php?proj_id=<?= $proj_id ?>"
+  <a href="dms/keynotes_edit.php?proj_id=<?= $proj_id ?>"
      style="background:#9B9B1B;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none"
      title="Edit the Revit keynotes.txt file in this project's Drive folder, from the web">📋 Edit Keynotes</a>
-  <a href="stakeholders.php?proj_id=<?= $proj_id ?>"
+  <a href="dms/stakeholders.php?proj_id=<?= $proj_id ?>"
      style="background:#5577aa;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none"
      title="Add / edit the 3rd parties (engineers, manufacturers, etc.) this project's revisions get transmitted to">🤝 Stakeholders</a>
-  <a href="commit_history.php?proj_id=<?= $proj_id ?>"
+  <a href="dms/commit_history.php?proj_id=<?= $proj_id ?>"
      style="background:#5d3a9b;color:#fff;padding:5px 10px;border-radius:3px;text-decoration:none"
      title="Revision history — every published commit, its NZBC tags, and who has acknowledged each transmittal">📂 Revision history</a>
 

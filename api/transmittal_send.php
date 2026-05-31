@@ -28,7 +28,7 @@ if ($commitId <= 0)       json_err('commit_id is required.', 400);
 if (empty($recipients))   json_err('Pick at least one recipient.', 400);
 
 if (!defined('TRANSMITTAL_SEND_LIBRARY_ONLY')) define('TRANSMITTAL_SEND_LIBRARY_ONLY', true);
-require_once __DIR__ . '/../transmittal_send.php';
+require_once __DIR__ . '/../dms/transmittal_send.php';
 
 try {
     $result = send_transmittal($pdo, $commitId, $recipients, $subject, $message, $uid, $testTo);

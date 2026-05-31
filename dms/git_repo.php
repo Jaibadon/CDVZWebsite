@@ -41,8 +41,8 @@
  * the IFC. `git diff` on an IFC will be noisy; nobody's reading it.
  */
 
-if (!defined('CADVIZ_GIT_REPOS_PATH') && file_exists(__DIR__ . '/config.php')) {
-    require_once __DIR__ . '/config.php';
+if (!defined('CADVIZ_GIT_REPOS_PATH') && file_exists(__DIR__ . '/../config.php')) {
+    require_once __DIR__ . '/../config.php';
 }
 
 class GitRepoException extends \Exception {}

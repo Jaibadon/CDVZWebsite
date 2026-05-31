@@ -16,7 +16,7 @@
  *   attached          — count of files that actually attached
  */
 
-require_once __DIR__ . '/db_connect.php';
+require_once __DIR__ . '/../db_connect.php';
 
 function load_commit_pdf_attachments(PDO $pdo, int $commitId): array
 {

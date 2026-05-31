@@ -59,6 +59,49 @@ function require_admin(): string
     return $uid;
 }
 
+/**
+ * Resolve a per-staff API token (X-CadViz-Token header) to a Staff identity
+ * and populate the session as if they'd logged in. Returns the UserID (Login)
+ * or null if no/invalid token. Lets the Revit add-in authenticate without a
+ * browser session. See migrations/add_api_tokens.sql.
+ */
+function resolve_api_token(): ?string
+{
+    $hdr = trim((string)($_SERVER['HTTP_X_CADVIZ_TOKEN'] ?? ''));
+    // Tokens are hex (bin2hex of 32 bytes = 64 chars); bound the charset/length
+    // before hitting the DB.
+    if (!preg_match('/^[A-Za-z0-9._-]{16,64}$/', $hdr)) return null;
+    try {
+        $pdo = get_db();
+        $st = $pdo->prepare(
+            "SELECT Employee_ID, Login FROM Staff
+              WHERE api_token = ? AND COALESCE(Active, 1) <> 0 LIMIT 1"
+        );
+        $st->execute([$hdr]);
+        $row = $st->fetch();
+    } catch (\Throwable $e) {
+        return null;   // column missing (migration not run) etc. — treat as no token
+    }
+    if (!$row) return null;
+    $_SESSION['UserID']      = $row['Login'];
+    $_SESSION['Employee_id'] = (int)$row['Employee_ID'];
+    return (string)$row['Login'];
+}
+
+/**
+ * Accept EITHER an existing browser session OR a valid API token. Returns the
+ * UserID, or 401's (and exits). Endpoints the add-in posts to use this instead
+ * of require_session().
+ */
+function require_session_or_token(): string
+{
+    $uid = $_SESSION['UserID'] ?? '';
+    if ($uid !== '') return $uid;
+    $uid = resolve_api_token();
+    if ($uid === null || $uid === '') json_err('Not signed in (no session or valid API token).', 401);
+    return $uid;
+}
+
 function read_json_body(): array
 {
     $raw = file_get_contents('php://input');
