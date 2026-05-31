@@ -89,6 +89,26 @@ $es = $pdo->prepare(
 $es->execute([$from, $to]);
 $empRows = $es->fetchAll(PDO::FETCH_ASSOC);
 
+// ── Profitability estimate (labour margin) ────────────────────────────────
+// Cost of the INVOICED labour that produced the revenue = Hours × the
+// assignee's CURRENT Pay_Rate (an estimate — not historical rates). Council
+// staffer excluded (pass-through, no real wage cost).
+$lc = $pdo->prepare(
+    "SELECT SUM(t.Hours * COALESCE(s.Pay_Rate, 0))
+       FROM Timesheets t
+       INNER JOIN Invoices i ON t.Invoice_No = i.Invoice_No
+       LEFT  JOIN Staff    s ON t.Employee_id = s.Employee_ID
+      WHERE i.`Date` BETWEEN ? AND ? AND t.Employee_id <> ?"
+);
+$lc->execute([$from, $to, $councilEmp]);
+$labourCost  = (float)$lc->fetchColumn();
+$grossMargin = $netTotal - $labourCost;                    // design revenue (ex-council) − labour cost
+$overheads   = max(0.0, (float)($_GET['overheads'] ?? 0)); // optional annual overheads
+$netProfit   = $grossMargin - $overheads;
+$payeTax     = nz_income_tax(max(0.0, $netProfit));        // if drawn by one person (Erik)
+$takeHome    = $netProfit - $payeTax;
+$effRate     = $netProfit > 0 ? ($payeTax / $netProfit) : 0.0;
+
 // ── FY-ordered month list (Apr … Mar) ───────────────────────────────────────
 $months = [];
 for ($i = 0; $i < 12; $i++) {
@@ -102,6 +122,21 @@ foreach ($months as $k) $maxNet = max($maxNet, ($gByMonth[$k] ?? 0) - ($cByMonth
 
 function ao_money(float $n): string { return ($n < 0 ? '-$' : '$') . number_format(abs($n), 2); }
 function ao_mlabel(string $key): string { $t = strtotime($key . '-01'); return $t ? date('M Y', $t) : $key; }
+
+// NZ resident income-tax brackets (PAYE estimate; excludes ACC earner's levy,
+// KiwiSaver, student loan). Progressive — each slice taxed at its own rate.
+function nz_tax_brackets(): array {
+    return [[15600, 0.105], [53500, 0.175], [78100, 0.30], [180000, 0.33], [PHP_INT_MAX, 0.39]];
+}
+function nz_income_tax(float $income): float {
+    $tax = 0.0; $lower = 0.0;
+    foreach (nz_tax_brackets() as [$upper, $rate]) {
+        if ($income <= $lower) break;
+        $tax  += (min($income, (float)$upper) - $lower) * $rate;
+        $lower = (float)$upper;
+    }
+    return $tax;
+}
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -150,6 +185,10 @@ select { padding:5px 8px; border:1px solid #ccc; border-radius:3px; font:inherit
           <?php endfor; ?>
         </select>
       </label>
+      <label>Annual overheads (optional)
+        <input type="number" name="overheads" value="<?= $overheads > 0 ? (int)round($overheads) : '' ?>" step="1000" min="0" placeholder="0" style="width:120px;padding:5px;border:1px solid #ccc;border-radius:3px">
+      </label>
+      <button type="submit" style="background:#5d3a9b;color:#fff;border:none;padding:6px 14px;border-radius:3px;cursor:pointer">Apply</button>
       <span class="muted">Council fees tracked under staff #<?= $councilEmp ?> (App_Meta <code>council_fee_employee_id</code>).</span>
     </form>
 
@@ -160,6 +199,43 @@ select { padding:5px 8px; border:1px solid #ccc; border-radius:3px; font:inherit
       <div class="metric disb"><div class="label">Council fees (pass-through)</div><div class="value"><?= ao_money($councilTotal) ?></div></div>
       <div class="metric net"><div class="label">Net design revenue (ex-council)</div><div class="value"><?= ao_money($netTotal) ?></div></div>
     </div>
+  </div>
+
+  <div class="card">
+    <h3 style="margin:0 0 8px;color:#5d3a9b;font-size:14px;border-bottom:1px solid #eee;padding-bottom:4px">Profitability (estimate)</h3>
+    <table style="max-width:540px">
+      <tr><td>Net design revenue (ex-council)</td><td class="right"><?= ao_money($netTotal) ?></td></tr>
+      <tr><td>&minus; Labour cost (invoiced hours &times; pay rate)</td><td class="right" style="color:#a00">&minus;<?= ao_money($labourCost) ?></td></tr>
+      <tr style="border-top:1px solid #ddd"><td><strong>= Gross margin</strong></td><td class="right"><strong><?= ao_money($grossMargin) ?></strong></td></tr>
+      <?php if ($overheads > 0): ?><tr><td>&minus; Overheads (entered)</td><td class="right" style="color:#a00">&minus;<?= ao_money($overheads) ?></td></tr><?php endif; ?>
+      <tr style="border-top:2px solid #5d3a9b"><td><strong>= Net profit</strong></td><td class="right"><strong style="color:#155515"><?= ao_money($netProfit) ?></strong></td></tr>
+    </table>
+
+    <div style="margin-top:14px">
+      <strong>If drawn by one person (Erik) as salary &mdash; NZ PAYE estimate:</strong>
+      <table style="max-width:540px;margin-top:6px">
+        <tr><td>PAYE income tax</td><td class="right" style="color:#a00">&minus;<?= ao_money($payeTax) ?></td></tr>
+        <tr><td><strong>Estimated take-home</strong></td><td class="right"><strong style="color:#155515"><?= ao_money($takeHome) ?></strong></td></tr>
+        <tr><td class="muted">Effective tax rate</td><td class="right muted"><?= number_format($effRate * 100, 1) ?>%</td></tr>
+      </table>
+      <details style="margin-top:8px"><summary style="cursor:pointer;color:#888">tax bracket breakdown</summary>
+        <table style="max-width:540px;margin-top:6px;font-size:11px">
+          <?php
+            $inc = max(0.0, $netProfit); $lower = 0.0;
+            $labels = ['$0&ndash;15,600 @ 10.5%', '$15,601&ndash;53,500 @ 17.5%', '$53,501&ndash;78,100 @ 30%', '$78,101&ndash;180,000 @ 33%', '$180,001+ @ 39%'];
+            foreach (nz_tax_brackets() as $idx => [$upper, $rate]):
+              $slice = $inc > $lower ? (min($inc, (float)$upper) - $lower) : 0.0;
+              $lower = (float)$upper;
+          ?>
+            <tr><td><?= $labels[$idx] ?></td><td class="right"><?= ao_money($slice * $rate) ?></td></tr>
+          <?php endforeach; ?>
+        </table>
+      </details>
+    </div>
+
+    <p class="muted" style="font-size:11px;margin-top:10px">
+      Estimate only. Labour cost = each staffer's <em>current</em> Pay_Rate &times; their invoiced hours (not historical rates). Gross margin = revenue &minus; that labour cost; it does <strong>not</strong> include rent, software, vehicles, ACC, KiwiSaver, etc. &mdash; put those in &ldquo;Annual overheads&rdquo; for a net-profit figure. The PAYE estimate assumes the whole net profit is one person's salary and excludes the ACC earner's levy / KiwiSaver / student loan.
+    </p>
   </div>
 
   <div class="card">

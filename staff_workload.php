@@ -20,6 +20,7 @@
 
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';
 
 $pdo    = get_db();
 $userID = $_SESSION['UserID'] ?? '';
@@ -27,6 +28,10 @@ if (!in_array($userID, ['erik', 'jen'], true)) {
     http_response_code(403);
     die('Admin only.');
 }
+
+// The "T.B.A." placeholder staff (default #29) means the same as unassigned —
+// fold its tasks into the single Unassigned/TBA bucket. Configurable via App_Meta.
+$tbaEmp = (int)meta_get($pdo, 'tba_employee_id', '29');
 
 // ── Feature-detect the columns the newer migrations added ─────────────────
 $hasPtid = false;       // Timesheets.Proj_Task_ID — lets us tie logged hours to a task
@@ -79,6 +84,7 @@ foreach ($rows as $r) {
     if ($remaining < 0.05) continue;   // task complete / over budget → no work left
 
     $emp = (int)($r['Assigned_To'] ?? 0);
+    if ($emp === $tbaEmp) $emp = 0;    // T.B.A. placeholder == unassigned → one bucket
     if (!isset($byStaff[$emp])) $byStaff[$emp] = ['remaining' => 0.0, 'tasks' => 0, 'projects' => []];
     $byStaff[$emp]['remaining'] += $remaining;
     $byStaff[$emp]['tasks']++;
