@@ -397,6 +397,7 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
       <a class="btn secondary" href="project_new.php">New Project</a>
       <a class="btn secondary" href="more.php">More&hellip;</a>
       <a class="btn secondary" href="staff_hours.php">Staff Hours</a>
+      <a class="btn secondary" href="staff_workload.php">Staff Workload</a>
       <a class="btn secondary" href="monthly_invoicing.php">Monthly Invoicing</a>
       <a class="btn secondary" href="task_analytics.php">Task Analytics</a>
     </div>
