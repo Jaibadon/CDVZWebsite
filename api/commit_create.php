@@ -43,6 +43,7 @@ $rvtBackupNumber  = isset($_POST['rvt_backup_number']) && $_POST['rvt_backup_num
                      ? (int)$_POST['rvt_backup_number'] : null;
 $rvtBackupFile    = trim((string)($_POST['rvt_backup_filename'] ?? ''));
 $manifestJson     = (string)($_POST['manifest'] ?? '');
+$clientCommitUid  = trim((string)($_POST['client_commit_uid'] ?? ''));   // idempotency key (offline queue)
 
 if ($projId <= 0)         json_err('proj_id is required.');
 if ($message === '')      json_err('message is required.');
@@ -68,6 +69,25 @@ $assignedToProject = in_array($empId, [
     (int)$proj['Manager'], (int)$proj['DP1'], (int)$proj['DP2'], (int)$proj['DP3'],
 ], true);
 if (!$isAdmin && !$assignedToProject) json_err('Not assigned to this project.', 403);
+
+// ── Idempotency (offline-queue retries) ───────────────────────────────────
+// The add-in queues a commit and retries after a network blip, reusing the
+// same client_commit_uid. If we already have a commit with that UID, return it
+// instead of creating a duplicate. Column from add_keynotes_and_idempotency.sql.
+if ($clientCommitUid !== '') {
+    try {
+        $dup = $pdo->prepare("SELECT Commit_ID, Ifc_Git_Sha FROM Commits WHERE Client_Commit_Uid = ? LIMIT 1");
+        $dup->execute([$clientCommitUid]);
+        if ($row = $dup->fetch()) {
+            json_ok([
+                'commit_id' => (int)$row['Commit_ID'],
+                'git_sha'   => $row['Ifc_Git_Sha'],
+                'duplicate' => true,
+                'message'   => 'Commit already received (idempotent retry).',
+            ], 200);
+        }
+    } catch (\Throwable $e) { /* column missing on legacy installs — skip dedupe */ }
+}
 
 // ── Source artifact → git ─────────────────────────────────────────────────
 // Native: the manifest JSON IS the versioned artifact (diffable, durable, =
@@ -149,8 +169,8 @@ $pdo->prepare(
     "INSERT INTO Commits
        (Proj_ID, Parent_Commit_ID, Message, Author_UserID, Created_At,
         Rvt_Backup_Number, Rvt_Backup_Path, Ifc_Git_Sha, Status,
-        Revision_Label, Description)
-     VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, 'wip', ?, ?)"
+        Revision_Label, Description, Client_Commit_Uid)
+     VALUES (?, ?, ?, ?, NOW(), ?, ?, ?, 'wip', ?, ?, ?)"
 )->execute([
     $projId,
     $parentCommitId,
@@ -161,6 +181,7 @@ $pdo->prepare(
     $gitSha,
     $revisionLabel ?: null,
     null,
+    $clientCommitUid !== '' ? $clientCommitUid : null,
 ]);
 $commitId = (int)$pdo->lastInsertId();
 
@@ -285,8 +306,23 @@ foreach ($relationships as $r) {
     }
 }
 
+// ── Keynotes catalogue (native manifest) ─────────────────────────────────
+// Snapshot the project's Revit keynote table (code → description → category)
+// so an element's Keynote parameter code resolves to its spec meaning at this
+// revision. The add-in reads keynotes.txt from the project folder.
+$keynotes = is_array($manifest['keynotes'] ?? null) ? $manifest['keynotes'] : [];
+if (!empty($keynotes)) {
+    $insKn = $pdo->prepare(
+        "INSERT INTO Commit_Keynotes (Commit_ID, Code, Description, Category) VALUES (?, ?, ?, ?)"
+    );
+    foreach ($keynotes as $kn) {
+        if (!is_array($kn) || (string)($kn['code'] ?? '') === '') continue;
+        $insKn->execute([$commitId, (string)$kn['code'], (string)($kn['description'] ?? ''), $kn['category'] ?? null]);
+    }
+}
+
 // ── PDF outputs ─────────────────────────────────────────────────────────
-// The SPA sends any PDFs it found in the project folder as pdf[] multipart
+// The add-in (and the legacy SPA) send drawing PDFs as pdf[] multipart
 // files. We content-address them (sha256) into the blob archive on the
 // host filesystem, so the magic-link review page can serve them to
 // stakeholders WITHOUT a Drive round-trip on every page load. PDFs are
@@ -410,6 +446,7 @@ json_ok([
     'artifact_sha256'   => $srcSha,
     'element_count'     => count($elements),
     'relationship_count'=> count($relationships),
+    'keynote_count'     => count($keynotes),
     'diff'              => $diffCounts,
     'pdfs_stored'       => $pdfStored,
     'draft_timesheet_id'=> $draftTsId,
