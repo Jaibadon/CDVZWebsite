@@ -133,6 +133,32 @@ function text_from_utf8(string $content, string $encoding): string {
     }
 }
 
+/**
+ * Resolve where this project's keynotes live. The standard project template
+ * keeps the model + KEYNOTES.txt in a REVIT/ subfolder (uppercase), so look
+ * there first, then the project root, matching the filename case-insensitively.
+ * Returns ['target' => folderId (where to create if missing), 'file' => ['id','name','modifiedTime']|null].
+ */
+function kn_resolve_keynotes(PDO $pdo, string $rootFolderId): array {
+    $target = $rootFolderId;
+    try {
+        foreach (DriveClient::listFolder($pdo, $rootFolderId) as $c) {
+            if ((($c['mimeType'] ?? '') === 'application/vnd.google-apps.folder')
+                && strtolower((string)($c['name'] ?? '')) === 'revit') { $target = (string)$c['id']; break; }
+        }
+    } catch (Exception $e) {}
+    foreach (array_unique([$target, $rootFolderId]) as $fid) {
+        try {
+            foreach (DriveClient::listFolder($pdo, $fid) as $f) {
+                if (strtolower((string)($f['name'] ?? '')) === 'keynotes.txt') {
+                    return ['target' => $target, 'file' => ['id' => (string)$f['id'], 'name' => (string)$f['name'], 'modifiedTime' => ($f['modifiedTime'] ?? null)]];
+                }
+            }
+        } catch (Exception $e) {}
+    }
+    return ['target' => $target, 'file' => null];
+}
+
 // ── Handle: setting Drive folder for this project ───────────────────────
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_folder') {
     $input = (string)($_POST['drive_folder_input'] ?? '');
@@ -193,13 +219,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         $utf8 = implode("\r\n", $lines) . "\r\n";
         $bytes = text_from_utf8($utf8, $sourceEncoding);
 
-        $found = DriveClient::findFilesInFolder($pdo, $folderId, 'keynotes.txt');
-        if (!empty($found)) {
-            DriveClient::updateFileContent($pdo, $found[0]['id'], $bytes, 'text/plain');
-            $flash = 'Saved keynotes.txt to Drive (' . count($lines) . ' rows, encoding: ' . $sourceEncoding . ').';
+        $kn = kn_resolve_keynotes($pdo, $folderId);
+        if ($kn['file']) {
+            DriveClient::updateFileContent($pdo, $kn['file']['id'], $bytes, 'text/plain');
+            $flash = 'Saved ' . $kn['file']['name'] . ' to Drive (' . count($lines) . ' rows, encoding: ' . $sourceEncoding . ').';
         } else {
-            $newId = DriveClient::createTextFile($pdo, $folderId, 'keynotes.txt', $bytes, 'text/plain');
-            $flash = 'Created new keynotes.txt in Drive (' . count($lines) . " rows, encoding: $sourceEncoding, id $newId).";
+            // Create in the REVIT subfolder when present (matches the template), else the root.
+            $newId = DriveClient::createTextFile($pdo, $kn['target'], 'KEYNOTES.txt', $bytes, 'text/plain');
+            $flash = 'Created new KEYNOTES.txt in Drive (' . count($lines) . " rows, encoding: $sourceEncoding, id $newId).";
         }
     } catch (Exception $e) {
         $flashErr = 'Save failed: ' . $e->getMessage();
@@ -216,9 +243,9 @@ $rawByteCount = 0;
 
 if ($folderId !== '' && DriveClient::isConfigured() && DriveClient::isConnected($pdo)) {
     try {
-        $found = DriveClient::findFilesInFolder($pdo, $folderId, 'keynotes.txt');
-        if (!empty($found)) {
-            $fileMeta = $found[0];
+        $kn = kn_resolve_keynotes($pdo, $folderId);
+        if ($kn['file']) {
+            $fileMeta = $kn['file'];
             $raw = DriveClient::getFileContent($pdo, $fileMeta['id']);
             $rawByteCount = strlen($raw);
             $sourceEncoding = detect_text_encoding($raw);

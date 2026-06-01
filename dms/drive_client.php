@@ -299,6 +299,49 @@ class DriveClient
         return $existing ?? self::createFolder($pdo, $parentId, $name);
     }
 
+    /** Server-side copy of a file into a new parent (optionally renamed). Returns new id. */
+    public static function copyFile(PDO $pdo, string $fileId, string $destParentId, ?string $newName = null): string
+    {
+        $token = self::getAccessToken($pdo);
+        $meta = ['parents' => [$destParentId]];
+        if ($newName !== null && $newName !== '') $meta['name'] = $newName;
+        $url  = self::FILES_API . '/' . rawurlencode($fileId) . '/copy?supportsAllDrives=true&fields=id';
+        $resp = self::httpUpload($url, 'POST', $token, 'application/json; charset=UTF-8',
+                                 json_encode($meta, JSON_UNESCAPED_SLASHES));
+        $json = json_decode($resp, true);
+        if (!is_array($json) || empty($json['id'])) throw new DriveOAuthException('copyFile returned: ' . $resp);
+        return (string)$json['id'];
+    }
+
+    /** Rename a file/folder. */
+    public static function renameFile(PDO $pdo, string $fileId, string $newName): void
+    {
+        $token = self::getAccessToken($pdo);
+        $url = self::FILES_API . '/' . rawurlencode($fileId) . '?supportsAllDrives=true';
+        self::httpUpload($url, 'PATCH', $token, 'application/json; charset=UTF-8',
+                         json_encode(['name' => $newName], JSON_UNESCAPED_SLASHES));
+    }
+
+    /**
+     * Recursively copy a folder (subfolders recreated, files server-side copied)
+     * into destParentId under newName. Returns the new folder id. Drive copies
+     * file bytes server-side (no download), so even a large .rvt is cheap.
+     */
+    public static function copyFolderRecursive(PDO $pdo, string $srcFolderId, string $destParentId, string $newName, int $depth = 0): string
+    {
+        if ($depth > 15) throw new DriveOAuthException('Template folder nested too deep.');
+        $newFolderId = self::createFolder($pdo, $destParentId, $newName);
+        foreach (self::listFolder($pdo, $srcFolderId) as $child) {
+            $isFolder = (($child['mimeType'] ?? '') === 'application/vnd.google-apps.folder');
+            if ($isFolder) {
+                self::copyFolderRecursive($pdo, (string)$child['id'], $newFolderId, (string)$child['name'], $depth + 1);
+            } else {
+                self::copyFile($pdo, (string)$child['id'], $newFolderId, (string)$child['name']);
+            }
+        }
+        return $newFolderId;
+    }
+
     // ── HTTP helpers ────────────────────────────────────────────────────
 
     private static function httpForm(string $url, array $form): array

@@ -117,11 +117,23 @@ function run_coverage_rules(PDO $pdo, int $commitId, ?int $parentCommitId, ?arra
         }
     }
 
+    // ── Keynote-driven coverage (Erik's keynote category → clause training) ──
+    // Runs alongside the JSON rules: a changed element's keynote → category →
+    // clause (Keynote_Clause_Map) → roles (NZBC_Clauses). Merged into the tags.
+    $notifyRoles = [];
+    try {
+        $kc = run_keynote_coverage($pdo, $commitId, $diff);
+        foreach ($kc['tags'] as $t)    $tagsSet[$t] = true;
+        foreach ($kc['notify'] as $rr) $notifyRoles[$rr] = true;
+        foreach ($kc['details'] as $d) $details[] = $d;
+    } catch (Exception $e) { $errors[] = 'Keynote coverage: ' . $e->getMessage(); }
+
     return [
-        'firings' => $firings,
-        'tags'    => array_keys($tagsSet),
-        'details' => $details,
-        'errors'  => $errors,
+        'firings'      => $firings,
+        'tags'         => array_keys($tagsSet),
+        'notify_roles' => array_keys($notifyRoles),
+        'details'      => $details,
+        'errors'       => $errors,
     ];
 }
 
@@ -428,6 +440,92 @@ function filter_coverage_param_changed(array $modified, array $selector): array
         ];
     }
     return $out;
+}
+
+/**
+ * Keynote-driven coverage: map this commit's CHANGED elements (added + modified)
+ * to NZBC clauses via their keynote code → category → Keynote_Clause_Map, and
+ * the clause's notify-roles. Writes keynote-sourced Commit_NZBC_Tags.
+ * Returns ['tags'=>[clauseCodes], 'notify'=>[roles], 'details'=>[...]].
+ */
+function run_keynote_coverage(PDO $pdo, int $commitId, array $diff): array
+{
+    $empty = ['tags' => [], 'notify' => [], 'details' => []];
+
+    // Changed elements present in THIS commit (removed elements live in the
+    // parent commit; covering those is a future pass).
+    $present = $diff['added'] ?? [];
+    foreach (($diff['modified'] ?? []) as $m) { if (isset($m['current'])) $present[] = $m['current']; }
+    $instIds = [];
+    foreach ($present as $el) { if (!empty($el['element_instance_id'])) $instIds[] = (int)$el['element_instance_id']; }
+    $instIds = array_values(array_unique($instIds));
+    if (empty($instIds)) return $empty;
+
+    // Keynote code per changed element (the Revit Keynote parameter).
+    $in = implode(',', array_fill(0, count($instIds), '?'));
+    $kq = $pdo->prepare(
+        "SELECT DISTINCT ep.Param_Value AS code
+           FROM Element_Parameters ep
+          WHERE ep.Element_Instance_ID IN ($in)
+            AND ep.Param_Value IS NOT NULL AND ep.Param_Value <> ''
+            AND (LOWER(ep.Param_Name) = 'keynote' OR UPPER(COALESCE(ep.Builtin_Key,'')) LIKE '%KEYNOTE%')"
+    );
+    $kq->execute($instIds);
+    $changedCodes = array_column($kq->fetchAll(PDO::FETCH_ASSOC), 'code');
+    if (empty($changedCodes)) return $empty;
+
+    // code → category (this commit's keynote catalogue).
+    $catByCode = [];
+    $cn = $pdo->prepare("SELECT Code, Category FROM Commit_Keynotes WHERE Commit_ID = ?");
+    $cn->execute([$commitId]);
+    foreach ($cn->fetchAll(PDO::FETCH_ASSOC) as $r) $catByCode[(string)$r['Code']] = (string)$r['Category'];
+
+    $maps = $pdo->query("SELECT Match_Type, Match_Value, Clause_Code, Notify_Roles_CSV FROM Keynote_Clause_Map WHERE Active = 1")->fetchAll(PDO::FETCH_ASSOC);
+    if (empty($maps)) return $empty;
+
+    $clauseRoles = [];
+    foreach ($pdo->query("SELECT Clause_Code, Default_Stakeholder_Roles_CSV FROM NZBC_Clauses")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        $clauseRoles[(string)$r['Clause_Code']] = (string)$r['Default_Stakeholder_Roles_CSV'];
+    }
+
+    $byClause = [];   // clause => ['roles'=>set, 'cats'=>set, 'codes'=>set]
+    foreach ($changedCodes as $code) {
+        $code = (string)$code;
+        $cat  = $catByCode[$code] ?? null;
+        foreach ($maps as $mp) {
+            $mt = (string)$mp['Match_Type']; $mv = (string)$mp['Match_Value']; $matched = false;
+            if ($mt === 'category')         $matched = ($cat !== null && strcasecmp($cat, $mv) === 0);
+            elseif ($mt === 'code')         $matched = (strcasecmp($code, $mv) === 0);
+            elseif ($mt === 'code_prefix')  $matched = ($mv !== '' && stripos($code, $mv) === 0);
+            if (!$matched) continue;
+            $clause = (string)$mp['Clause_Code'];
+            if (!isset($byClause[$clause])) $byClause[$clause] = ['roles' => [], 'cats' => [], 'codes' => []];
+            $roles = trim((string)($mp['Notify_Roles_CSV'] ?? '')) !== '' ? (string)$mp['Notify_Roles_CSV'] : ($clauseRoles[$clause] ?? '');
+            foreach (array_filter(array_map('trim', explode(',', $roles))) as $rr) $byClause[$clause]['roles'][$rr] = true;
+            if ($cat !== null) $byClause[$clause]['cats'][$cat] = true;
+            $byClause[$clause]['codes'][$code] = true;
+        }
+    }
+    if (empty($byClause)) return $empty;
+
+    $insTag = $pdo->prepare(
+        "INSERT IGNORE INTO Commit_NZBC_Tags (Commit_ID, Clause_Code, Source, Confidence, Tagged_By, Tagged_At)
+         VALUES (?, ?, 'keynote', 0.90, 'system', NOW())"
+    );
+    $tags = []; $notify = []; $details = [];
+    foreach ($byClause as $clause => $info) {
+        $insTag->execute([$commitId, $clause]);
+        $tags[] = $clause;
+        foreach (array_keys($info['roles']) as $rr) $notify[$rr] = true;
+        $details[] = [
+            'source'       => 'keynote',
+            'clause'       => $clause,
+            'roles'        => array_keys($info['roles']),
+            'keynote_cats' => array_keys($info['cats']),
+            'sample_codes' => array_slice(array_keys($info['codes']), 0, 6),
+        ];
+    }
+    return ['tags' => $tags, 'notify' => array_keys($notify), 'details' => $details];
 }
 
 } // function_exists guard

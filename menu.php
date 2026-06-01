@@ -52,6 +52,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_
         $fid = DriveClient::extractFolderId($rootRaw);
         if ($fid) meta_set($pdo, 'dms_drive_root_folder_id', $fid);
     }
+    $tplRaw = trim((string)($_POST['dms_template_folder_id'] ?? ''));
+    if ($tplRaw !== '') {
+        $tid = DriveClient::extractFolderId($tplRaw);
+        if ($tid) meta_set($pdo, 'dms_template_folder_id', $tid);
+    }
     $_SESSION['drive_flash'] = 'DMS auto-provisioning settings saved.';
     header('Location: menu.php');
     exit;
@@ -416,6 +421,7 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
       <a class="btn secondary" href="staff_workload.php">Staff Workload</a>
       <a class="btn secondary" href="monthly_invoicing.php">Monthly Invoicing</a>
       <a class="btn secondary" href="task_analytics.php">Task Analytics</a>
+      <a class="btn secondary" href="coverage_admin.php">Code Coverage Setup</a>
       <a class="btn" href="analytics.php" style="background:#5d3a9b">&#128202; Analytics Hub</a>
     </div>
 
@@ -450,6 +456,7 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
       $apOn   = (meta_get(get_db(), 'dms_autoprovision', '0') === '1');
       $apGrp  = (string)meta_get(get_db(), 'dms_folder_grouping', 'client');
       $apRoot = (string)meta_get(get_db(), 'dms_drive_root_folder_id', '');
+      $apTpl  = (string)meta_get(get_db(), 'dms_template_folder_id', '');
     ?>
     <h3>DMS &mdash; auto-provision project Drive folders</h3>
     <form method="post" class="card" style="font-size:13px;max-width:660px;background:#fff;border:1px solid #ddd;border-radius:5px;padding:12px 14px">
@@ -465,8 +472,11 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
         </select>
         <span style="color:#888">&mdash; if a client already has a folder, new jobs always join it regardless of this setting.</span>
       </label>
-      <label style="display:block;margin-bottom:10px">Drive root folder (paste the Shared Drive folder URL or ID):<br>
+      <label style="display:block;margin-bottom:10px">Drive root folder (where project/client folders are created):<br>
         <input type="text" name="dms_drive_root_folder_id" value="<?= htmlspecialchars($apRoot) ?>" style="width:90%;padding:5px;font-family:Consolas,Menlo,monospace" placeholder="https://drive.google.com/drive/folders/...">
+      </label>
+      <label style="display:block;margin-bottom:10px">Template folder to clone (the <code>_0TEMPLATE</code> skeleton — full copy incl. starter .rvt):<br>
+        <input type="text" name="dms_template_folder_id" value="<?= htmlspecialchars($apTpl) ?>" style="width:90%;padding:5px;font-family:Consolas,Menlo,monospace" placeholder="paste the _0TEMPLATE folder URL or ID — leave blank for a minimal skeleton">
       </label>
       <button type="submit" class="btn">Save provisioning settings</button>
       <?php if (!$driveConnected): ?><div style="color:#a05a00;margin-top:8px">&#9888; Connect Google Drive above first &mdash; provisioning uses that connection (use a dedicated/shared account, not a personal Drive).</div><?php endif; ?>

@@ -32,6 +32,7 @@ function provision_project_drive_folder(PDO $pdo, int $projId): array
 {
     $root = trim((string)meta_get($pdo, 'dms_drive_root_folder_id', ''));
     if ($root === '') throw new Exception('No DMS Drive root folder configured (menu → DMS auto-provisioning).');
+    $templateId = trim((string)meta_get($pdo, 'dms_template_folder_id', ''));   // the _0TEMPLATE to clone
 
     $p = $pdo->prepare("SELECT proj_id, JobName, Client_ID, drive_folder_id FROM Projects WHERE proj_id = ?");
     $p->execute([$projId]);
@@ -65,13 +66,35 @@ function provision_project_drive_folder(PDO $pdo, int $projId): array
     }
 
     // Suffix the proj_id so two projects with the same JobName don't collide
-    // into one folder (ensureSubfolder reuses an existing folder by name).
-    $projName   = drive_safe_name((string)$proj['JobName'], 'Project ' . $projId) . ' (#' . $projId . ')';
-    $projFolder = DriveClient::ensureSubfolder($pdo, $parentId, $projName);
-    try { DriveClient::ensureSubfolder($pdo, $projFolder, 'PDFS'); } catch (Exception $e) { /* non-fatal */ }
+    // into one folder.
+    $jobSafe  = drive_safe_name((string)$proj['JobName'], 'Project ' . $projId);
+    $projName = $jobSafe . ' (#' . $projId . ')';
+
+    if ($templateId !== '') {
+        // Clone the full _0TEMPLATE skeleton (subfolders + seed files + starter .rvt).
+        $projFolder = DriveClient::copyFolderRecursive($pdo, $templateId, $parentId, $projName);
+        // Rename the starter REVIT/PROJECT FILE.rvt → "<JobName>.rvt".
+        try {
+            $revitId = DriveClient::findSubfolder($pdo, $projFolder, 'REVIT');
+            if ($revitId) {
+                foreach (DriveClient::listFolder($pdo, $revitId) as $f) {
+                    if (strtolower(substr((string)($f['name'] ?? ''), -4)) === '.rvt') {
+                        DriveClient::renameFile($pdo, (string)$f['id'], $jobSafe . '.rvt');
+                        break;
+                    }
+                }
+            }
+        } catch (Exception $e) { /* rename is non-fatal — folder still provisioned */ }
+        $note = 'cloned template';
+    } else {
+        // No template configured → minimal skeleton (folder + PDF subfolder).
+        $projFolder = DriveClient::ensureSubfolder($pdo, $parentId, $projName);
+        try { DriveClient::ensureSubfolder($pdo, $projFolder, 'PDF'); } catch (Exception $e) {}
+        $note = 'minimal (no template set)';
+    }
 
     $pdo->prepare("UPDATE Projects SET drive_folder_id = ? WHERE proj_id = ?")->execute([$projFolder, $projId]);
-    return ['folder_id' => $projFolder, 'created' => true, 'note' => 'provisioned under ' . ($parentId === $root ? 'root' : 'client folder')];
+    return ['folder_id' => $projFolder, 'created' => true, 'note' => $note . ' under ' . ($parentId === $root ? 'root' : 'client folder')];
 }
 
 } // function_exists guard
