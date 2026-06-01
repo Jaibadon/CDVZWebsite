@@ -8,6 +8,7 @@
  */
 require_once 'auth_check.php';
 require_once 'db_connect.php';
+require_once 'helpers.php';   // get_tba_rate()
 
 $pdo  = get_db();
 $user = $_SESSION['UserID'] ?? '';
@@ -50,9 +51,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
         $pdo->beginTransaction();
 
         // Per-project variation number = max+1
-        $vnum = (int)$pdo->prepare("SELECT COALESCE(MAX(Variation_Number),0)+1 FROM Project_Variations WHERE Proj_ID = ?")
-                        ->execute([$projId]) ?: 1;
-        // (execute returns bool — re-fetch properly)
         $st = $pdo->prepare("SELECT COALESCE(MAX(Variation_Number),0)+1 AS n FROM Project_Variations WHERE Proj_ID = ?");
         $st->execute([$projId]);
         $vnum = (int)$st->fetchColumn();
@@ -71,21 +69,38 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'creat
             VALUES (?, ?, ?, ?, ?, 1, '')")
            ->execute([$nextStageId, $projId, $variationId, $stageTypeId, $title]);
 
-        // Create tasks
+        // Create tasks — assigned to the staff member logging the variation
+        // (they're estimating their own work). Without an explicit Assigned_To
+        // the legacy column default leaks in (showed up as a phantom staff #58),
+        // and the task wouldn't appear on the creator's checklist. Snapshot
+        // Quoted_Rate from their Billing Rate (matches the quote-builder paths)
+        // so my_checklist's hour-ratio is correct.
+        $hasQuotedRate = false;
+        try { $hasQuotedRate = (bool)$pdo->query("SHOW COLUMNS FROM Project_Tasks LIKE 'Quoted_Rate'")->fetch(); } catch (Exception $e) {}
+        $creatorRate = 0.0;
+        try {
+            $rs = $pdo->prepare("SELECT `Billing Rate` FROM Staff WHERE Employee_ID = ?");
+            $rs->execute([$empId]);
+            $creatorRate = (float)$rs->fetchColumn();
+        } catch (Exception $e) {}
+        if ($creatorRate <= 0 && function_exists('get_tba_rate')) {
+            try { $creatorRate = (float)get_tba_rate($pdo); } catch (Exception $e) {}
+        }
+
         $nextTaskId = (int)$pdo->query("SELECT COALESCE(MAX(Proj_Task_ID),0)+1 FROM Project_Tasks")->fetchColumn();
-        $taskIns = $pdo->prepare("INSERT INTO Project_Tasks
-            (Proj_Task_ID, Project_Stage_ID, Variation_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order)
-            VALUES (?, ?, ?, ?, ?, ?, '', ?)");
+        $cols = "Proj_Task_ID, Project_Stage_ID, Variation_ID, Task_Type_ID, Description, Weight, Proj_Task_Notes, Proj_Task_Order, Assigned_To";
+        $ph   = "?, ?, ?, ?, ?, ?, '', ?, ?";
+        if ($hasQuotedRate) { $cols .= ", Quoted_Rate"; $ph .= ", ?"; }
+        $taskIns = $pdo->prepare("INSERT INTO Project_Tasks ($cols) VALUES ($ph)");
         $order = 0;
         foreach ($rowsToInsert as $row) {
             // Use Weight to scale Tasks_Types.Estimated_Time so the staff-entered
             // hours become the effective estimate. weight = hours / base_estimate.
             $base = (float)$pdo->query("SELECT Estimated_Time FROM Tasks_Types WHERE Task_ID = " . (int)$row['task_type_id'])->fetchColumn();
             $weight = ($base > 0) ? ($row['hours'] / $base) : 1;
-            $taskIns->execute([
-                $nextTaskId, $nextStageId, $variationId, $row['task_type_id'],
-                $row['desc'], $weight, $order++,
-            ]);
+            $vals = [$nextTaskId, $nextStageId, $variationId, $row['task_type_id'], $row['desc'], $weight, $order++, $empId];
+            if ($hasQuotedRate) $vals[] = ($creatorRate > 0 ? $creatorRate : null);
+            $taskIns->execute($vals);
             $nextTaskId++;
         }
 
