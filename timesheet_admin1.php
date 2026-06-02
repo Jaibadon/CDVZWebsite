@@ -136,7 +136,7 @@ function populateUserBox($pdo) {
                       </td>
                     </tr>
                     </table>
-                  <p><font face="Arial"><font color="#FF0000"><b>*</b></font> = Mandatory field
+                  <p><font face="Arial"><font color="#FF0000"><b>*</b></font> = recommended. Dates are optional &mdash; leave the start blank to go back to 1990, or the finish blank to run through today
                     <input type="submit" name="GoButton" value="   GO   ">
                     <br>
                     </font> </p>

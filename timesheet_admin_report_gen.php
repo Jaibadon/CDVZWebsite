@@ -41,11 +41,24 @@ $sql = "SELECT AL1.TS_DATE, AL1.TASK, AL4.JobName, AL1.hours, AL1.Employee_id, A
         WHERE 1=1";
 $params = [];
 
-if ($varDATE1 !== '' && $varDATE2 !== '') {
-    $d1 = to_mysql_date(str_replace('%2F', '/', $varDATE1));
-    $d2 = to_mysql_date(str_replace('%2F', '/', $varDATE2));
-    if ($d1 && $d2) { $sql .= " AND AL1.TS_DATE BETWEEN ? AND ?"; $params[] = $d1; $params[] = $d2; }
-}
+// Date range. Either side may be left blank: a blank (or unreadable) START
+// defaults to 1990-01-01, a blank END defaults to end-of-today — with a small
+// warning so it's clear what range was actually used. (End is 23:59:59 so
+// today's timestamped entries aren't dropped.)
+$rangeWarnings = [];
+$startRaw = trim((string)$varDATE1);
+$endRaw   = trim((string)$varDATE2);
+$d1 = $startRaw !== '' ? to_mysql_date(str_replace('%2F', '/', $startRaw)) : '';
+$d2 = $endRaw   !== '' ? to_mysql_date(str_replace('%2F', '/', $endRaw))   : '';
+if ($startRaw === '')   { $d1 = '1990-01-01'; $rangeWarnings[] = 'Start date was blank — showing from 01/01/1990.'; }
+elseif (!$d1)           { $d1 = '1990-01-01'; $rangeWarnings[] = 'Couldn\'t read the start date "' . $startRaw . '" — showing from 01/01/1990.'; }
+if ($endRaw === '')     { $d2 = date('Y-m-d') . ' 23:59:59'; $rangeWarnings[] = 'End date was blank — showing through today (' . date('d/m/Y') . ').'; }
+elseif (!$d2)           { $d2 = date('Y-m-d') . ' 23:59:59'; $rangeWarnings[] = 'Couldn\'t read the end date "' . $endRaw . '" — showing through today (' . date('d/m/Y') . ').'; }
+$sql .= " AND AL1.TS_DATE BETWEEN ? AND ?";
+$params[] = $d1;
+$params[] = $d2;
+$dispFrom = date('d/m/Y', strtotime($d1));
+$dispTo   = date('d/m/Y', strtotime($d2));
 if (!empty($projectFilter)) { $sql .= " AND AL1.proj_id = ?"; $params[] = $projectFilter; }
 
 $staffName = '';
@@ -141,10 +154,13 @@ table.rpt td.num, table.rpt th.num { text-align:right; font-variant-numeric:tabu
 <div class="page">
 
   <div class="card filters">
-    <b>Date range:</b> <?= $varDATE1 !== '' ? htmlspecialchars($varDATE1) . ' to ' . htmlspecialchars($varDATE2) : 'all dates' ?>
+    <b>Date range:</b> <?= htmlspecialchars($dispFrom) ?> to <?= htmlspecialchars($dispTo) ?>
     &nbsp;·&nbsp; <b>Project:</b> <?= !empty($projectFilter) ? htmlspecialchars((string)$projectFilter) : 'all' ?>
     &nbsp;·&nbsp; <b>Staff:</b> <?= $staffName !== '' ? htmlspecialchars($staffName) : (!empty($staffFilter) ? htmlspecialchars((string)$staffFilter) : 'all') ?>
     &nbsp;·&nbsp; <b>Grand total:</b> <?= $fmt($grand) ?> h
+    <?php foreach ($rangeWarnings as $w): ?>
+      <div style="margin-top:8px;color:#7a5a00;background:#fff3cd;border:1px solid #c8a52e;border-radius:4px;padding:6px 10px;font-size:12px;">&#9888; <?= htmlspecialchars($w) ?></div>
+    <?php endforeach; ?>
   </div>
 
   <?php if (empty($rows)): ?>
