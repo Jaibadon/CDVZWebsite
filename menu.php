@@ -421,7 +421,7 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
       <a class="btn secondary" href="staff_workload.php">Staff Workload</a>
       <a class="btn secondary" href="monthly_invoicing.php">Monthly Invoicing</a>
       <a class="btn secondary" href="task_analytics.php">Task Analytics</a>
-      <a class="btn secondary" href="coverage_admin.php">Code Coverage Setup</a>
+      <a class="btn secondary" href="coverage_admin.php">Building Code coverage</a>
       <a class="btn" href="analytics.php" style="background:#5d3a9b">&#128202; Analytics Hub</a>
     </div>
 
