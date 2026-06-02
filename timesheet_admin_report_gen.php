@@ -74,7 +74,11 @@ if (!empty($staffFilter)) {
               <br>
 
               <?php
-$sql = "SELECT AL1.TS_DATE, AL1.TASK, AL4.JobName, AL1.hours FROM Timesheets AL1, Projects AL4 WHERE AL4.proj_id=AL1.proj_id";
+$sql = "SELECT AL1.TS_DATE, AL1.TASK, AL4.JobName, AL1.hours, AL1.Employee_id, AL5.Login
+        FROM Timesheets AL1
+        JOIN Projects AL4 ON AL4.proj_id = AL1.proj_id
+        LEFT JOIN Staff AL5 ON AL5.Employee_id = AL1.Employee_id
+        WHERE 1=1";
 
 $params = [];
 
@@ -111,28 +115,68 @@ $sql .= " ORDER BY AL1.TS_DATE;";
 
 $stmtRS = $pdo->prepare($sql);
 $stmtRS->execute($params);
+
+// ── Auto-total the hours so Jen/Erik never add them up by hand ──────────
+// One pass over the rows builds the grand total + per-staff + per-project
+// subtotals. (Hours can be NULL on old rows — COALESCE to 0.)
+$tsRows = $stmtRS->fetchAll(PDO::FETCH_ASSOC);
+$hours_total = 0.0; $byStaff = []; $byProject = [];
+foreach ($tsRows as $r) {
+    $h = (float)($r['hours'] ?? 0);
+    $hours_total += $h;
+    $sName = (string)($r['Login'] ?? ('#' . (int)($r['Employee_id'] ?? 0)));
+    $pName = (string)($r['JobName'] ?? '(no project)');
+    $byStaff[$sName]   = ($byStaff[$sName]   ?? 0) + $h;
+    $byProject[$pName] = ($byProject[$pName] ?? 0) + $h;
+}
+arsort($byStaff); arsort($byProject);
+// Trim trailing zeros for display: 7.50 -> 7.5, 8.00 -> 8.
+$ts_fmt = function ($n) { return rtrim(rtrim(number_format((float)$n, 2), '0'), '.'); };
 ?>
             </font>
             </p>
+
+            <!-- Summary: hours by staff and by project (auto-totalled) -->
+            <table border="0" cellpadding="8" align="center"><tr valign="top">
+              <td>
+                <table border="1" cellpadding="3" style="border-collapse:collapse;font-family:Arial;font-size:13px;">
+                  <tr bgcolor="#EBEBEB"><td colspan="2"><b>Hours by staff</b></td></tr>
+                  <?php foreach ($byStaff as $name => $h): ?>
+                  <tr><td><?= htmlspecialchars($name) ?></td><td align="right"><?= $ts_fmt($h) ?></td></tr>
+                  <?php endforeach; ?>
+                  <tr bgcolor="#EBEBEB"><td><b>Total</b></td><td align="right"><b><?= $ts_fmt($hours_total) ?></b></td></tr>
+                </table>
+              </td>
+              <td>
+                <table border="1" cellpadding="3" style="border-collapse:collapse;font-family:Arial;font-size:13px;">
+                  <tr bgcolor="#EBEBEB"><td colspan="2"><b>Hours by project</b></td></tr>
+                  <?php foreach ($byProject as $name => $h): ?>
+                  <tr><td><?= htmlspecialchars($name) ?></td><td align="right"><?= $ts_fmt($h) ?></td></tr>
+                  <?php endforeach; ?>
+                  <tr bgcolor="#EBEBEB"><td><b>Total</b></td><td align="right"><b><?= $ts_fmt($hours_total) ?></b></td></tr>
+                </table>
+              </td>
+            </tr></table>
             <table border="1" width="95%" cellpadding="2">
               <tr>
                 <td><p><font face="Arial" color='#000000'><b>Project</b></font></p></td>
+                <td><p><font face="Arial" color='#000000'><b>Staff</b></font></p></td>
                 <td><p><font face="Arial" color='#000000'><b>Task</b></font></p></td>
                 <td><p><font face="Arial" color='#000000'><b>Day</b></font></p></td>
                 <td><p><font face="Arial" color='#000000'><b>Date</b></font></p></td>
                 <td><p><font face="Arial" color='#000000'><b>Hours</b></font></p></td>
               </tr>
               <?php
-$hours_total = 0;
-while ($row = $stmtRS->fetch(PDO::FETCH_ASSOC)) {
-    $tsDate = $row['TS_DATE'];
-    $dayName = date('D', strtotime($tsDate)); // short weekday name e.g. Mon
-    echo "<tr><td><font size=2 color='#000000'>" . htmlspecialchars($row['JobName']) . "</td>";
-    echo "<td><font size=2 color='#000000'>" . htmlspecialchars($row['TASK']) . "</td>";
+foreach ($tsRows as $row) {
+    $tsDate   = $row['TS_DATE'];
+    $dayName  = $tsDate ? date('D', strtotime($tsDate)) : '';            // e.g. Mon
+    $dateFull = $tsDate ? date('l, d F Y', strtotime($tsDate)) : '';
+    echo "<tr><td><font size=2 color='#000000'>" . htmlspecialchars((string)$row['JobName']) . "</td>";
+    echo "<td><font size=2 color='#000000'>" . htmlspecialchars((string)($row['Login'] ?? '')) . "</td>";
+    echo "<td><font size=2 color='#000000'>" . htmlspecialchars((string)$row['TASK']) . "</td>";
     echo "<td><font size=2 color='#000000'>" . htmlspecialchars($dayName) . "</td>";
-    echo "<td><font size=2 color='#000000'>" . htmlspecialchars(date('l, d F Y', strtotime($tsDate))) . "</td>";
-    echo "<td><font size=2 color='#000000'>" . htmlspecialchars($row['hours']) . "</td></tr>";
-    $hours_total += $row['hours'];
+    echo "<td><font size=2 color='#000000'>" . htmlspecialchars($dateFull) . "</td>";
+    echo "<td align='right'><font size=2 color='#000000'>" . htmlspecialchars($ts_fmt($row['hours'] ?? 0)) . "</td></tr>";
 }
 ?>
             </table>
