@@ -134,7 +134,7 @@ foreach ($timesheets as $ts) {
       <td width="69">Credit No:&nbsp;</td>
       <td width="96"><div align="right">
 <?php
-echo '<a href="invoice_edit.php?invoice_no=' . htmlspecialchars($rs['invoice_no']) . '">';
+echo '<a href="invoice_edit.php?invoice_no=' . htmlspecialchars((string)$rs['Invoice_No']) . '">';
 echo htmlspecialchars($rs['Invoice_No']);
 echo '</a>';
 ?>
@@ -146,7 +146,7 @@ echo '</a>';
        <a href="mailto:<?= htmlspecialchars($Billto) ?>"><?= htmlspecialchars($Billto) ?></a></td>
       <td>&nbsp;</td>
       <td valign="top">Date:&nbsp;</td>
-      <td valign="top"><div align="right"><?= htmlspecialchars(date('d/m/Y', strtotime($rs['DATE']))) ?></div></td>
+      <td valign="top"><div align="right"><?= htmlspecialchars(!empty($rs['InvDate']) ? date('d/m/Y', strtotime((string)$rs['InvDate'])) : '') ?></div></td>
     </tr>
     <tr>
       <td>Job Name:</td>
@@ -174,7 +174,7 @@ echo '</a>';
 <table width="647" border="0">
 <?php foreach ($timesheets as $ts): ?>
 <tr>
-<td width="88"><?= htmlspecialchars(date('d/m/Y', strtotime($ts['TS_Date']))) ?></td>
+<td width="88"><?= htmlspecialchars(!empty($ts['TS_DATE']) ? date('d/m/Y', strtotime((string)$ts['TS_DATE'])) : '') ?></td>
 <td width="50"><?= htmlspecialchars($ts['Login']) ?></td>
 <td width="261"><?= htmlspecialchars($ts['Task']) ?></td>
 <td width="60" align="Right"><?= htmlspecialchars($ts['Hours']) ?></td>
@@ -215,11 +215,12 @@ echo '$' . number_format((float)$rs['Subtotal'], 2);
   <tr>
     <td><strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;Payment due by:&nbsp;
 <?php
-if ($rs['PaymentOption'] == 1) {
-    $next = date('Y-m-d', strtotime('+1 months', strtotime($rs['DATE'])));
+$invDateRaw = $rs['InvDate'] ?? null;
+if ($rs['PaymentOption'] == 1 && !empty($invDateRaw)) {
+    $next = date('Y-m-d', strtotime('+1 months', strtotime((string)$invDateRaw)));
     echo '20/' . (int)date('n', strtotime($next)) . '/' . (int)date('Y', strtotime($next));
-} elseif ($rs['PaymentOption'] == 2) {
-    echo date('d/m/Y', strtotime('+7 days', strtotime($rs['DATE'])));
+} elseif ($rs['PaymentOption'] == 2 && !empty($invDateRaw)) {
+    echo date('d/m/Y', strtotime('+7 days', strtotime((string)$invDateRaw)));
 }
 ?>
     </strong>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<font size=1>Thank you for your valued custom</font></td>
