@@ -36,6 +36,12 @@ Commits (… Client_Commit_Uid)` references a column that doesn't exist yet) and
 the add-in **cannot authenticate** (`Staff.api_token` doesn't exist). See
 `docs/DB_CONSISTENCY.md` for the full impact analysis.
 
+> **Follow-up migration (added with the DMS code fixes):** also run
+> **`add_coverage_firing_uid.sql`** — widens `Coverage_Rule_Firings.Element_Ifc_Guid`
+> from `CHAR(22)` to `VARCHAR(64)` so a native Revit UniqueId (~45 chars) fits;
+> without it, coverage firings on native commits error/truncate under strict SQL
+> mode. Idempotent; safe to run after the seven below.
+
 | # | File | Adds | Why it's required |
 |---|------|------|-------------------|
 | 1 | `add_api_tokens.sql` | `Staff.api_token` + unique index `uniq_api_token` | Add-in auth (`resolve_api_token()` in `api/_bootstrap.php`). Without it the add-in has **no** way to authenticate. |

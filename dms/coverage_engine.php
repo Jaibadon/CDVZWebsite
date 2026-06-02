@@ -172,7 +172,8 @@ function load_commit_snapshot(PDO $pdo, int $commitId): array
     // wrong name here previously made the whole snapshot load throw, which
     // silently disabled ALL coverage rules.
     $stmt = $pdo->prepare(
-        "SELECT COALESCE(ei.Element_Uid, ei.Ifc_Guid) AS Guid, ep.Param_Set, ep.Param_Name, ep.Param_Value
+        "SELECT COALESCE(ei.Element_Uid, ei.Ifc_Guid) AS Guid,
+                ep.Param_Set, ep.Param_Name, ep.Builtin_Key, ep.Param_Value, ep.Value_Num
            FROM Element_Parameters ep
            INNER JOIN Element_Instances ei ON ei.Element_Instance_ID = ep.Element_Instance_ID
           WHERE ei.Commit_ID = ?"
@@ -182,13 +183,24 @@ function load_commit_snapshot(PDO $pdo, int $commitId): array
     // Key by composite "pset\x1fname" (both lowercased) so two PSets that
     // share a property name (e.g. both have "Reference") don't clobber each
     // other. The \x1f unit-separator can't appear in a real PSet/param name.
+    // Each cell carries the string value AND the numeric shadow (Value_Num).
+    // We ALSO index by the stable Builtin_Key so coverage rules can match the
+    // language-independent Revit key, not just the (volatile) display name —
+    // otherwise the seed rules (Thickness, LoadBearing, …) never fire on native
+    // commits, which send Revit display names.
     $params = [];
     foreach ($stmt->fetchAll(PDO::FETCH_ASSOC) as $p) {
         $guid = $p['Guid'];
         if (!$guid) continue;
         if (!isset($params[$guid])) $params[$guid] = [];
-        $key = strtolower((string)($p['Param_Set'] ?? '')) . "\x1f" . strtolower((string)$p['Param_Name']);
-        $params[$guid][$key] = (string)($p['Param_Value'] ?? '');
+        $cell = [
+            'value' => (string)($p['Param_Value'] ?? ''),
+            'num'   => (isset($p['Value_Num']) && is_numeric($p['Value_Num'])) ? (float)$p['Value_Num'] : null,
+        ];
+        $nameKey = strtolower((string)($p['Param_Set'] ?? '')) . "\x1f" . strtolower((string)$p['Param_Name']);
+        $params[$guid][$nameKey] = $cell;
+        $bk = trim((string)($p['Builtin_Key'] ?? ''));
+        if ($bk !== '') $params[$guid]["\x1f" . strtolower($bk)] = $cell;
     }
 
     return ['elements' => $elements, 'params' => $params];
@@ -202,17 +214,29 @@ function cov_param_basename(string $compositeKey): string
 }
 
 /**
- * Look up a param value by bare name (case-insensitive), ignoring which
- * PSet it's in. Returns the first match, or null. Used by the rule
- * "param": {Name: Value} filter, which doesn't specify a PSet.
+ * Look up a param CELL (['value'=>string,'num'=>?float]) by bare name
+ * (case-insensitive), ignoring PSet, and matching either the display name OR
+ * the Builtin_Key (both are indexed by load_commit_snapshot). Null if absent.
+ */
+function cov_param_cell(array $paramsMap, string $name): ?array
+{
+    $want = strtolower($name);
+    foreach ($paramsMap as $compositeKey => $cell) {
+        if (cov_param_basename($compositeKey) === $want) {
+            return is_array($cell) ? $cell : ['value' => (string)$cell, 'num' => null];
+        }
+    }
+    return null;
+}
+
+/**
+ * Look up a param's string value by bare name (case-insensitive). Used by the
+ * rule "param": {Name: Value} filter, which doesn't specify a PSet.
  */
 function cov_param_value(array $paramsMap, string $name): ?string
 {
-    $want = strtolower($name);
-    foreach ($paramsMap as $compositeKey => $val) {
-        if (cov_param_basename($compositeKey) === $want) return (string)$val;
-    }
-    return null;
+    $c = cov_param_cell($paramsMap, $name);
+    return $c === null ? null : (string)($c['value'] ?? '');
 }
 
 /**
@@ -311,13 +335,17 @@ function build_and_persist_commit_diff(PDO $pdo, int $commitId, ?int $parentComm
             count($changed), !empty($m['geometry_changed']) ? 1 : 0]);
         $diffId = (int)$pdo->lastInsertId();
         foreach ($changed as $pname) {
-            $old = cov_param_value($prev['params'] ?? [], $pname);
-            $new = cov_param_value($cur['params'] ?? [], $pname);
-            $insParam->execute([
-                $diffId, $pname, $old, $new,
-                ($old !== null && is_numeric($old)) ? (float)$old : null,
-                ($new !== null && is_numeric($new)) ? (float)$new : null,
-            ]);
+            $oldCell = cov_param_cell($prev['params'] ?? [], $pname);
+            $newCell = cov_param_cell($cur['params'] ?? [], $pname);
+            $old = is_array($oldCell) ? ($oldCell['value'] ?? null) : null;
+            $new = is_array($newCell) ? ($newCell['value'] ?? null) : null;
+            // Prefer the typed numeric shadow (Value_Num); only parse the
+            // formatted string when there's no shadow (e.g. legacy IFC rows).
+            $oldNum = is_array($oldCell) ? ($oldCell['num'] ?? null) : null;
+            $newNum = is_array($newCell) ? ($newCell['num'] ?? null) : null;
+            if ($oldNum === null && $old !== null && is_numeric($old)) $oldNum = (float)$old;
+            if ($newNum === null && $new !== null && is_numeric($new)) $newNum = (float)$new;
+            $insParam->execute([$diffId, $pname, $old, $new, $oldNum, $newNum]);
         }
     }
     return $diff;
@@ -328,9 +356,11 @@ function changed_param_names(array $prev, array $curr): array
     $changed = [];
     $allKeys = array_unique(array_merge(array_keys($prev), array_keys($curr)));
     foreach ($allKeys as $k) {
-        $a = $prev[$k] ?? null;
-        $b = $curr[$k] ?? null;
-        if ((string)$a !== (string)$b) $changed[cov_param_basename((string)$k)] = true;
+        // Param maps now hold ['value'=>..,'num'=>..] cells; compare on value
+        // (absent → '' to preserve the prior "missing == empty" semantics).
+        $a = is_array($prev[$k] ?? null) ? (string)($prev[$k]['value'] ?? '') : (string)($prev[$k] ?? '');
+        $b = is_array($curr[$k] ?? null) ? (string)($curr[$k]['value'] ?? '') : (string)($curr[$k] ?? '');
+        if ($a !== $b) $changed[cov_param_basename((string)$k)] = true;
     }
     return array_keys($changed);
 }

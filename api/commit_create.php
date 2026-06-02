@@ -58,6 +58,18 @@ if (!is_array($manifest)) json_err('manifest must be valid JSON.', 400);
 $manifestFmt = trim((string)($_POST['manifest_format_version'] ?? ''));
 $isNative    = ($manifestFmt === 'revit-native-1');
 
+// The add-in sends the .rvt backup pointer INSIDE manifest.source (not as the
+// top-level multipart fields read above), so fall back to it — otherwise
+// Rvt_Backup_Number/Path are never recorded (the "binary truth" link). See AUDIT.
+$mSource = is_array($manifest['source'] ?? null) ? $manifest['source'] : [];
+if ($rvtBackupNumber === null && isset($mSource['rvt_backup_number'])
+        && $mSource['rvt_backup_number'] !== null && $mSource['rvt_backup_number'] !== '') {
+    $rvtBackupNumber = (int)$mSource['rvt_backup_number'];
+}
+if ($rvtBackupFile === '' && !empty($mSource['rvt_path'])) {
+    $rvtBackupFile = (string)$mSource['rvt_path'];
+}
+
 // ── Authorisation ────────────────────────────────────────────────────────
 $proj = $pdo->prepare("SELECT proj_id, JobName, Active, Manager, DP1, DP2, DP3 FROM Projects WHERE proj_id = ?");
 $proj->execute([$projId]);
@@ -397,7 +409,7 @@ require_once __DIR__ . '/../dms/coverage_engine.php';
 // Persist the structured changeset (Commit_Diffs) and reuse it for coverage so
 // snapshots load once. Both are post-commit + non-fatal — a diff/coverage
 // failure must not lose the commit.
-$coverage   = ['firings' => 0, 'tags' => [], 'details' => [], 'errors' => []];
+$coverage   = ['firings' => 0, 'tags' => [], 'notify_roles' => [], 'details' => [], 'errors' => []];
 $diffCounts = ['added' => 0, 'removed' => 0, 'modified' => 0];
 $precomputedDiff = null;
 try {
@@ -412,10 +424,11 @@ try {
 }
 try {
     $cov = run_coverage_rules($pdo, $commitId, $parentCommitId, $precomputedDiff);
-    $coverage['firings'] = $cov['firings'];
-    $coverage['tags']    = $cov['tags'];
-    $coverage['details'] = $cov['details'];
-    $coverage['errors']  = array_merge($coverage['errors'], $cov['errors']);
+    $coverage['firings']      = $cov['firings'];
+    $coverage['tags']         = $cov['tags'];
+    $coverage['notify_roles'] = $cov['notify_roles'] ?? [];   // who to notify — was computed then discarded
+    $coverage['details']      = $cov['details'];
+    $coverage['errors']       = array_merge($coverage['errors'], $cov['errors']);
 } catch (Exception $e) {
     $coverage['errors'][] = 'Coverage engine threw: ' . $e->getMessage();
 }
@@ -451,9 +464,10 @@ json_ok([
     'pdfs_stored'       => $pdfStored,
     'draft_timesheet_id'=> $draftTsId,
     'coverage'          => [
-        'firings' => $coverage['firings'],
-        'tags'    => $coverage['tags'],
-        'details' => $coverage['details'],
+        'firings'      => $coverage['firings'],
+        'tags'         => $coverage['tags'],
+        'notify_roles' => $coverage['notify_roles'],
+        'details'      => $coverage['details'],
     ],
     'warnings'          => $warnings,
 ], 201);
