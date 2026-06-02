@@ -76,16 +76,45 @@ while (true) {
 }
 
 // ── Auto-provision the project's Drive folder (if enabled) ────────────────
-// Non-fatal: the project is created regardless; a failure here just leaves
-// drive_folder_id unset (link it later from the project edit / keynotes page).
-try {
-    $provFile = __DIR__ . '/dms/drive_provision.php';
-    if (meta_get($pdo, 'dms_autoprovision', '0') === '1' && is_file($provFile)) {
+// Cloning the _0TEMPLATE skeleton is many sequential Drive API round-trips
+// (one per subfolder + file = several seconds). The Drive API has no "copy a
+// folder tree" call, so that cost is unavoidable — BUT we don't make the user
+// wait for it. On PHP-FPM we send the redirect, finish the response, and clone
+// AFTER the browser has already navigated to main.php, so "New Project" feels
+// instant. The project row already exists; the Drive folder appears shortly
+// after. Non-fatal either way: a failure just leaves drive_folder_id unset
+// (link it later from the project edit / keynotes page).
+$provFile = __DIR__ . '/dms/drive_provision.php';
+$provisionEnabled = false;
+try { $provisionEnabled = (meta_get($pdo, 'dms_autoprovision', '0') === '1') && is_file($provFile); }
+catch (Exception $e) { /* meta/file issue → skip provisioning */ }
+
+if ($provisionEnabled && function_exists('fastcgi_finish_request')) {
+    // ── Background path (PHP-FPM): respond now, clone after ──
+    header('Location: main.php');
+    session_write_close();                       // release the session lock so main.php doesn't block
+    while (ob_get_level() > 0) { @ob_end_flush(); }
+    @flush();
+    fastcgi_finish_request();                     // browser navigates to main.php now
+    ignore_user_abort(true);
+    @set_time_limit(180);                         // the clone can take a while; don't get killed mid-tree
+    try {
         require_once $provFile;
         provision_project_drive_folder($pdo, $nextId);
+    } catch (\Throwable $e) {
+        error_log('[create_project] async Drive provisioning failed for proj ' . $nextId . ': ' . $e->getMessage());
     }
-} catch (Exception $e) {
-    $_SESSION['drive_flash_err'] = 'Project created, but Drive folder auto-provisioning failed: ' . $e->getMessage();
+    exit;
+}
+
+// ── Inline path (no FPM, or provisioning disabled): original behaviour ──
+if ($provisionEnabled) {
+    try {
+        require_once $provFile;
+        provision_project_drive_folder($pdo, $nextId);
+    } catch (Exception $e) {
+        $_SESSION['drive_flash_err'] = 'Project created, but Drive folder auto-provisioning failed: ' . $e->getMessage();
+    }
 }
 
 header('Location: main.php');
