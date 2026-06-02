@@ -34,8 +34,12 @@ $councilEmp = (int)meta_get($pdo, 'council_fee_employee_id', '46');
 $curFyStart = ((int)date('n') >= 4) ? (int)date('Y') : (int)date('Y') - 1;
 $fyStart = (int)($_GET['fy'] ?? $curFyStart);
 if ($fyStart < 2000 || $fyStart > $curFyStart + 1) $fyStart = $curFyStart;
-$from = sprintf('%04d-04-01', $fyStart);
-$to   = sprintf('%04d-03-31', $fyStart + 1);
+$from = sprintf('%04d-04-01', $fyStart);          // inclusive lower bound
+// Exclusive upper bound = first day of the NEXT financial year. Invoices.Date
+// is a TIMESTAMP, so the old `BETWEEN $from AND '$year-03-31'` (which means
+// 03-31 00:00:00) silently dropped every invoice timestamped later on 31 Mar
+// out of the FY entirely. A half-open range [$from, $to) includes them.
+$to   = sprintf('%04d-04-01', $fyStart + 1);
 
 // ── Gross invoiced by month (Invoices.Subtotal) + paid/outstanding ──────────
 $gByMonth = [];   // "Y-m" => gross
@@ -45,7 +49,7 @@ $gs = $pdo->prepare(
             SUM(Subtotal) gross,
             SUM(CASE WHEN COALESCE(Paid,0) = 1 THEN Subtotal ELSE 0 END) paid
        FROM Invoices
-      WHERE `Date` BETWEEN ? AND ?
+      WHERE `Date` >= ? AND `Date` < ?
       GROUP BY YEAR(`Date`), MONTH(`Date`)"
 );
 $gs->execute([$from, $to]);
@@ -62,7 +66,7 @@ $cs = $pdo->prepare(
     "SELECT YEAR(i.`Date`) y, MONTH(i.`Date`) m, SUM(t.Hours * COALESCE(t.Rate,0)) council
        FROM Timesheets t
        INNER JOIN Invoices i ON t.Invoice_No = i.Invoice_No
-      WHERE t.Employee_id = ? AND i.`Date` BETWEEN ? AND ?
+      WHERE t.Employee_id = ? AND i.`Date` >= ? AND i.`Date` < ?
       GROUP BY YEAR(i.`Date`), MONTH(i.`Date`)"
 );
 $cs->execute([$councilEmp, $from, $to]);
@@ -82,7 +86,7 @@ $es = $pdo->prepare(
        FROM Timesheets t
        INNER JOIN Invoices i ON t.Invoice_No = i.Invoice_No
        LEFT  JOIN Staff    s ON t.Employee_id = s.Employee_ID
-      WHERE i.`Date` BETWEEN ? AND ?
+      WHERE i.`Date` >= ? AND i.`Date` < ?
       GROUP BY t.Employee_id, s.Login
       ORDER BY amount DESC"
 );
@@ -98,7 +102,7 @@ $lc = $pdo->prepare(
        FROM Timesheets t
        INNER JOIN Invoices i ON t.Invoice_No = i.Invoice_No
        LEFT  JOIN Staff    s ON t.Employee_id = s.Employee_ID
-      WHERE i.`Date` BETWEEN ? AND ? AND t.Employee_id <> ?"
+      WHERE i.`Date` >= ? AND i.`Date` < ? AND t.Employee_id <> ?"
 );
 $lc->execute([$from, $to, $councilEmp]);
 $labourCost  = (float)$lc->fetchColumn();
