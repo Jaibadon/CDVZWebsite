@@ -6,11 +6,13 @@ if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
     exit;
 }
-/*if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    // Client list + edit links are admin-only. Staff use clients_view.php
+    // (read-only). Re-enabled by audit at the user's request.
     http_response_code(403);
-    echo '<p>Admin only. <a href="menu.php">Back to menu</a></p>';
+    echo '<p>Admin only. Staff: use <a href="clients_view.php">the client view</a>. &nbsp; <a href="menu.php">Menu</a></p>';
     exit;
-}*/
+}
 ?>
 <html>
 

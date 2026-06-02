@@ -6,6 +6,13 @@ if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
     exit;
 }
+// Viewing/editing a client's full record (incl. Multiplier, billing emails)
+// is admin-only; staff use clients_view.php. Also closes the ?client_id IDOR.
+if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
+    http_response_code(403);
+    echo '<p>Admin only. <a href="menu.php">Back to menu</a></p>';
+    exit;
+}
 
 $pdo = get_db();
 $client_id = (string)($_GET['client_id'] ?? '');
