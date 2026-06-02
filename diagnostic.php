@@ -4,6 +4,17 @@
  * DELETE this file after verifying everything works.
  */
 session_start();
+
+// SECURITY GATE (added by audit): this page exposes DB host/name, the full
+// table list, Staff columns and per-staff password-hash length+prefix. It had
+// NO auth check and was reachable anonymously. erik/jen only now; returns 403
+// otherwise. (Better still: delete this file in production — see its header.)
+if (empty($_SESSION['UserID']) || !in_array($_SESSION['UserID'], ['erik', 'jen'], true)) {
+    http_response_code(403);
+    header('Content-Type: text/plain');
+    exit('Forbidden — admin only.');
+}
+
 require_once 'config.php';
 
 ini_set('display_errors', 1);
