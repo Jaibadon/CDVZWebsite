@@ -318,8 +318,13 @@ foreach ($timesheets as $ts) {
 }
 echo "<input size='5' type='hidden' name='rowcount' value='" . $a . "'>";
 
-// Update the subtotal
-$pdo->exec("UPDATE Invoices SET Subtotal = $subtot WHERE Invoice_No = " . (int)$invoice_no);
+// Update the subtotal — but ONLY when this invoice actually has timesheet
+// line items. A lump-sum / fixed-price invoice has NO Timesheets rows, so
+// $subtot would be 0 and this UPDATE (which runs on every GET) would silently
+// zero the stored Subtotal just by opening the invoice in the editor.
+if (!empty($timesheets)) {
+    $pdo->exec("UPDATE Invoices SET Subtotal = $subtot WHERE Invoice_No = " . (int)$invoice_no);
+}
 // Re-fetch updated row
 $stmt3 = $pdo->prepare("SELECT Subtotal, Tax_Rate FROM Invoices WHERE Invoice_No = ?");
 $stmt3->execute([$invoice_no]);

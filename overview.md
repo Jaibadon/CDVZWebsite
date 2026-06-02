@@ -386,3 +386,64 @@ Hourly bank-feed pull keeps `Invoices.AmountPaid` close to real-time so the menu
 
 ### The `bankfeeds-akahu` branch (Xero-replacement variant)
 A separate branch (`git switch bankfeeds-akahu`) is the experimental "drop Xero entirely" cut-over. NOT smoke-tested. The on-main "alongside" version above is the production target; the branch is a possible future direction once Akahu has proven reliable. See `BANKFEEDS.md` and `SESSION_RESUME.md` on that branch for the deletion plan.
+
+---
+
+## DMS / Revit version-control, analytics & the add-in (this doc used to omit these)
+
+The app now also contains a **Revit document-management + version-control (DMS)**
+layer and an **analytics hub**, plus a sibling **C# Revit add-in** repo. Full
+detail lives in dedicated docs — this section is the index:
+
+- **`docs/ARCHITECTURE.md`** — the whole system map: subsystems, the DMS pipeline
+  (`api/commit_create.php` → `dms/git_repo.php` → `dms/coverage_engine.php` →
+  `Commit_Diffs` → transmittals/approval → drive/keynotes/provisioning), the
+  three loosely-coupled model representations (`.rvt` ↔ git ↔ MySQL), and the
+  PHP↔C# `revit-native-1` **manifest contract**.
+- **`docs/DB_CONSISTENCY.md`** + **`migrations/RUN_ORDER.md`** — the schema vs the
+  code vs the live DB. **Important:** the production DB predates the Revit
+  pipeline; **7 migrations are pending** and must be run before the DMS/add-in
+  work at all (`commit_create.php` and `resolve_api_token()` depend on columns
+  that aren't there yet). RUN_ORDER lists them + verification queries.
+- **`docs/AUDIT.md`** — correctness/security findings (incl. two public
+  unauthenticated leaks that were fixed: `diagnostic.php`, `invoice_list2.php`).
+- **`docs/ROADMAP.md`** — the plan toward training an AI on the versioned data.
+- **`TESTING_DMS.md`** — staging runbook (provision from `_0TEMPLATE`, publish a
+  commit, verify diff/coverage/keynotes, transmittal+approve, offline queue).
+
+### DMS quick map (files)
+- **`api/commit_create.php`** — ingests a commit; native (`revit-native-1`) path
+  commits the manifest JSON as `project.model.json`; legacy path commits an IFC.
+  Auth: `require_session_or_token()` (browser session OR `X-CadViz-Token`).
+  Idempotency: `Commits.Client_Commit_Uid`.
+- **`dms/coverage_engine.php`** — diffs new vs parent commit on
+  `COALESCE(Element_Uid, Ifc_Guid)`; persists `Commit_Diffs`/`Commit_Diff_Params`;
+  fires JSON `Coverage_Rules` + keynote→clause coverage → `Coverage_Rule_Firings`,
+  `Commit_NZBC_Tags`. Keynotes are the bridge from model elements to NZBC clauses.
+- **`coverage_admin.php`** — Erik's 2-step trainer (clause→roles; keynote category→clause).
+- **`dms/transmittal_send.php` / `transmittal_view.php` / `approval.php`** — magic-link
+  stakeholder review (the token IS the auth on the public view page) + the
+  approve-before-issue gate (`Projects.approval_policy`).
+- **`dms/drive_client.php` / `dms/drive_provision.php`** — Google Drive (shared
+  service token, Shared-Drive aware) + per-project `_0TEMPLATE` cloning.
+  `keynotes_edit.php?verify=1` checks the `drive_folder_id` ↔ model-folder pairing.
+- **`api_token_admin.php`** — issue/rotate per-staff add-in tokens (`Staff.api_token`).
+
+### Analytics
+- **`analytics.php`** — tabbed hub (iframes staff_workload/staff_hours/task_analytics/
+  monthly_invoicing/revenue_report + the DMS stubs).
+- **`annual_overview.php`** — FY money: gross / paid / outstanding, **council fees =
+  labour under `Employee_ID 46`** (App_Meta `council_fee_employee_id`), net design
+  revenue, NZ PAYE estimate. (FY date range is half-open — see AUDIT.)
+
+### The add-in (`../CDVZRevitAddin`)
+C#/.NET, multi-targeted (Revit 2023→2027). Reads the open model →
+`revit-native-1` manifest → POSTs to `commit_create.php` with `X-CadViz-Token`.
+Write-ahead offline queue (`CadVizQueue`), sheet-PDF export, keynote TSV reader.
+**Compiles but is not yet runtime-validated in Revit** — see ROADMAP Phase 1.
+
+### Don't break (DMS additions to the existing list)
+- The **`X-CadViz-Token`** API-auth path and `Staff.api_token` scope.
+- The **magic-link token scope** — a transmittal token must only ever expose its
+  own transmittal.
+- The **approve-before-issue gate** guarding `Commits.Status` release transitions.
