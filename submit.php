@@ -32,8 +32,21 @@ $pdo = get_db();
 $error = "successful";
 $locked = "false";
 
-// get proper format for start and end dates
-$weekStart = $_POST['hidden_week'];
+// get proper format for start and end dates.
+// Snap hidden_week to the Monday of its ISO week BEFORE anything derives
+// from it. The DELETE below wipes Employee/week rows in [weekStart,
+// weekStart+6] and the reinsert places hours positionally at
+// weekStart+(b-1) days — a non-Monday start would make the delete window
+// straddle two ISO weeks and shift every reinserted entry. main.php snaps
+// too, but this must hold even for a stale/forged POST.
+$rawWeek = $_POST['hidden_week'];
+$rawTs   = strtotime($rawWeek);
+if ($rawTs === false) {
+    // Unparseable week — refuse to guess a delete window.
+    header('Location: main.php');
+    exit;
+}
+$weekStart = date('Y-m-d', strtotime('-' . ((int)date('N', $rawTs) - 1) . ' days', $rawTs));
 $weekEnd = date('Y-m-d', strtotime("+6 days", strtotime($weekStart)));
 
 // MySQL ISO date strings for DELETE query
@@ -42,7 +55,9 @@ $weekEndISO   = date('Y-m-d', strtotime($weekEnd));
 
 $tday = date('Y-m-d');
 $lockbackdate = date('Y-m-d', strtotime("-2 months", strtotime($tday)));
-$editperiod = $_POST['hidden_week'];
+// Lock check runs on the snapped Monday — the week actually written —
+// not the raw POST value (they can differ across a month boundary).
+$editperiod = $weekStart;
 
 // DateDiff "m" equivalent: negative means editperiod is before lockbackdate
 $lockMonths = ((int)date('Y', strtotime($editperiod)) - (int)date('Y', strtotime($lockbackdate))) * 12
@@ -146,7 +161,10 @@ if ($locked === "true") {
             ];
         }
 
-        for ($a = 1; $a <= 40; $a++) {
+        // TIMESHEET_ROW_CAP (helpers.php) — must be >= the number of data
+        // rows main.php renders, or rows past the cap are deleted above
+        // and never reinserted.
+        for ($a = 1; $a <= TIMESHEET_ROW_CAP; $a++) {
             if (!isset($_POST['Project' . $a])
                 || $_POST['Project' . $a] === ""
                 || ($_POST['Invoice_No' . $a] ?? '') !== "0") {

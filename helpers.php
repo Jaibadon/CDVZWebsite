@@ -467,6 +467,16 @@ const EMPLOYED_STAFF = ['dmitriyp', 'hannah'];
  */
 const LEAVE_PROJECT_ID = 1435;
 
+/**
+ * Maximum number of timesheet grid rows the save path processes.
+ * main.php must never render a DATA row past this index (it shows a
+ * DO-NOT-SUBMIT banner instead) because submit.php's row loop stops here —
+ * and since submit rebuilds the week destructively (delete + reinsert),
+ * a row it doesn't read is a row that gets deleted. One constant, both
+ * files: raise it here and renderer + processor stay in lockstep.
+ */
+const TIMESHEET_ROW_CAP = 40;
+
 function is_employed_staff(?string $userId): bool {
     if ($userId === null || $userId === '') return false;
     return in_array(strtolower($userId), EMPLOYED_STAFF, true);

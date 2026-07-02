@@ -24,7 +24,16 @@ $currentWeek = $_POST['week'] ?? $_POST['Week']
             ?? $_GET['week']  ?? $_GET['Week']
             ?? $_SESSION['Week'] ?? $_todaysMonday;
 $ts = strtotime($currentWeek);
-$currentWeek = $ts ? date('Y-m-d', $ts) : $_todaysMonday;
+// Snap any incoming value to the Monday of its ISO week. The grid's columns
+// are positional from $weekStart while submit.php reinserts positionally too;
+// a non-Monday weekStart would misalign both. Defensive — all internal links
+// already emit Mondays, but stale sessions/bookmarks/other pages might not.
+if ($ts) {
+    $isoDow      = (int)date('N', $ts);                 // 1=Mon … 7=Sun
+    $currentWeek = date('Y-m-d', strtotime('-' . ($isoDow - 1) . ' days', $ts));
+} else {
+    $currentWeek = $_todaysMonday;
+}
 $_SESSION['Week'] = $currentWeek;
 
 $weekStart = $currentWeek;
@@ -186,12 +195,20 @@ $tsRows = $tsStmt->fetchAll();
     exit;
 }
 
-// ── Build keyed structure: group by (proj_id, ptid|task_type_id|task text)
+// ── Build keyed structure: ONE GRID ROW PER DB ROW (no merging).
+// Rationale: the old grouping key (proj + task identity) merged rows that
+// must never share a cell — in particular an invoiced (locked) row with an
+// editable one. Because submit.php deletes only Invoice_No=0 rows and then
+// reinserts whatever each cell shows, a merged invoiced amount was re-added
+// as new editable hours on EVERY submit (the runaway-hours bug). Keying by
+// TS_ID makes merging impossible: locked rows stay on their own disabled
+// line (never posted, never deleted), and same-task entries on different
+// days keep their own rows and their own descriptions.
 $taskMap = [];
 foreach ($tsRows as $r) {
     $ptid = $r['Proj_Task_ID'] !== null ? (int)$r['Proj_Task_ID'] : null;
     $tid  = $r['Task_Type_ID'] !== null ? (int)$r['Task_Type_ID'] : null;
-    $key  = $r['proj_id'] . '|' . ($ptid !== null ? "P$ptid" : ($tid !== null ? "T$tid" : 'X' . strtolower(trim($r['Task']))));
+    $key  = 'R' . $r['TS_ID'];   // unique per DB row — nothing ever merges
     if (!isset($taskMap[$key])) {
         $taskMap[$key] = [
             'proj_id'      => $r['proj_id'],
@@ -223,6 +240,33 @@ foreach ($tsRows as $r) {
     }
 }
 $taskRows = array_values($taskMap);
+// With one row per DB entry, raw query order interleaves days/projects.
+// Sort: editable before locked, then project, then task identity, then the
+// row's first filled day — so a task spread over the week reads top-to-bottom.
+usort($taskRows, function ($x, $y) {
+    $lx = ($x['invoice_no'] != 0) ? 1 : 0;
+    $ly = ($y['invoice_no'] != 0) ? 1 : 0;
+    if ($lx !== $ly) return $lx <=> $ly;
+    if ($x['proj_id'] != $y['proj_id']) return $x['proj_id'] <=> $y['proj_id'];
+    $kx = $x['proj_task_id'] ?? ($x['task_type_id'] !== null ? -$x['task_type_id'] : 0);
+    $ky = $y['proj_task_id'] ?? ($y['task_type_id'] !== null ? -$y['task_type_id'] : 0);
+    if ($kx !== $ky) return $kx <=> $ky;
+    $dx = 8; foreach ($x['days'] as $d => $v) { if ($v !== '') { $dx = $d; break; } }
+    $dy = 8; foreach ($y['days'] as $d => $v) { if ($v !== '') { $dy = $d; break; } }
+    return $dx <=> $dy;
+});
+
+// Row count is dynamic: every DB entry now has its own line, so a busy
+// week can exceed the old fixed 30. Always leave at least 5 blank rows.
+// HARD LIMIT: submit.php only reads rows 1..TIMESHEET_ROW_CAP (its
+// for-loop cap, shared via helpers.php). Any data row past that index
+// would be silently dropped — and since submit deletes the whole week's
+// editable rows before reinserting, dropped means DELETED. Never render
+// data past the cap without the warning banner in the render loop.
+// Computed here (not at the render loop) because the JS total /
+// gap-check loops must iterate the same row count.
+$SUBMIT_ROW_CAP = TIMESHEET_ROW_CAP;
+$renderRows = min(max(30, count($taskRows) + 5), max($SUBMIT_ROW_CAP, count($taskRows)));
 
 // ── Week dropdown options ───────────────────────────────────────────────────
 // Use DateTime instead of strtotime — `strtotime('monday this week')` had a
@@ -305,14 +349,14 @@ function OnLostFocusTest(el) {
     document.submit_form.elements['Total_' + r].value = tot.toFixed(2);
     // Column total
     tot = 0;
-    for (var ri = 1; ri <= 30; ri++) {
+    for (var ri = 1; ri <= window.RENDER_ROWS; ri++) {
         var el2 = document.submit_form.elements['D' + c + '_' + ri];
         if (el2) tot += parseFloat(el2.value) || 0;
     }
     document.submit_form.elements['VTotal_' + c].value = tot.toFixed(2);
     // Grand total
     tot = 0;
-    for (ri = 1; ri <= 30; ri++) {
+    for (ri = 1; ri <= window.RENDER_ROWS; ri++) {
         var t = parseFloat((document.submit_form.elements['Total_' + ri] || {}).value) || 0;
         tot += t;
     }
@@ -320,6 +364,11 @@ function OnLostFocusTest(el) {
 }
 // Per-project task list keyed by proj_id → list of {tid, name, stage, est, logged, remaining}
 window.PROJECT_TASKS = <?= json_encode($projectTasksJs, JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_QUOT) ?>;
+
+// Rendered grid row count. Every JS loop over grid rows MUST use this —
+// the grid is dynamic now (up to $SUBMIT_ROW_CAP rows), so a hardcoded 30
+// would silently skip rows 31+ in totals and the gap check.
+window.RENDER_ROWS = <?= (int)$renderRows ?>;
 
 // Full-time-staff dynamic gap check. Only the *current* week recomputes
 // live as the user types — previous weeks fall through to the existing
@@ -338,7 +387,7 @@ function recomputeCurrentWeekGap() {
     for (var i = 0; i < dows.length; i++) {
         var d = dows[i];
         var hasAny = false;
-        for (var r = 1; r <= 30; r++) {
+        for (var r = 1; r <= window.RENDER_ROWS; r++) {
             var el = document.submit_form && document.submit_form.elements['D' + d + '_' + r];
             if (el) {
                 var v = parseFloat(el.value);
@@ -475,7 +524,7 @@ window.onload = function () {
     // Recalculate column totals on load
     for (var c = 1; c <= 7; c++) {
         var tot = 0;
-        for (var r = 1; r <= 30; r++) {
+        for (var r = 1; r <= window.RENDER_ROWS; r++) {
             var el = document.submit_form && document.submit_form.elements['D' + c + '_' + r];
             if (el) tot += parseFloat(el.value) || 0;
         }
@@ -483,7 +532,7 @@ window.onload = function () {
         if (vt) vt.value = tot.toFixed(2);
     }
     var grand = 0;
-    for (var r = 1; r <= 30; r++) {
+    for (var r = 1; r <= window.RENDER_ROWS; r++) {
         var t = document.submit_form && document.submit_form.elements['Total_' + r];
         if (t) grand += parseFloat(t.value) || 0;
     }
@@ -639,8 +688,16 @@ if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYe
 </tr>
 
 <?php
-// Build up to 30 rows
-for ($a = 1; $a <= 30; $a++):
+// $renderRows / $SUBMIT_ROW_CAP are computed up top, right after $taskRows
+// is built — the JS loops need the same count.
+if (count($taskRows) > $SUBMIT_ROW_CAP): ?>
+  <tr><td colspan="12" style="background:#c00;color:#fff;font-weight:bold;padding:6px">
+    WARNING: this week has <?= count($taskRows) ?> rows but the save process
+    only handles <?= $SUBMIT_ROW_CAP ?>. DO NOT SUBMIT — rows beyond
+    <?= $SUBMIT_ROW_CAP ?> would be permanently deleted. Contact the administrator.
+  </td></tr>
+<?php endif;
+for ($a = 1; $a <= $renderRows; $a++):
     $tr        = $taskRows[$a - 1] ?? null;
     $projVal   = $tr ? $tr['proj_id']      : '';
     $taskPtid  = $tr ? (int)($tr['proj_task_id'] ?? 0) : 0;
