@@ -171,13 +171,20 @@ class XeroClient
         return $row;
     }
 
-    public function getInvoicesByStatus(array $statuses, ?string $modifiedAfter = null): array
-    {
-        $qs = ['Statuses' => implode(',', $statuses), 'page' => 1];
-        $extra = $modifiedAfter ? ['If-Modified-Since: ' . $modifiedAfter] : [];
+public function getInvoicesByStatus(array $statuses, ?string $modifiedAfter = null): array
+{
+    $all = [];
+    $page = 1;
+    $extra = $modifiedAfter ? ['If-Modified-Since: ' . $modifiedAfter] : [];
+    do {
+        $qs = ['Statuses' => implode(',', $statuses), 'page' => $page, 'order' => 'UpdatedDateUTC DESC'];
         $resp = $this->apiCall('GET', '/Invoices?' . http_build_query($qs), null, $extra);
-        return $resp['Invoices'] ?? [];
-    }
+        $batch = $resp['Invoices'] ?? [];
+        $all = array_merge($all, $batch);
+        $page++;
+    } while (count($batch) === 100);
+    return $all;
+}
 
     public function getInvoice(string $xeroId): array
     {
