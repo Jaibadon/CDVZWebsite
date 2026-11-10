@@ -70,7 +70,7 @@ $lastSync = null;
 $invoiceError = '';
 $reminderError = '';
 $remindersAvailable = false;
-$plans = $clientPolicies = [];
+$plans = $clientPolicies = $clientExceptions = [];
 
 if ($xeroConnected) {
     try {
@@ -116,6 +116,9 @@ if ($xeroConnected) {
             $context = invoice_reminder_context($pdo);
             foreach (invoice_reminder_rows($pdo, $context['today']) as $row) {
                 $plans[(int)$row['Invoice_No']] = invoice_reminder_plan($row, $context);
+                if ($row['client_mode'] === 'manual' && $row['manual_exception']) {
+                    $clientExceptions[(int)$row['Client_ID']] = true;
+                }
             }
             $clientPolicies = $pdo->query('SELECT Client_ID, mode FROM Client_Reminder_Policy')->fetchAll(PDO::FETCH_KEY_PAIR);
             $remindersAvailable = true;
@@ -218,7 +221,7 @@ function monthly_money(float $amount): string {
     <?php elseif (!$groups): ?>
       <p>No outstanding invoices.</p>
     <?php else: ?>
-      <p class="invoice-muted">Start or stop automatic reminders once per client. Starting lets eligible invoices continue on their existing schedule. Backlog review, dated holds and manual invoice settings still apply. Neither button sends an email immediately.</p>
+      <p class="invoice-muted">Start or stop automatic reminders once per client. Stopping also clears any invoice exceptions. Starting lets eligible invoices continue on their existing schedule. Neither button sends an email immediately.</p>
       <?php if ($reminderError): ?><p role="status"><?= monthly_h($reminderError) ?></p><?php endif; ?>
       <?php foreach ($groups as $id => $group):
           $client = $group['client'];
@@ -246,6 +249,9 @@ function monthly_money(float $amount): string {
               <input type="hidden" name="csrf" value="<?= monthly_h($csrf) ?>">
               <input type="hidden" name="client_id" value="<?= $id ?>">
               <button class="btn-secondary" name="reminder_mode" value="<?= $automatic ? 'manual' : 'automatic' ?>"><?= $automatic ? 'Stop automatic reminders' : 'Start automatic reminders' ?></button>
+              <?php if (!$automatic && !empty($clientExceptions[$id])): ?>
+                <button class="btn-secondary" name="reminder_mode" value="manual">Stop invoice exceptions</button>
+              <?php endif; ?>
             </form>
             <a href="invoice_reminders.php?client_id=<?= $id ?>#client-defaults">Client settings</a>
           </div>

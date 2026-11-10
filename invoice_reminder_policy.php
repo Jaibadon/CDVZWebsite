@@ -34,6 +34,7 @@ function invoice_reminder_rows(PDO $pdo, string $today, int $invoiceNo = 0): arr
                 c.Client_Name, $contact, c.billing_email, c.email,
                 COALESCE(p.mode, 'automatic') AS client_mode, COALESCE(p.grace_days, 8) AS grace_days,
                 COALESCE(s.mode, 'inherit') AS mode, s.hold_until, s.started_on,
+                (optin.meta_key IS NOT NULL) AS manual_exception,
                 COALESCE(s.last_stage, 0) AS last_stage, s.last_sent_at, s.next_send_on,
                 original.Client_ID AS verified_client_id, original.xero_invoice_id AS verified_invoice_id,
                 original.xero_contact_id AS verified_contact_id, original.recipients AS verified_to,
@@ -46,6 +47,8 @@ function invoice_reminder_rows(PDO $pdo, string $today, int $invoiceNo = 0): arr
            LEFT JOIN Client_Reminder_Policy p ON p.Client_ID = i.Client_ID
            LEFT JOIN Invoice_Reminder_State s ON s.Invoice_No = i.Invoice_No
            LEFT JOIN Invoice_Original_Delivery original ON original.Invoice_No = i.Invoice_No
+           LEFT JOIN App_Meta optin ON optin.meta_key = CONCAT('reminder_invoice_exception_', i.Invoice_No)
+                 AND optin.meta_value = CONCAT(i.Client_ID, ':', i.Xero_InvoiceID)
            LEFT JOIN App_Meta legacy ON legacy.meta_key = CONCAT('reminder_last_', i.Invoice_No)
            LEFT JOIN App_Meta old_statement ON old_statement.meta_key = CONCAT('reminder_statement_last_', i.Client_ID)
            LEFT JOIN (
@@ -95,6 +98,27 @@ function invoice_reminder_legacy_key(array $row): string {
         $row['Invoice_No'], $row['Client_ID'], $row['Xero_InvoiceID'], $row['Client_Name'],
         pick_billing_emails($row['billing_email'], $row['email']),
     ], JSON_THROW_ON_ERROR));
+}
+
+function invoice_reminder_exception_key(array $row): string {
+    return $row['Client_ID'] . ':' . $row['Xero_InvoiceID'];
+}
+
+// Call inside the invoice policy transaction.
+function invoice_reminder_set_exception(PDO $pdo, int $no, ?string $binding): void {
+    $key = 'reminder_invoice_exception_' . $no;
+    if ($binding === null) {
+        $pdo->prepare('DELETE FROM App_Meta WHERE meta_key = ?')->execute([$key]);
+        return;
+    }
+    $pdo->prepare(
+        'INSERT INTO App_Meta (meta_key, meta_value, updated_at) VALUES (?, ?, NOW())
+         ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value), updated_at = NOW()'
+    )->execute([$key, $binding]);
+}
+
+function invoice_reminder_is_manual(array $row): bool {
+    return $row['mode'] === 'manual' || ($row['client_mode'] === 'manual' && empty($row['manual_exception']));
 }
 
 function invoice_reminder_verify_backlog(PDO $pdo, array $row): void {
@@ -151,7 +175,7 @@ function invoice_reminder_plan(array $row, array $context, bool $manual = false)
                ($row['mode'] === 'inherit' && (invoice_reminder_is_legacy($row, $context) ||
                 ($stage === 1 && $row['legacy_last']))))) {
         $plan['status'] = 'Backlog review';
-    } elseif (!$manual && ($row['client_mode'] === 'manual' || $row['mode'] === 'manual')) {
+    } elseif (!$manual && invoice_reminder_is_manual($row)) {
         $plan['status'] = 'Manual only';
     } elseif (!invoice_reminder_delivery_matches($row, $to)) {
         $plan['status'] = $row['verified_at'] ? 'Billing details changed since delivery' : 'Original invoice delivery unverified';
@@ -185,7 +209,7 @@ function invoice_reminder_manual_plan(array $row, array $context, string $action
         }
     } elseif ($action === 'next') {
         if ($plan['stage'] < 2 || $plan['stage'] > 3 || $plan['date'] > $context['today'] ||
-            ($row['client_mode'] !== 'manual' && $row['mode'] !== 'manual')) {
+            !invoice_reminder_is_manual($row)) {
             return null;
         }
     } elseif ($plan['stage'] !== 1 || invoice_reminder_contact_date($row, $context) > $context['today'] ||
@@ -253,10 +277,23 @@ function invoice_reminder_set_client_policy(PDO $pdo, int $clientId, string $mod
     if (!$st->fetchColumn()) {
         throw new RuntimeException('Client not found.');
     }
-    $pdo->prepare(
-        'INSERT INTO Client_Reminder_Policy (Client_ID, mode, grace_days) VALUES (?, ?, COALESCE(?, 8))
-         ON DUPLICATE KEY UPDATE mode = VALUES(mode), grace_days = COALESCE(?, grace_days)'
-    )->execute([$clientId, $mode, $graceDays, $graceDays]);
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare(
+            'INSERT INTO Client_Reminder_Policy (Client_ID, mode, grace_days) VALUES (?, ?, COALESCE(?, 8))
+             ON DUPLICATE KEY UPDATE mode = VALUES(mode), grace_days = COALESCE(?, grace_days)'
+        )->execute([$clientId, $mode, $graceDays, $graceDays]);
+        if ($mode === 'manual') {
+            $pdo->prepare(
+                "DELETE FROM App_Meta WHERE meta_key LIKE 'reminder!_invoice!_exception!_%' ESCAPE '!'
+                   AND meta_value LIKE CONCAT(?, ':%')"
+            )->execute([$clientId]);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
 }
 
 function invoice_reminder_finish_delivery(PDO $pdo, array $delivery, bool $sent): void {

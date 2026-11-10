@@ -53,10 +53,18 @@ try {
                     }
                 }
                 $mode = ['start' => 'active', 'resume' => 'active', 'hold' => 'hold', 'manual' => 'manual'][$action];
+                $starting = $action === 'start' || $action === 'resume';
                 $pdo->beginTransaction();
                 try {
+                    $binding = null;
                     if ($action !== 'manual') {
                         $row = invoice_reminder_rows($pdo, $context['today'], $no)[0] ?? null;
+                        if ($starting && $row && $row['client_mode'] === 'manual') {
+                            $binding = invoice_reminder_exception_key($row);
+                            if (!hash_equals($binding, (string)($_POST['manual_exception'] ?? ''))) {
+                                throw new RuntimeException('This client is Manual only. Reload and choose the option to start this invoice only.');
+                            }
+                        }
                         if ($row && !$row['verified_at'] && invoice_reminder_is_legacy($row, $context)) {
                             if (($_POST['legacy_confirm'] ?? '') !== '1' ||
                                 !hash_equals(invoice_reminder_legacy_key($row), (string)($_POST['legacy_key'] ?? ''))) {
@@ -70,12 +78,26 @@ try {
                          VALUES (?, ?, ?, ?) ON DUPLICATE KEY UPDATE
                          mode = VALUES(mode), hold_until = VALUES(hold_until), started_on = VALUES(started_on)'
                     )->execute([$no, $mode, $hold, $context['today']]);
+                    if ($starting || $action === 'manual') {
+                        invoice_reminder_set_exception($pdo, $no, $binding);
+                    }
+                    $notice = 'Reminder settings saved for ' . invoice_reminder_number($no) . '.';
+                    if ($starting) {
+                        $updated = invoice_reminder_rows($pdo, $context['today'], $no)[0] ?? null;
+                        $plan = $updated ? invoice_reminder_plan($updated, $context) : null;
+                        if ($plan && $plan['date'] && $plan['stage'] < 4) {
+                            $date = reminder_date_label(max($context['today'], $plan['date']));
+                            $notice .= ' This invoice is eligible from ' . $date . '. The client preview shows their earliest planned email.';
+                        } else {
+                            $notice .= ' Status: ' . ($plan['status'] ?? 'Waiting for an open, authorised Xero invoice') . '.';
+                        }
+                    }
                     $pdo->commit();
                 } catch (Throwable $e) {
                     $pdo->rollBack();
                     throw $e;
                 }
-                $_SESSION['invoice_reminder_notice'] = 'Reminder settings saved for ' . invoice_reminder_number($no) . '.';
+                $_SESSION['invoice_reminder_notice'] = $notice;
             } elseif ($owner && in_array($action, ['confirm_delivered', 'release_delivery'], true)) {
                 $st = $pdo->prepare("SELECT * FROM Reminder_Deliveries WHERE id = ? AND status = 'pending'");
                 $st->execute([(int)($_POST['delivery_id'] ?? 0)]);
@@ -153,6 +175,7 @@ function reminder_email_preview(array $message): void {
 }
 function reminder_invoice_actions(array $row, string $csrf, string $today, bool $legacy = false): void {
     $started = (int)$row['last_stage'] > 0;
+    $manualClient = ($row['client_mode'] ?? '') === 'manual';
     ?>
     <form method="post" class="reminder-actions">
       <input type="hidden" name="csrf" value="<?= reminder_h($csrf) ?>">
@@ -161,7 +184,10 @@ function reminder_invoice_actions(array $row, string $csrf, string $today, bool 
         <input type="hidden" name="legacy_key" value="<?= reminder_h(invoice_reminder_legacy_key($row)) ?>">
         <label><input type="checkbox" name="legacy_confirm" value="1"> I checked that the original invoice was sent to the addresses shown.</label>
       <?php endif; ?>
-      <button class="btn-primary" name="action" value="<?= $started ? 'resume' : 'start' ?>"><?= $started ? 'Resume' : 'Start gently' ?></button>
+      <?php if ($manualClient): ?>
+        <input type="hidden" name="manual_exception" value="<?= reminder_h(invoice_reminder_exception_key($row)) ?>">
+      <?php endif; ?>
+      <button class="btn-primary" name="action" value="<?= $started ? 'resume' : 'start' ?>"><?= $started ? 'Resume' : 'Start gently' ?><?= $manualClient ? ' for this invoice only' : '' ?></button>
       <button class="btn-secondary" name="action" value="manual">Keep manual</button>
       <input type="date" aria-label="Hold until" name="hold_until" min="<?= reminder_h(invoice_reminder_add_days($today, 1)) ?>"
              value="<?= ($row['hold_until'] ?? '') > $today ? reminder_h($row['hold_until']) : '' ?>">
@@ -297,7 +323,7 @@ details > summary { cursor:pointer; padding:4px 0; }
             <?php if ($startPreview && $startPreview['date']): ?><div><small>If started today: gentle, eligible <?= reminder_date_label(max($context['today'], $startPreview['date'])) ?></small></div><?php endif; ?>
             <?php if ($row['legacy_last'] && !(int)$row['last_stage']): ?><small>Last contacted <?= reminder_date_label($row['legacy_last']) ?> · previous tone unknown</small><?php endif; ?>
             <?php if ($row['last_sent_at']): ?><div><small>Last stage sent <?= reminder_h(str_replace('_', ' ', INVOICE_REMINDER_TONES[(int)$row['last_stage']])) ?> · <?= reminder_date_label($row['last_sent_at']) ?></small></div><?php endif; ?>
-            <?php if ($row['client_mode'] === 'manual'): ?><div><small>Client policy: Manual only</small></div><?php endif; ?>
+            <?php if ($row['client_mode'] === 'manual'): ?><div><small>Client policy: Manual only<?= $row['manual_exception'] ? ' · exception for this invoice' : '' ?></small></div><?php endif; ?>
             <?php if ($row['mode'] === 'hold' && $row['hold_until'] > $context['today']): ?><div><small>Hold until <?= reminder_date_label($row['hold_until']) ?></small></div><?php endif; ?>
             <?php if ($row['mode'] === 'manual'): ?><div><small>Invoice override: Keep manual</small></div><?php endif; ?>
           </td>
@@ -327,7 +353,7 @@ details > summary { cursor:pointer; padding:4px 0; }
 
   <section class="card" id="client-defaults">
     <h2>Client defaults</h2>
-    <p class="reminder-note">Automatic is the default. Manual only pauses all automatic emails for that client. Changing a client default preserves invoice holds and backlog decisions.</p>
+    <p class="reminder-note">Automatic is the default. Saving Manual only stops automatic reminders and clears any invoice exceptions. You can then start individual invoices from their own rows. Client settings preserve invoice holds and backlog decisions.</p>
     <details<?= $clientFocus ? ' open' : '' ?>><summary>Manage client settings</summary>
       <div class="table-scroll"><table class="table">
       <thead><tr><th>Client</th><th>Policy and first-reminder grace</th></tr></thead>
