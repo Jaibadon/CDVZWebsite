@@ -49,12 +49,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                   WHERE Employee_ID = ?"
             )->execute([
                 $login,
-                trim((string)($_POST['First Name'] ?? '')),
-                trim((string)($_POST['Last Name']  ?? '')),
+                trim((string)($_POST['First_Name'] ?? '')),
+                trim((string)($_POST['Last_Name']  ?? '')),
                 trim((string)($_POST['email']      ?? '')),
                 trim((string)($_POST['Mobile']     ?? '')),
                 $_POST['Pay_Rate']     === '' ? null : (float)$_POST['Pay_Rate'],
-                $_POST['Billing Rate'] === '' ? null : (float)$_POST['Billing Rate'],
+                $_POST['Billing_Rate'] === '' ? null : (float)$_POST['Billing_Rate'],
                 $_POST['Level']        === '' ? null : (int)$_POST['Level'],
                 isset($_POST['Active']) ? 1 : 0,
                 $eid,
@@ -73,12 +73,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             )->execute([
                 $eid,
                 $login,
-                trim((string)($_POST['First Name'] ?? '')),
-                trim((string)($_POST['Last Name']  ?? '')),
+                trim((string)($_POST['First_Name'] ?? '')),
+                trim((string)($_POST['Last_Name']  ?? '')),
                 trim((string)($_POST['email']      ?? '')),
                 trim((string)($_POST['Mobile']     ?? '')),
                 $_POST['Pay_Rate']     === '' ? null : (float)$_POST['Pay_Rate'],
-                $_POST['Billing Rate'] === '' ? null : (float)$_POST['Billing Rate'],
+                $_POST['Billing_Rate'] === '' ? null : (float)$_POST['Billing_Rate'],
                 $_POST['Level']        === '' ? null : (int)$_POST['Level'],
                 isset($_POST['Active']) ? 1 : 0,
             ]);
@@ -146,23 +146,26 @@ form.row { margin: 0; }
       </tr>
       <?php foreach ($rows as $r):
           $eid = (int)$r['Employee_ID']; $active = (int)$r['Active'];
+          $formId = 'staff-' . $eid;
       ?>
         <tr class="<?= $active ? '' : 'inactive' ?>">
-          <form method="post" class="row">
-            <input type="hidden" name="action" value="update">
-            <input type="hidden" name="Employee_ID" value="<?= $eid ?>">
-            <td><strong>#<?= $eid ?></strong></td>
-            <td><input type="text"  name="Login"        class="w-mid"    value="<?= htmlspecialchars($r['Login']     ?? '') ?>" required></td>
-            <td><input type="text"  name="First Name"   class="w-mid"    value="<?= htmlspecialchars($r['FirstName'] ?? '') ?>"></td>
-            <td><input type="text"  name="Last Name"    class="w-mid"    value="<?= htmlspecialchars($r['LastName']  ?? '') ?>"></td>
-            <td><input type="email" name="email"        class="w-wide"   value="<?= htmlspecialchars($r['email']     ?? '') ?>"></td>
-            <td><input type="text"  name="Mobile"       class="w-mid"    value="<?= htmlspecialchars($r['Mobile']    ?? '') ?>"></td>
-            <td><input type="number" step="0.01" name="Pay_Rate"     class="w-narrow" value="<?= $r['Pay_Rate']    !== null ? htmlspecialchars((string)$r['Pay_Rate'])    : '' ?>"></td>
-            <td><input type="number" step="0.01" name="Billing Rate" class="w-narrow" value="<?= $r['BillingRate'] !== null ? htmlspecialchars((string)$r['BillingRate']) : '' ?>"></td>
-            <td><input type="number" name="Level" class="w-narrow" value="<?= $r['Level'] !== null ? htmlspecialchars((string)$r['Level']) : '' ?>"></td>
-            <td><input type="checkbox" name="Active" value="1" <?= $active ? 'checked' : '' ?>></td>
-            <td><button class="btn-sm">Save</button></td>
-          </form>
+          <td>
+            <form method="post" class="row" id="<?= $formId ?>">
+              <input type="hidden" name="action" value="update">
+              <input type="hidden" name="Employee_ID" value="<?= $eid ?>">
+              <strong>#<?= $eid ?></strong>
+            </form>
+          </td>
+          <td><input form="<?= $formId ?>" type="text"  name="Login"      class="w-mid"  value="<?= htmlspecialchars($r['Login']     ?? '') ?>" required></td>
+          <td><input form="<?= $formId ?>" type="text"  name="First_Name" class="w-mid"  value="<?= htmlspecialchars($r['FirstName'] ?? '') ?>"></td>
+          <td><input form="<?= $formId ?>" type="text"  name="Last_Name"  class="w-mid"  value="<?= htmlspecialchars($r['LastName']  ?? '') ?>"></td>
+          <td><input form="<?= $formId ?>" type="email" name="email"      class="w-wide" value="<?= htmlspecialchars($r['email']     ?? '') ?>"></td>
+          <td><input form="<?= $formId ?>" type="text"  name="Mobile"     class="w-mid"  value="<?= htmlspecialchars($r['Mobile']    ?? '') ?>"></td>
+          <td><input form="<?= $formId ?>" type="number" step="0.01" name="Pay_Rate"     class="w-narrow" value="<?= htmlspecialchars((string)($r['Pay_Rate'] ?? '')) ?>"></td>
+          <td><input form="<?= $formId ?>" type="number" step="0.01" name="Billing_Rate" class="w-narrow" value="<?= htmlspecialchars((string)($r['BillingRate'] ?? '')) ?>"></td>
+          <td><input form="<?= $formId ?>" type="number" name="Level" class="w-narrow" value="<?= htmlspecialchars((string)($r['Level'] ?? '')) ?>"></td>
+          <td><input form="<?= $formId ?>" type="checkbox" name="Active" value="1" <?= $active ? 'checked' : '' ?>></td>
+          <td><button form="<?= $formId ?>" type="submit" class="btn-sm">Save</button></td>
         </tr>
       <?php endforeach; ?>
     </table>
@@ -182,12 +185,12 @@ form.row { margin: 0; }
         </tr>
         <tr>
           <td><input type="text"   name="Login"        class="w-mid" required></td>
-          <td><input type="text"   name="First Name"   class="w-mid"></td>
-          <td><input type="text"   name="Last Name"    class="w-mid"></td>
+          <td><input type="text"   name="First_Name"   class="w-mid"></td>
+          <td><input type="text"   name="Last_Name"    class="w-mid"></td>
           <td><input type="email"  name="email"        class="w-wide"></td>
           <td><input type="text"   name="Mobile"       class="w-mid"></td>
           <td><input type="number" step="0.01" name="Pay_Rate"     class="w-narrow"></td>
-          <td><input type="number" step="0.01" name="Billing Rate" class="w-narrow"></td>
+          <td><input type="number" step="0.01" name="Billing_Rate" class="w-narrow"></td>
           <td><input type="number" name="Level" class="w-narrow" value="1"></td>
           <td><input type="checkbox" name="Active" value="1" checked></td>
           <td><button class="btn-sm">Add</button></td>
