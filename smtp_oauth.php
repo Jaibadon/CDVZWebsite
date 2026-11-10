@@ -123,7 +123,6 @@ class SmtpOAuth
         ]);
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
         if ($raw === false) throw new SmtpOAuthException('Token endpoint network error');
         $json = json_decode($raw, true);
         if ($code >= 400) throw new SmtpOAuthException("Token endpoint $code: " . ($json['error_description'] ?? $raw));

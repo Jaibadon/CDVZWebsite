@@ -464,7 +464,6 @@ class DriveClient
         ]);
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
         if ($raw === false) throw new DriveOAuthException("Drive endpoint network error: $url");
         $json = json_decode($raw, true);
         if ($code >= 400) throw new DriveOAuthException("Drive $code: " . ($json['error']['message'] ?? $raw));
@@ -489,7 +488,6 @@ class DriveClient
         ]);
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
         if ($raw === false) throw new DriveOAuthException("Drive GET network error: $url");
         if ($code >= 400) {
             $msg = $raw;
@@ -517,7 +515,6 @@ class DriveClient
         ]);
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
         if ($raw === false) throw new DriveOAuthException("Drive upload network error: $url");
         if ($code >= 400) {
             $msg = $raw;

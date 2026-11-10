@@ -279,7 +279,6 @@ public function getInvoicesByStatus(array $statuses, ?string $modifiedAfter = nu
         ]);
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
         if ($code === 401) {  // refresh + retry
             $this->refreshAccessToken();
             return $this->getInvoicePdf($xeroId);
@@ -443,7 +442,6 @@ public function getInvoicesByStatus(array $statuses, ?string $modifiedAfter = nu
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
-        curl_close($ch);
         if ($raw === false) throw new XeroException("Xero $method $path: $err");
         if ($code === 204) return [];
         $json = json_decode($raw, true);
@@ -477,7 +475,6 @@ public function getInvoicesByStatus(array $statuses, ?string $modifiedAfter = nu
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
         $err  = curl_error($ch);
-        curl_close($ch);
         if ($raw === false) throw new XeroException("Xero token endpoint: $err");
         $json = json_decode($raw, true);
         if ($code >= 400) {
@@ -500,7 +497,6 @@ public function getInvoicesByStatus(array $statuses, ?string $modifiedAfter = nu
         ]);
         $raw  = curl_exec($ch);
         $code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
-        curl_close($ch);
         if ($code >= 400) throw new XeroException("Xero GET $url: $code $raw");
         return json_decode($raw, true) ?? [];
     }

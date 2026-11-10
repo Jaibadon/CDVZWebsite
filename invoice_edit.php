@@ -309,7 +309,7 @@ foreach ($timesheets as $ts) {
     echo "<td width='50'>";
     print_dd_box($pdo, 'Staff', 'Employee_id', 'Login', $ts['Employee_id'], 'staff_box' . $a);
     echo "</td>";
-    echo "<td><input size='35' name='desc_box" . $a . "' value='" . htmlspecialchars((string)$ts['Task']) . "'></td>";
+    echo "<td><textarea rows='1' cols='35' name='desc_box" . $a . "'>\n" . htmlspecialchars((string)$ts['Task']) . "</textarea></td>";
     echo "<td width='60' align='Right'><input size='5' name='TS_HOURS" . $a . "' value='" . htmlspecialchars($ts['Hours']) . "'></td>";
     echo "<td width='60' align='Right'><input size='5' name='TS_RATE" . $a . "' value='" . htmlspecialchars($ts['Rate']) . "'></td>";
     echo "<td width='70' align='Right'>" . '$' . number_format((float)$ts['amt'], 2) . "</td>";

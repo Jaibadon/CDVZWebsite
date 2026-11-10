@@ -134,7 +134,9 @@ if ($asCsv) {
     header('Content-Type: text/csv; charset=utf-8');
     header('Content-Disposition: attachment; filename="' . $fname . '"');
     $out = fopen('php://output', 'w');
-    fputcsv($out, ['TS_DATE','Login','Employee_id','Client','Invoice_No','Task','Hours','Rate','Amount','Pay_Rate','Notes','TaskMatch','Council']);
+    // Keep the legacy escape character explicit for PHP 8.4+.
+    $escape = '\\';
+    fputcsv($out, ['TS_DATE','Login','Employee_id','Client','Invoice_No','Task','Hours','Rate','Amount','Pay_Rate','Notes','TaskMatch','Council'], escape: $escape);
     foreach ($rows as $r) {
         fputcsv($out, [
             $r['TS_DATE'], $r['Login'], $r['Employee_id'],
@@ -144,13 +146,13 @@ if ($asCsv) {
             number_format((float)$r['Amnt'], 2, '.', ''),
             number_format((float)($r['Pay_Rate'] ?? 0), 2, '.', ''),
             (string)($r['Notes'] ?? ''), $r['_match'] ? '1' : '0', $r['_council'] ? '1' : '0',
-        ]);
+        ], escape: $escape);
     }
-    fputcsv($out, []);
-    fputcsv($out, ['', '', '', '', '', '', 'TOTAL', '', number_format($totalAll, 2, '.', '')]);
-    if ($taskQ !== '')        fputcsv($out, ['', '', '', '', '', '', "Matches \"$taskQ\"", '', number_format($totalDisb, 2, '.', '')]);
-    if ($totalCouncil > 0)    fputcsv($out, ['', '', '', '', '', '', "Council fees (staff #$councilEmp)", '', number_format($totalCouncil, 2, '.', '')]);
-    if ($subtractDisb || $subtractCouncil) fputcsv($out, ['', '', '', '', '', '', 'NET REVENUE (excl. disbursements)', '', number_format($netRevenue, 2, '.', '')]);
+    fputcsv($out, [], escape: $escape);
+    fputcsv($out, ['', '', '', '', '', '', 'TOTAL', '', number_format($totalAll, 2, '.', '')], escape: $escape);
+    if ($taskQ !== '')        fputcsv($out, ['', '', '', '', '', '', "Matches \"$taskQ\"", '', number_format($totalDisb, 2, '.', '')], escape: $escape);
+    if ($totalCouncil > 0)    fputcsv($out, ['', '', '', '', '', '', "Council fees (staff #$councilEmp)", '', number_format($totalCouncil, 2, '.', '')], escape: $escape);
+    if ($subtractDisb || $subtractCouncil) fputcsv($out, ['', '', '', '', '', '', 'NET REVENUE (excl. disbursements)', '', number_format($netRevenue, 2, '.', '')], escape: $escape);
     fclose($out); exit;
 }
 

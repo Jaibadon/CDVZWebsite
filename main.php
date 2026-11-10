@@ -317,7 +317,21 @@ input[type=text].tot-inp { padding:1px; }
 .day-input { width:34px; text-align:center; }
 .proj-sel  { width:128px; box-sizing:border-box; }
 .task-sel  { width:240px; box-sizing:border-box; font-size:11px; }
-.desc-inp  { width:198px; box-sizing:border-box; }
+.notes-cell { display:flex; align-items:center; gap:3px; }
+.desc-inp { flex:1; min-width:0; height:27px; padding:5px 6px; font-size:11px; line-height:15px; resize:none; overflow:hidden; }
+.desc-inp:disabled { background:#eee; color:#555; }
+.notes-open { width:27px; height:27px; padding:0; border:1px solid #bbb; border-radius:3px; background:#fff; color:#444; cursor:pointer; font-size:16px; }
+.notes-open:hover { background:#f5f5d9; border-color:#9B9B1B; }
+.notes-dialog { width:min(36rem, calc(100% - 24px)); max-height:calc(100% - 24px); padding:20px; border:1px solid #bbb; border-top:4px solid #9B9B1B; border-radius:8px; box-shadow:0 12px 40px #0005; color:#222; }
+.notes-dialog:not([open]) { display:none; }
+.notes-dialog::backdrop { background:#202326aa; }
+.notes-dialog h2 { margin:0 0 6px; padding:0; border:0; color:#222; }
+.notes-dialog .notes-hint { margin:0 0 12px; color:#555; }
+.notes-dialog textarea { display:block; width:100%; height:min(14rem, 45vh); min-height:4rem; padding:10px; font-size:16px; line-height:1.4; resize:vertical; }
+.notes-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
+.notes-actions .btn-primary { background:#626214; }
+.notes-actions .btn-primary:hover { background:#4c4c10; }
+.notes-actions [hidden] { display:none; }
 .tot-inp   { width:34px; background:#ddd; }
 th { background:#9B9B1B; color:#fff; font-size:11px; }
 .vt-cell input { background:#ddd; }
@@ -519,6 +533,50 @@ function initTaskSelects() {
 
 window.addEventListener('DOMContentLoaded', initTaskSelects);
 
+document.addEventListener('DOMContentLoaded', function() {
+    const dialog = document.getElementById('notes-dialog');
+    if (typeof dialog.showModal !== 'function') return;
+
+    const editor = document.getElementById('notes-editor');
+    const title = document.getElementById('notes-title');
+    const hint = document.getElementById('notes-hint');
+    const cancel = document.getElementById('notes-cancel');
+    const apply = document.getElementById('notes-apply');
+    let activeField;
+
+    function openNotes(field) {
+        activeField = field;
+        title.textContent = field.getAttribute('aria-label');
+        editor.value = field.value;
+        editor.readOnly = field.disabled;
+        hint.textContent = field.disabled
+            ? 'This entry has been invoiced.'
+            : 'Apply changes to this row, then submit the timesheet to save them.';
+        cancel.textContent = field.disabled ? 'Close' : 'Cancel';
+        apply.hidden = field.disabled;
+        dialog.showModal();
+        editor.setSelectionRange(0, 0);
+    }
+
+    document.querySelectorAll('.notes-cell').forEach(function(cell) {
+        const field = cell.querySelector('.desc-inp');
+        const button = cell.querySelector('.notes-open');
+        button.hidden = false;
+        button.addEventListener('click', function() { openNotes(field); });
+        field.addEventListener('dblclick', function() { openNotes(field); });
+    });
+
+    dialog.querySelector('form').addEventListener('submit', function(event) {
+        if (event.submitter === apply && !activeField.disabled) {
+            activeField.value = editor.value;
+        }
+    });
+
+    window.addEventListener('pagehide', function() {
+        if (dialog.open) dialog.close();
+    });
+});
+
 var _origOnload = window.onload;
 window.onload = function () {
     // Recalculate column totals on load
@@ -702,7 +760,7 @@ for ($a = 1; $a <= $renderRows; $a++):
     $projVal   = $tr ? $tr['proj_id']      : '';
     $taskPtid  = $tr ? (int)($tr['proj_task_id'] ?? 0) : 0;
     $taskTid   = $tr ? (int)($tr['task_type_id'] ?? 0) : 0;
-    $taskTxt   = $tr ? $tr['task']         : '';
+    $taskTxt   = $tr['task'] ?? '';
     $invNo     = $tr ? $tr['invoice_no']   : 0;
     $tot       = $tr ? $tr['tot']          : 0;
     $days      = $tr ? $tr['days']         : array_fill(1, 7, '');
@@ -740,10 +798,15 @@ for ($a = 1; $a <= $renderRows; $a++):
       <?php endif; ?>
     </select>
   </td>
-  <td><input <?= $locked ? 'disabled' : '' ?> type="text" name="Desc<?= $a ?>"
-       value="<?= htmlspecialchars($taskTxt) ?>"
-       class="desc-inp" placeholder="(notes)"
-       style="width:140px;font-size:11px"></td>
+  <td>
+    <div class="notes-cell">
+      <textarea <?= $locked ? 'disabled' : '' ?> name="Desc<?= $a ?>" rows="1"
+                class="desc-inp" placeholder="(notes)" aria-label="Notes for row <?= $a ?>">
+<?= htmlspecialchars($taskTxt) ?></textarea>
+      <button type="button" class="notes-open" hidden aria-haspopup="dialog"
+              aria-label="Open notes for row <?= $a ?>" title="Open notes editor">&#x2197;</button>
+    </div>
+  </td>
   <?php for ($d = 1; $d <= 7; $d++):
       $cellPending = !empty($pendingLv[$d]);
       $cellStyle   = $cellPending ? 'background:#ffd6d6;border:1px solid #c33' : '';
@@ -765,6 +828,18 @@ for ($a = 1; $a <= $renderRows; $a++):
 </table>
 </div>
 </form>
+
+<dialog id="notes-dialog" class="notes-dialog" aria-labelledby="notes-title" aria-describedby="notes-hint">
+  <form method="dialog">
+    <h2 id="notes-title">Timesheet notes</h2>
+    <div id="notes-hint" class="notes-hint"></div>
+    <textarea id="notes-editor" aria-labelledby="notes-title" autofocus></textarea>
+    <div class="notes-actions">
+      <button type="submit" id="notes-cancel" class="btn-secondary">Cancel</button>
+      <button type="submit" id="notes-apply" class="btn-primary">Apply</button>
+    </div>
+  </form>
+</dialog>
 
 <!-- ── Variation request button ─────────────────────────────────────────── -->
 <div style="width:680px;margin:18px auto;text-align:center">

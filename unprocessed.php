@@ -145,7 +145,8 @@ if (isset($_GET['debug'])) {
 <input size="5" type="hidden" name="staff_box<?= $a ?>" value="<?= htmlspecialchars($row['Employee_id'] ?? '') ?>">
 <?= htmlspecialchars($row['Login'] ?? $row['login'] ?? '') ?>
 </td>
-<td><input size="35" name="desc_box<?= $a ?>" value="<?= htmlspecialchars($row['Task'] ?? $row['task'] ?? '') ?>"></td>
+<td><textarea rows="1" cols="35" name="desc_box<?= $a ?>">
+<?= htmlspecialchars($row['Task'] ?? $row['task'] ?? '') ?></textarea></td>
 <td width="60" align="right"><input size="5" name="TS_HOURS<?= $a ?>" value="<?= htmlspecialchars((string)($row['Hours'] ?? '')) ?>"></td>
 <td width="60" align="right"><input size="5" name="TS_RATE<?= $a ?>" value="<?= htmlspecialchars((string)($row['Rate'] ?? '')) ?>"></td>
 <td width="70" align="right"><?= '$' . number_format((float)($row['amt'] ?? 0), 2) ?></td>
