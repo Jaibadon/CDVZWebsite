@@ -316,7 +316,8 @@ input[type=text].tot-inp { padding:1px; }
 .tbl-main td, .tbl-main th { padding:2px 2px; overflow:hidden; }
 .day-input { width:34px; text-align:center; }
 .proj-sel  { width:128px; box-sizing:border-box; }
-.task-sel  { width:240px; box-sizing:border-box; font-size:11px; }
+.task-heading, .notes-heading { width:197.5px; }
+.task-sel  { width:100%; box-sizing:border-box; font-size:11px; }
 .notes-cell { display:flex; align-items:center; gap:3px; }
 .desc-inp { flex:1; min-width:0; height:27px; padding:5px 6px; font-size:11px; line-height:15px; resize:none; overflow:hidden; }
 .desc-inp:disabled { background:#eee; color:#555; }
@@ -327,11 +328,11 @@ input[type=text].tot-inp { padding:1px; }
 .notes-dialog::backdrop { background:#202326aa; }
 .notes-dialog h2 { margin:0 0 6px; padding:0; border:0; color:#222; }
 .notes-dialog .notes-hint { margin:0 0 12px; color:#555; }
-.notes-dialog textarea { display:block; width:100%; height:min(14rem, 45vh); min-height:4rem; padding:10px; font-size:16px; line-height:1.4; resize:vertical; }
+.notes-dialog textarea, .notes-locked { display:block; width:100%; height:min(14rem, 45vh); min-height:4rem; padding:10px; font-size:16px; line-height:1.4; }
+.notes-dialog textarea { resize:vertical; }
+.notes-locked { overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; user-select:none; background:#eee; color:#555; border:1px solid #bbb; border-radius:3px; }
 .notes-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
-.notes-actions .btn-primary { background:#626214; }
-.notes-actions .btn-primary:hover { background:#4c4c10; }
-.notes-actions [hidden] { display:none; }
+.notes-dialog [hidden] { display:none; }
 .tot-inp   { width:34px; background:#ddd; }
 th { background:#9B9B1B; color:#fff; font-size:11px; }
 .vt-cell input { background:#ddd; }
@@ -538,24 +539,30 @@ document.addEventListener('DOMContentLoaded', function() {
     if (typeof dialog.showModal !== 'function') return;
 
     const editor = document.getElementById('notes-editor');
+    const lockedNote = document.getElementById('notes-locked');
     const title = document.getElementById('notes-title');
     const hint = document.getElementById('notes-hint');
-    const cancel = document.getElementById('notes-cancel');
-    const apply = document.getElementById('notes-apply');
+    const close = document.getElementById('notes-close');
     let activeField;
 
     function openNotes(field) {
         activeField = field;
+        const locked = field.disabled;
         title.textContent = field.getAttribute('aria-label');
-        editor.value = field.value;
-        editor.readOnly = field.disabled;
-        hint.textContent = field.disabled
+        editor.value = locked ? '' : field.value;
+        editor.hidden = locked;
+        lockedNote.textContent = locked ? field.value : '';
+        lockedNote.hidden = !locked;
+        hint.textContent = locked
             ? 'This entry has been invoiced.'
-            : 'Apply changes to this row, then submit the timesheet to save them.';
-        cancel.textContent = field.disabled ? 'Close' : 'Cancel';
-        apply.hidden = field.disabled;
+            : 'Changes update this row as you type. Submit the timesheet to save them.';
         dialog.showModal();
-        editor.setSelectionRange(0, 0);
+        if (locked) {
+            lockedNote.scrollTop = 0;
+            close.focus();
+        } else {
+            editor.setSelectionRange(0, 0);
+        }
     }
 
     document.querySelectorAll('.notes-cell').forEach(function(cell) {
@@ -566,8 +573,8 @@ document.addEventListener('DOMContentLoaded', function() {
         field.addEventListener('dblclick', function() { openNotes(field); });
     });
 
-    dialog.querySelector('form').addEventListener('submit', function(event) {
-        if (event.submitter === apply && !activeField.disabled) {
+    editor.addEventListener('input', function() {
+        if (dialog.open && !activeField.disabled) {
             activeField.value = editor.value;
         }
     });
@@ -734,8 +741,8 @@ if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYe
 <tr>
   <th style="width:130px">Project</th>
   <th style="width:0"></th><!-- hidden Invoice_No col -->
-  <th style="width:245px">Task <span style="font-weight:normal;font-size:10px">(remaining hrs)</span></th>
-  <th style="width:150px">Notes</th>
+  <th class="task-heading">Task <span style="font-weight:normal;font-size:10px">(remaining hrs)</span></th>
+  <th class="notes-heading">Notes</th>
   <?php for ($d = 0; $d < 7; $d++): ?>
     <th class="day-input">
       <?= $dayNames[$d] ?><br><?= $dayDates[$d] ?><br>
@@ -834,9 +841,9 @@ for ($a = 1; $a <= $renderRows; $a++):
     <h2 id="notes-title">Timesheet notes</h2>
     <div id="notes-hint" class="notes-hint"></div>
     <textarea id="notes-editor" aria-labelledby="notes-title" autofocus></textarea>
+    <div id="notes-locked" class="notes-locked" role="region" aria-labelledby="notes-title" tabindex="0" hidden></div>
     <div class="notes-actions">
-      <button type="submit" id="notes-cancel" class="btn-secondary">Cancel</button>
-      <button type="submit" id="notes-apply" class="btn-primary">Apply</button>
+      <button type="submit" id="notes-close" class="btn-secondary">Close</button>
     </div>
   </form>
 </dialog>
