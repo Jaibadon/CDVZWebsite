@@ -121,7 +121,7 @@ function invoice_reminder_is_manual(array $row): bool {
     return $row['mode'] === 'manual' || ($row['client_mode'] === 'manual' && empty($row['manual_exception']));
 }
 
-function invoice_reminder_verify_backlog(PDO $pdo, array $row): void {
+function invoice_reminder_verify_backlog(PDO $pdo, array $row): array {
     require_once __DIR__ . '/xero_client.php';
     $xero = new XeroClient($pdo);
     $remote = $xero->getInvoice($row['Xero_InvoiceID']);
@@ -134,12 +134,26 @@ function invoice_reminder_verify_backlog(PDO $pdo, array $row): void {
             $approved = array_merge($approved, pick_billing_emails($person['EmailAddress'] ?? '', ''));
         }
     }
-    if (($remote['SentToContact'] ?? false) !== true || ($remote['Status'] ?? '') !== 'AUTHORISED' ||
-        ($contact['ContactID'] ?? '') !== $contactId || !$to ||
-        array_diff(array_map('strtolower', $to), array_map('strtolower', $approved))) {
-        throw new RuntimeException('The original send or billing addresses could not be verified in Xero. Send the original invoice through CADViz first.');
+    if (($remote['SentToContact'] ?? false) !== true || ($remote['Status'] ?? '') !== 'AUTHORISED') {
+        throw new RuntimeException('Xero does not show this authorised invoice as sent. Verify the recipients and send the original invoice through CADViz before starting reminders.');
     }
-    invoice_email_record_delivery($pdo, $row, $contactId, $to, 'legacy');
+    if (strcasecmp((string)($contact['ContactID'] ?? ''), $contactId) !== 0) {
+        throw new RuntimeException('The Xero billing contact could not be confirmed. Review the client and invoice in Xero before starting reminders.');
+    }
+    $approved = array_map('strtolower', $approved);
+    $recipients = array_map('strtolower', $to);
+    if (!array_intersect($recipients, $approved)) {
+        throw new RuntimeException('None of the listed billing addresses matches the Xero contact. Check the billing addresses in both systems before starting reminders.');
+    }
+    // CADViz pushes only the primary email to Xero. Allow the established
+    // internal accounts-copy addresses as extras after the user confirms the
+    // original recipient list, with a Xero match still required.
+    $unverified = array_diff($recipients, $approved, ['accounts@cadviz.co.nz', 'erik@cadviz.co.nz']);
+    if ($unverified) {
+        throw new RuntimeException('Xero could not verify: ' . implode(', ', $unverified) .
+            '. Confirm these billing addresses in Xero or send the original invoice through CADViz after checking them.');
+    }
+    return [$contactId, $to];
 }
 
 function invoice_reminder_contact_date(array $row, array $context): string {
@@ -178,7 +192,9 @@ function invoice_reminder_plan(array $row, array $context, bool $manual = false)
     } elseif (!$manual && invoice_reminder_is_manual($row)) {
         $plan['status'] = 'Manual only';
     } elseif (!invoice_reminder_delivery_matches($row, $to)) {
-        $plan['status'] = $row['verified_at'] ? 'Billing details changed since delivery' : 'Original invoice delivery unverified';
+        $plan['status'] = $row['hold_until'] > $context['today']
+            ? 'On hold · delivery verification required'
+            : ($row['verified_at'] ? 'Billing details changed since delivery' : 'Original invoice delivery unverified');
     } else {
         $firstDate = invoice_reminder_add_days($row['Xero_DueDate'], max(8, (int)$row['grace_days']));
         if ($row['delivery_source'] === 'email') {

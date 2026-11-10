@@ -15,6 +15,7 @@ $returnTo = 'invoice_reminders.php' . ($focus ? '?invoice_no=' . $focus : ($clie
 $notice = $_SESSION['invoice_reminder_notice'] ?? '';
 unset($_SESSION['invoice_reminder_notice']);
 $error = '';
+$errorInvoice = 0;
 $rows = $batches = $clients = $pending = [];
 $selected = null;
 
@@ -39,6 +40,7 @@ try {
                 $_SESSION['invoice_reminder_notice'] = 'Client reminder settings saved.';
             } elseif (in_array($action, ['start', 'resume', 'hold', 'manual'], true)) {
                 $no = (int)($_POST['invoice_no'] ?? 0);
+                $errorInvoice = $no;
                 $st = $pdo->prepare('SELECT Invoice_No FROM Invoices WHERE Invoice_No = ? AND COALESCE(Paid, 0) = 0');
                 $st->execute([$no]);
                 if (!$st->fetchColumn()) {
@@ -54,10 +56,12 @@ try {
                 }
                 $mode = ['start' => 'active', 'resume' => 'active', 'hold' => 'hold', 'manual' => 'manual'][$action];
                 $starting = $action === 'start' || $action === 'resume';
+                $confirmed = ($_POST['legacy_confirm'] ?? '') === '1';
+                $verificationError = null;
                 $pdo->beginTransaction();
                 try {
                     $binding = null;
-                    if ($action !== 'manual') {
+                    if ($starting || ($action === 'hold' && $confirmed)) {
                         $row = invoice_reminder_rows($pdo, $context['today'], $no)[0] ?? null;
                         if ($starting && $row && $row['client_mode'] === 'manual') {
                             $binding = invoice_reminder_exception_key($row);
@@ -66,11 +70,18 @@ try {
                             }
                         }
                         if ($row && !$row['verified_at'] && invoice_reminder_is_legacy($row, $context)) {
-                            if (($_POST['legacy_confirm'] ?? '') !== '1' ||
-                                !hash_equals(invoice_reminder_legacy_key($row), (string)($_POST['legacy_key'] ?? ''))) {
-                                throw new RuntimeException('Confirm you checked the original send and billing recipients before starting this backlog invoice.');
+                            try {
+                                if (!$confirmed || !hash_equals(invoice_reminder_legacy_key($row), (string)($_POST['legacy_key'] ?? ''))) {
+                                    throw new RuntimeException('Confirm you checked the original send and billing recipients before starting this backlog invoice.');
+                                }
+                                [$contactId, $to] = invoice_reminder_verify_backlog($pdo, $row);
+                            } catch (Throwable $e) {
+                                if ($starting) throw $e;
+                                $verificationError = $e->getMessage() ?: 'Xero verification failed.';
                             }
-                            invoice_reminder_verify_backlog($pdo, $row);
+                            if ($verificationError === null) {
+                                invoice_email_record_delivery($pdo, $row, $contactId, $to, 'legacy');
+                            }
                         }
                     }
                     $pdo->prepare(
@@ -90,6 +101,11 @@ try {
                             $notice .= ' This invoice is eligible from ' . $date . '. The client preview shows their earliest planned email.';
                         } else {
                             $notice .= ' Status: ' . ($plan['status'] ?? 'Waiting for an open, authorised Xero invoice') . '.';
+                        }
+                    } elseif ($action === 'hold') {
+                        $notice .= ' Held until ' . reminder_date_label($hold) . '.';
+                        if ($verificationError !== null) {
+                            $notice .= ' Delivery still needs verification. ' . $verificationError;
                         }
                     }
                     $pdo->commit();
@@ -183,6 +199,7 @@ function reminder_invoice_actions(array $row, string $csrf, string $today, bool 
       <?php if ($legacy): ?>
         <input type="hidden" name="legacy_key" value="<?= reminder_h(invoice_reminder_legacy_key($row)) ?>">
         <label><input type="checkbox" name="legacy_confirm" value="1"> I checked that the original invoice was sent to the addresses shown.</label>
+        <small>Confirm this to start or resume reminders. You can save a hold while delivery is unverified.</small>
       <?php endif; ?>
       <?php if ($manualClient): ?>
         <input type="hidden" name="manual_exception" value="<?= reminder_h(invoice_reminder_exception_key($row)) ?>">
@@ -228,7 +245,10 @@ details > summary { cursor:pointer; padding:4px 0; }
 </style></head>
 <body><main class="page">
   <nav class="topnav"><h1>Invoice reminders</h1><a href="#client-defaults">Client defaults</a><a href="monthly_invoicing.php">Monthly invoicing</a><a href="invoice_list.php">Invoice list</a><a href="email_templates.php">Email templates</a></nav>
-  <?php if ($error !== ''): ?><p class="card badge-err"><?= reminder_h($error) ?></p><?php endif; ?>
+  <?php if ($error !== ''): ?><p class="card badge-bad" role="alert">
+    <?php if ($errorInvoice > 0): ?><strong><?= invoice_reminder_number($errorInvoice) ?></strong> · <?php endif; ?>
+    <?= reminder_h($error) ?>
+  </p><?php endif; ?>
   <?php if ($notice !== ''): ?><p class="card badge-ok"><?= reminder_h($notice) ?></p><?php endif; ?>
   <?php if (!isset($context)): ?></main></body></html><?php return; endif; ?>
   <p class="reminder-note">Newly sent invoices follow the client’s policy. Existing backlog needs a decision per invoice. Saving an option here does not send email.</p>
