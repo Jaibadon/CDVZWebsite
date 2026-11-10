@@ -316,7 +316,8 @@ input[type=text].tot-inp { padding:1px; }
 .tbl-main td, .tbl-main th { padding:2px 2px; overflow:hidden; }
 .day-input { width:34px; text-align:center; }
 .proj-sel  { width:128px; box-sizing:border-box; }
-.task-heading, .notes-heading { width:197.5px; }
+.task-heading { width:98px; }
+.notes-heading { width:297px; }
 .task-sel  { width:100%; box-sizing:border-box; font-size:11px; }
 .notes-cell { display:flex; align-items:center; gap:3px; }
 .desc-inp { flex:1; min-width:0; height:27px; padding:5px 6px; font-size:11px; line-height:15px; resize:none; overflow:hidden; }
