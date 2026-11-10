@@ -214,28 +214,25 @@ function invoice_reminder_plan(array $row, array $context, bool $manual = false)
     return $plan;
 }
 
-function invoice_reminder_manual_plan(array $row, array $context, string $action): ?array {
+function invoice_reminder_manual_plan(array $row, array $context, int $tone, bool $owner): ?array {
     $plan = invoice_reminder_plan($row, $context, true);
-    if ($plan['date'] === null || $row['Xero_DueDate'] >= $context['today']) {
+    if (!isset(INVOICE_REMINDER_TONES[$tone]) || $tone > $plan['stage'] || ($tone >= 4 && !$owner) ||
+        $plan['date'] === null || $row['Xero_DueDate'] >= $context['today'] ||
+        $row['hold_until'] > $context['today'] ||
+        invoice_reminder_contact_date($row, $context) > $context['today'] ||
+        ($row['delivery_source'] === 'email' && $row['verified_at'] >= $context['today'])) {
         return null;
     }
-    if ($action === 'escalate') {
-        if ($plan['stage'] < 4 || $plan['stage'] > 5 || $plan['date'] > $context['today']) {
-            return null;
-        }
-    } elseif ($action === 'next') {
-        if ($plan['stage'] < 2 || $plan['stage'] > 3 || $plan['date'] > $context['today'] ||
-            !invoice_reminder_is_manual($row)) {
-            return null;
-        }
-    } elseif ($plan['stage'] !== 1 || invoice_reminder_contact_date($row, $context) > $context['today'] ||
-              $row['hold_until'] > $context['today'] ||
-              ($row['delivery_source'] === 'email' && $row['verified_at'] >= $context['today'])) {
+    // Preserve the explicit gentle one-off for a manually managed invoice.
+    $earlyGentle = $plan['stage'] === 1 && (invoice_reminder_is_manual($row) ||
+        invoice_reminder_plan($row, $context)['status'] === 'Backlog review');
+    if ($plan['date'] > $context['today'] && !$earlyGentle) {
         return null;
     }
     return [
-        'rows' => [$row], 'to' => $plan['to'], 'stage' => $plan['stage'],
-        'template' => invoice_reminder_template($plan['stage'], false), 'advance' => [$row['Invoice_No']],
+        'rows' => [$row], 'to' => $plan['to'], 'stage' => $tone,
+        'template' => invoice_reminder_template($tone, false),
+        'advance' => $tone === $plan['stage'] ? [$row['Invoice_No']] : [],
         'ready' => true, 'date' => $context['today'],
     ];
 }
@@ -255,19 +252,21 @@ function invoice_reminder_batches(array $rows, array $context): array {
     }
     $batches = [];
     foreach ($clients as $items) {
-        $date = max($context['today'], min(array_column(array_column($items, 'plan'), 'date')));
+        $eligibleSince = min(array_column(array_column($items, 'plan'), 'date'));
+        $date = max($context['today'], $eligibleSince);
         $included = array_values(array_filter($items, fn($item) => $item['plan']['date'] <= $date));
         $stage = min(array_column(array_column($included, 'plan'), 'stage'));
         $invoices = array_column($included, 'row');
         $advances = array_filter($included, fn($item) => $item['plan']['stage'] === $stage);
         $batches[] = [
             'rows' => $invoices, 'to' => $included[0]['plan']['to'], 'stage' => $stage,
-            'date' => $date, 'ready' => $date <= $context['today'],
+            'date' => $date, 'eligible_since' => $eligibleSince, 'ready' => $date <= $context['today'],
             'template' => invoice_reminder_template($stage, count($invoices) > 1),
             'advance' => array_column(array_column($advances, 'row'), 'Invoice_No'),
         ];
     }
-    usort($batches, fn($a, $b) => [$a['date'], $a['rows'][0]['Invoice_No']] <=> [$b['date'], $b['rows'][0]['Invoice_No']]);
+    usort($batches, fn($a, $b) => [$a['eligible_since'], $a['rows'][0]['Invoice_No']]
+        <=> [$b['eligible_since'], $b['rows'][0]['Invoice_No']]);
     return $batches;
 }
 

@@ -12,6 +12,8 @@ $dryRun = $previewOnly || $testMail;
 $testRecipient = 'jai@nielsen.org.nz';
 $action = $isCli ? 'batch' : (string)($_POST['send_action'] ?? 'batch');
 $no = (int)($_POST['invoice_no'] ?? 0);
+$tone = filter_var($_POST['tone'] ?? null, FILTER_VALIDATE_INT) ?: 0;
+$owner = false;
 
 if ($isCli) {
     if (in_array('test', $argv, true) || getenv('CADVIZ_REMINDER_TEST_MODE')) {
@@ -30,6 +32,7 @@ if ($isCli) {
         http_response_code(403);
         exit('Admin only.');
     }
+    $owner = $_SESSION['UserID'] === 'erik';
     if (isset($_GET['test']) || isset($_GET['test_to'])) {
         header('Location: email_templates.php');
         exit;
@@ -42,9 +45,9 @@ if ($isCli) {
         }
         if (empty($_SESSION['invoice_reminders_csrf']) ||
             !hash_equals($_SESSION['invoice_reminders_csrf'], (string)($_POST['csrf'] ?? '')) ||
-            !in_array($action, ['batch', 'gentle', 'next', 'escalate'], true) ||
-            ($action === 'escalate' && $_SESSION['UserID'] !== 'erik') ||
-            ($action !== 'batch' && $no <= 0)) {
+            !in_array($action, ['batch', 'manual_tone'], true) ||
+            ($action === 'manual_tone' &&
+                ($no <= 0 || !isset(INVOICE_REMINDER_TONES[$tone]) || ($tone >= 4 && !$owner)))) {
             http_response_code(403);
             exit('Refresh the reminder preview and try again.');
         }
@@ -68,7 +71,7 @@ try {
         $batches = array_slice(array_values(array_filter(invoice_reminder_batches($rows, $context),
             fn($batch) => $batch['ready'])), 0, invoice_reminder_cap());
     } else {
-        $batch = $rows ? invoice_reminder_manual_plan($rows[0], $context, $action) : null;
+        $batch = $rows ? invoice_reminder_manual_plan($rows[0], $context, $tone, $owner) : null;
         $batches = $batch ? [$batch] : [];
     }
     $messages = array_map(fn($batch) => invoice_reminder_message($pdo, $batch, $testMail), $batches);
@@ -122,9 +125,10 @@ try {
                 }
                 $plan = $action === 'batch'
                     ? invoice_reminder_plan($row, $now)
-                    : invoice_reminder_manual_plan($row, $now, $action);
+                    : invoice_reminder_manual_plan($row, $now, $tone, $owner);
                 if (!$plan || ($action === 'batch' && ($plan['status'] !== 'Ready' || $plan['stage'] >= 4)) ||
                     $plan['to'] !== $batch['to'] ||
+                    ($action === 'manual_tone' && $plan['advance'] !== $batch['advance']) ||
                     $plan['stage'] < $batch['stage'] ||
                     (in_array($invoiceNo, $batch['advance'], true) && $plan['stage'] !== $batch['stage'])) {
                     throw new RuntimeException('Invoice eligibility or billing details changed. Review the preview.');

@@ -10,6 +10,8 @@ $owner = $_SESSION['UserID'] === 'erik';
 $csrf = $_SESSION['invoice_reminders_csrf'] ??= bin2hex(random_bytes(32));
 $pdo = get_db();
 $focus = max(0, (int)($_GET['invoice_no'] ?? 0));
+$selectedTone = filter_var($_GET['tone'] ?? null, FILTER_VALIDATE_INT) ?: 0;
+$toneLabels = [1 => 'Gentle', 2 => 'Follow-up', 3 => 'Firm', 4 => 'Very firm', 5 => 'Final'];
 $clientFocus = max(0, (int)($_GET['client_id'] ?? 0));
 $returnTo = 'invoice_reminders.php' . ($focus ? '?invoice_no=' . $focus : ($clientFocus ? '?client_id=' . $clientFocus : ''));
 $notice = $_SESSION['invoice_reminder_notice'] ?? '';
@@ -244,7 +246,7 @@ foreach ($rows as $row) {
 details > summary { cursor:pointer; padding:4px 0; }
 </style></head>
 <body><main class="page">
-  <nav class="topnav"><h1>Invoice reminders</h1><a href="#client-defaults">Client defaults</a><a href="monthly_invoicing.php">Monthly invoicing</a><a href="invoice_list.php">Invoice list</a><a href="email_templates.php">Email templates</a></nav>
+  <nav class="topnav"><h1>Invoice reminders</h1><a href="#backlog-review">Backlog review</a><a href="#client-defaults">Client defaults</a><a href="monthly_invoicing.php">Monthly invoicing</a><a href="invoice_list.php">Invoice list</a><a href="email_templates.php">Email templates</a></nav>
   <?php if ($error !== ''): ?><p class="card badge-bad" role="alert">
     <?php if ($errorInvoice > 0): ?><strong><?= invoice_reminder_number($errorInvoice) ?></strong> · <?php endif; ?>
     <?= reminder_h($error) ?>
@@ -256,7 +258,7 @@ details > summary { cursor:pointer; padding:4px 0; }
 
   <section class="card">
     <h2>Next email per client</h2>
-    <p class="reminder-note">Planned from local payment data. Before sending, each invoice and balance is verified in Xero. A change can block the message and require a new preview.</p>
+    <p class="reminder-note">Eligible reminders stay queued while cron is paused or in dry-run mode. Live runs handle the longest-waiting clients first and schedule follow-ups from the actual send date. Before sending, each invoice and balance is verified in Xero.</p>
     <?php if (!$batches): ?><p>No automatic reminder emails scheduled for this view.</p><?php else: ?>
     <div class="table-scroll"><table class="table reminder-table">
       <thead><tr><th>Client</th><th>Recipient</th><th>Invoices included</th><th>Next eligible date</th><th>Exact tone</th></tr></thead>
@@ -319,15 +321,21 @@ details > summary { cursor:pointer; padding:4px 0; }
   <?php endif; ?>
 
   <?php foreach (['Backlog review' => $backlog, 'Owner review · Very firm and Final' => $finalReview, 'Invoice schedule and exceptions' => $scheduled] as $heading => $entries): ?>
-  <section class="card">
+  <section class="card"<?= $heading === 'Backlog review' ? ' id="backlog-review"' : '' ?>>
     <h2><?= reminder_h($heading) ?> (<?= count($entries) ?>)</h2>
+    <?php if ($heading === 'Backlog review' && $entries): ?>
+      <p class="reminder-note">These invoices stay out of automatic runs until you choose an invoice option that schedules them. Check the original recipients before starting reminders.</p>
+    <?php endif; ?>
+    <?php if ($heading === 'Invoice schedule and exceptions' && $entries): ?>
+      <p class="reminder-note">Choose a one-off tone to preview before sending. Stronger tones unlock as reminders are sent. Very firm and Final require owner approval.</p>
+    <?php endif; ?>
     <?php if (!$entries): ?><p>Nothing in this queue.</p><?php else: ?>
     <div class="table-scroll"><table class="table reminder-table">
       <thead><tr><th>Invoice</th><th>Client and recipient</th><th>Due and balance</th><th>Reminder status</th><th>Invoice options</th></tr></thead>
       <tbody><?php foreach ($entries as [$row, $plan]): $no = (int)$row['Invoice_No'];
-        $sendAction = $plan['stage'] >= 4 ? 'escalate' : ($plan['stage'] === 1 ? 'gentle' : 'next');
-        $oneOff = ($sendAction === 'escalate' ? $owner : in_array($plan['status'], ['Backlog review', 'Manual only'], true))
-            ? invoice_reminder_manual_plan($row, $context, $sendAction) : null;
+        $canPreviewTone = invoice_reminder_manual_plan($row, $context, 1, $owner) !== null;
+        $oneOff = $focus === $no && $selectedTone
+            ? invoice_reminder_manual_plan($row, $context, $selectedTone, $owner) : null;
         $startPreview = $plan['stage'] === 1 && $plan['status'] === 'Backlog review' && $row['client_mode'] === 'automatic'
             ? invoice_reminder_plan($row, $context, true) : null;
       ?>
@@ -350,17 +358,32 @@ details > summary { cursor:pointer; padding:4px 0; }
           <td>
             <?php if ($plan['stage'] <= 5): reminder_invoice_actions($row, $csrf, $context['today'],
                 !$row['verified_at'] && invoice_reminder_is_legacy($row, $context)); endif; ?>
+            <?php if ($canPreviewTone): ?>
+            <form class="reminder-actions" method="get" action="invoice_reminders.php#invoice-<?= $no ?>">
+              <input type="hidden" name="invoice_no" value="<?= $no ?>">
+              <label for="tone-<?= $no ?>">One-off tone</label>
+              <select id="tone-<?= $no ?>" name="tone" required>
+                <option value="">Choose a tone</option>
+                <?php foreach ($toneLabels as $tone => $label):
+                    $available = $tone <= $plan['stage'] && ($tone < 4 || $owner); ?>
+                  <option value="<?= $tone ?>"<?= !$available ? ' disabled' : '' ?><?= $oneOff && $tone === $selectedTone ? ' selected' : '' ?>><?= reminder_h($label) ?></option>
+                <?php endforeach; ?>
+              </select>
+              <button class="btn-secondary" type="submit">Preview tone</button>
+            </form>
+            <?php endif; ?>
+            <?php if ($focus === $no && $selectedTone && !$oneOff): ?>
+              <p class="reminder-note" role="status">That tone is unavailable for this invoice. Available tones depend on send history, eligibility and owner approval.</p>
+            <?php endif; ?>
             <?php if ($oneOff): ?>
             <?php $message = invoice_reminder_message($pdo, $oneOff); reminder_email_preview($message); ?>
+            <?php if (!$oneOff['advance']): ?><small>This gentler one-off keeps the current reminder stage.</small><?php endif; ?>
             <form class="reminder-actions" method="post" action="xero_send_reminders.php" onsubmit="return confirm('Send this notice to the recipient shown for this invoice?')">
               <input type="hidden" name="csrf" value="<?= reminder_h($csrf) ?>">
               <input type="hidden" name="invoice_no" value="<?= $no ?>">
+              <input type="hidden" name="tone" value="<?= $selectedTone ?>">
               <input type="hidden" name="preview_key" value="<?= reminder_h(invoice_reminder_preview_key([invoice_reminder_manifest($oneOff, $message)])) ?>">
-              <button class="btn-secondary" name="send_action" value="<?= $sendAction ?>"><?= reminder_h([
-                  'escalate' => $plan['stage'] === 5 ? 'Approve and send final notice' : 'Approve and send very firm reminder',
-                  'gentle' => 'Send gentle reminder once',
-                  'next' => 'Send ' . str_replace('_', ' ', INVOICE_REMINDER_TONES[$plan['stage']]) . ' once',
-              ][$sendAction]) ?></button>
+              <button class="btn-secondary" name="send_action" value="manual_tone"><?= $selectedTone >= 4 ? 'Approve and send' : 'Send' ?> <?= reminder_h(strtolower($toneLabels[$selectedTone])) ?> reminder</button>
             </form>
             <?php endif; ?>
           </td>

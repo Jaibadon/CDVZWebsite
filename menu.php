@@ -105,7 +105,7 @@ $leaveFlash    = $_SESSION['leave_flash']     ?? '';
 $leaveFlashErr = $_SESSION['leave_flash_err'] ?? '';
 unset($_SESSION['leave_flash'], $_SESSION['leave_flash_err']);
 
-// Invoices 30+ days overdue — Erik-only "call them" callout. Pulled fresh
+// Invoices 30+ days overdue — Erik-only call list. Pulled
 // from the local Xero_* mirror (whichever monthly_invoicing.php / cron sync
 // last refreshed). Ordered worst-first so the loudest case is at the top.
 $callList = [];
@@ -210,6 +210,11 @@ a.btn:active { display:block; background:#9B9B1B; color:#fff !important; text-al
 a.btn:hover { background:#7a7a16; color:#fff !important; }
 a.btn.secondary { background:#555; color:#fff !important; }
 a.btn.secondary:hover { background:#333; color:#fff !important; }
+.overdue-summary { background:#fff3e8; border:1px solid #d9a58b; border-radius:4px; padding:12px 16px; margin-bottom:16px; color:#7a2200; }
+.overdue-links { display:flex; flex-wrap:wrap; gap:6px 16px; margin:6px 0; }
+.overdue-summary a { color:#8a2100; }
+.overdue-summary summary { cursor:pointer; padding:5px 0; }
+.overdue-table-scroll { overflow-x:auto; }
 </style>
 </head>
 <body>
@@ -243,18 +248,19 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
     <?php if (!empty($callList)):
         $totalOverdue = 0; foreach ($callList as $c) $totalOverdue += (float)$c['Xero_AmountDue'];
     ?>
-    <div style="background:#ffe4d6;border:2px solid #c33;border-radius:4px;padding:12px 16px;margin-bottom:16px">
-      <h3 style="margin:0 0 6px;color:#a00;border:none">
-        📞 <?= count($callList) ?> invoice<?= count($callList) === 1 ? '' : 's' ?> 30+ days overdue &mdash; please give the client a call
+    <section class="overdue-summary" aria-labelledby="overdue-heading">
+      <h3 id="overdue-heading" style="margin:0;color:#a00;border:none">
+        <?= count($callList) ?> invoice<?= count($callList) === 1 ? '' : 's' ?> 30+ days overdue · $<?= number_format($totalOverdue, 2) ?> due
       </h3>
-      <p style="margin:0 0 6px;font-size:11px;color:#7a2200">
-        Total overdue 30+ days: <strong>$<?= number_format($totalOverdue, 2) ?></strong>.
-        A phone call recovers far more debt than another email at this point.
-        Once you've spoken to them you can re-send the reminder via
-        <a href="monthly_invoicing.php" style="color:#a00">Monthly Invoicing</a>.
-      </p>
+      <div class="overdue-links">
+        <a href="invoice_reminders.php#backlog-review">Review reminder backlog</a>
+        <a href="monthly_invoicing.php">View all outstanding invoices</a>
+      </div>
+      <details>
+      <summary>Show client call list</summary>
+      <div class="overdue-table-scroll">
       <table style="width:100%;border-collapse:collapse;font-size:13px;margin-top:6px">
-        <thead><tr style="background:#fff3cd"><th style="padding:4px 6px;text-align:left">Invoice</th><th style="padding:4px 6px;text-align:left">Client</th><th style="padding:4px 6px;text-align:left">Phone</th><th style="padding:4px 6px;text-align:right">Amount due</th><th style="padding:4px 6px;text-align:right">Days late</th></tr></thead>
+        <thead><tr style="background:#fff3cd"><th style="padding:4px 6px;text-align:left">Invoice</th><th style="padding:4px 6px;text-align:left">Client</th><th style="padding:4px 6px;text-align:left">Phone</th><th style="padding:4px 6px;text-align:right">Amount due</th><th style="padding:4px 6px;text-align:right">Days late</th><th style="padding:4px 6px;text-align:left">Reminders</th></tr></thead>
         <tbody>
         <?php foreach (array_slice($callList, 0, 12) as $c):
             $ph = trim((string)($c['Phone'] ?? '')) ?: trim((string)($c['Mobile'] ?? ''));
@@ -265,14 +271,17 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
             <td style="padding:4px 6px"><?php if ($ph !== ''): ?><a href="tel:<?= htmlspecialchars(preg_replace('/\s+/', '', $ph)) ?>" style="color:#a00;text-decoration:none">📞 <?= htmlspecialchars($ph) ?></a><?php else: ?><span style="color:#888">no phone on file</span><?php endif; ?></td>
             <td style="padding:4px 6px;text-align:right">$<?= number_format((float)$c['Xero_AmountDue'], 2) ?></td>
             <td style="padding:4px 6px;text-align:right;color:<?= ((int)$c['days_overdue']) >= 60 ? '#a00' : '#7a2200' ?>"><strong><?= (int)$c['days_overdue'] ?></strong></td>
+            <td style="padding:4px 6px"><a href="invoice_reminders.php?invoice_no=<?= (int)$c['Invoice_No'] ?>#invoice-<?= (int)$c['Invoice_No'] ?>">Reminder options</a></td>
           </tr>
         <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
       <?php if (count($callList) > 12): ?>
         <p style="font-size:11px;color:#7a2200;margin-top:6px">+ <?= count($callList) - 12 ?> more not shown &mdash; see <a href="monthly_invoicing.php" style="color:#a00">Monthly Invoicing</a> for the full list.</p>
       <?php endif; ?>
-    </div>
+      </details>
+    </section>
     <?php endif; ?>
 
     <?php if (!empty($pendingLeave)):
@@ -404,6 +413,9 @@ a.btn.secondary:hover { background:#333; color:#fff !important; }
     <h3>Invoicing &amp; Payments</h3>
     <div class="grid">
       <a class="btn" href="invoice_list.php">Invoice List</a>
+      <?php if (in_array($_SESSION['UserID'], ['erik', 'jen'], true)): ?>
+        <a class="btn" href="invoice_reminders.php">Invoice Reminders</a>
+      <?php endif; ?>
       <a class="btn" href="invoice_archive.php">Invoice Archive</a>
       <a class="btn" href="payments.php">Payments</a>
     </div>

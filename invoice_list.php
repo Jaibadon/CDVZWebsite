@@ -66,6 +66,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'set_c
 }
 .inv-row a { vertical-align: middle; }
 .inv-row .row-status { vertical-align: middle; }
+.inv-row .row-overdue { color:#a00; font-weight:bold; margin-left:8px; }
 /* The main scroll container so wide rows don't push the whole page wider
    than the viewport. */
 .inv-list-wrap { overflow-x: auto; max-width: 100%; padding-bottom: 8px; }
@@ -163,6 +164,8 @@ $sql = "SELECT Invoices.Invoice_No   AS Invoice_No,
                Invoices.Xero_InvoiceID AS Xero_InvoiceID,
                Invoices.Xero_Status   AS Xero_Status,
                Invoices.Xero_OnlineUrl AS Xero_OnlineUrl,
+               Invoices.Xero_AmountDue AS Xero_AmountDue,
+               DATEDIFF(CURDATE(), COALESCE(Invoices.Xero_DueDate, Invoices.PayBy)) AS DaysOverdue,
                Clients.Client_Name   AS Client_Name
                $contactSelect,
                Projects.JobName      AS JobName
@@ -327,6 +330,12 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
            . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
            . "<input type=\"submit\" value=\"&#9993; Send Statement\" style=\"background:#5d3a9b;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
            . "</form>";
+    }
+    $overdueDays = (int)$rs['DaysOverdue'];
+    $openInXero = in_array($xs, ['AUTHORISED', 'SUBMITTED'], true)
+        && ($rs['Xero_AmountDue'] === null || (float)$rs['Xero_AmountDue'] > 0);
+    if ($overdueDays > 0 && ($openInXero || (!$xs && $sentFlag !== 0))) {
+        echo ' <strong class="row-overdue">OVERDUE BY ' . $overdueDays . ($overdueDays === 1 ? ' DAY' : ' DAYS') . '</strong>';
     }
     echo '</div>'; // .inv-row
 }
