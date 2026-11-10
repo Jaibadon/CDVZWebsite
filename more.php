@@ -167,6 +167,7 @@ $pdo = get_db();
   <tr><td align="Left"><strong>TIMESHEET FUNCTIONS</strong></td></tr>
   <tr><td align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="timesheet_admin1.php"><font color="#FFFFFF">Timesheet Reporting</font></a></td></tr>
   <tr><td align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="staff_hours.php"><font color="#FFFFFF">Staff Hours - Unprocessed</font></a></td></tr>
+  <tr><td align="Left"><a href="invoice_reminders.php"><font color="#FFFFFF">Invoice Reminders (preview, backlog, client defaults)</font></a></td></tr>
   <tr><td align="Left"><a onMouseOver="window.status='Edit staff details (rates, name, email, active)'; return true" onMouseOut="window.status=''; return true" href="staff_admin.php"><font color="#FFFFFF">Staff Admin (rates, contact, active)</font></a></td></tr>
   <tr><td width="652" align="Left"><a onMouseOver="window.status='View'; return true" onMouseOut="window.status=''; return true" href="unprocessed.php"><font color="#FFFFFF">Uprocessed Timesheet Entries</font></a></td></tr>
   <tr><td align="right" width="652"><div align="left"></div></td></tr>

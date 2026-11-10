@@ -9,70 +9,14 @@ real clients, and how to hook the cron job up on cPanel.
 
 ---
 
-## 1. Quick reference — test entry points
+## 1. Verify the reminder preview and send flow
 
-| Goal | URL / Command | What it does |
-|---|---|---|
-| **Preview the cron without sending anything** | `xero_send_reminders.php?dry_run=1` | Lists who *would* be reminded today. No SMTP traffic. |
-| **Send a real reminder for a single invoice** | "Send reminder" button on `monthly_invoicing.php` | Bypasses opt-in and schedule. Goes to the real client. |
-| **Run cron with everything diverted to your inbox** | `xero_send_reminders.php?test=1` | Same logic as cron, but `to:` is replaced with `accounts@cadviz.co.nz`. Subject prefixed `[TEST]`. No DB state changes. |
-| **Send to a different test inbox** | `xero_send_reminders.php?test=1&test_to=erik@cadviz.co.nz` | Override divert target. |
-| **Preview a specific tone** | `xero_send_reminders.php?test=1&force_tone=final` | Pretends every overdue invoice is at the right day count for that tone. Tone values: `gentle`, `reminder`, `firm`, `very_firm`, `final`. |
-| **Preview a specific day count** | `xero_send_reminders.php?test=1&force_days=37` | Pins every overdue row to exactly 37 days overdue. |
-| **All of the above from the UI** | `monthly_invoicing.php` → "Test mode" links under the table | One-click runs for each tone. |
-
-In test mode:
-- Recipient → `accounts@cadviz.co.nz` (or `?test_to=`)
-- Subject prefixed with `[TEST] ` so the inbox preview is unmistakable
-- Spam guards relaxed (the same client can be re-tested back-to-back)
-- Opt-in flag bypassed (you don't need to flip "Start reminders")
-- Hard-stop bypassed (you can preview a `final` tone on a 200-day invoice)
-- `Sent` flags / `reminder_last` / `reminder_statement_last` **NOT updated** — your test never poisons the real cron schedule
-
----
-
-## 2. Smoke test before flipping the cron on
-
-Before you set up the cron job, do this once to make sure your install
-sends mail correctly and reaches the right inboxes.
-
-### 2a. Preview the actual schedule
-1. Open `monthly_invoicing.php`.
-2. Click **"Preview reminder run (dry-run)"**.
-3. The page lists every invoice that *would* receive a reminder if cron
-   ran right now, with the reason (`sent to ...`, `not on reminder schedule`,
-   `reminders not started`, etc.). No emails are sent.
-4. If the list is empty (because nothing's opted in yet — see step 3),
-   that's fine — we'll force one in test mode below.
-
-### 2b. Test each tone end-to-end
-1. On `monthly_invoicing.php`, click each of the test-mode links:
-   "8d / gentle", "15d / reminder", "31d / firm", "46d / very_firm",
-   "61d / final". (The schedule is offset by +1 day vs. the original
-   7/14/30/45/60 because Xero's bank feed lags real bank settlement
-   by ~1 day — sending on day 7 risked chasing clients who'd paid the
-   day before.)
-2. Every click sends one email to `accounts@cadviz.co.nz` with a `[TEST]`
-   subject prefix. Read each one — confirm:
-   - Wording matches the tone (gentle = friendly, final = "FINAL NOTICE").
-   - PDF attachments come through for clients with `Xero_InvoiceID`.
-   - Bank-account details + reference (`CAD-0xxxxx`) are right.
-   - The "if you've already paid, please disregard" disclaimer is there.
-
-### 2c. Test the multi-overdue statement path
-1. Find a client with at least 2 overdue invoices in the dashboard.
-   (If none exist, in phpMyAdmin run
-   `UPDATE Invoices SET Xero_DueDate = DATE_SUB(CURDATE(), INTERVAL 10 DAY) WHERE Invoice_No IN (...)`
-   on two test invoices for the same client to fake it.)
-2. Open `xero_send_reminders.php?test=1` and read the `[TEST]` email.
-3. Confirm: one email covering both invoices, table of overdue invoices,
-   total, all PDFs attached.
-
-### 2d. Single-invoice send
-1. On `monthly_invoicing.php`, click ✉ Send reminder for one row.
-2. This is the only path that sends to the **real client** in this
-   smoke test — use it on an invoice for a friendly client (or your
-   own test client) and confirm the email lands.
+1. In staging, apply both `migrations/add_invoice_reminders.sql` and `migrations/add_verified_invoice_delivery.sql` after the App_Meta, Xero and Akahu migrations. Open **Invoice Reminders** from **More** or **Monthly Invoicing**.
+2. Verify that a 59-day overdue invoice from before the cutover is in **Backlog review**. Confirm the original send and billing recipients, then choose **Start gently** for that invoice and check the recipient, date, invoice number and gentle template. Put another invoice for the same client on a dated hold and check that it stays out of the email.
+3. Set a test client to **Manual only** and confirm that client disappears from the automatic plan. A newly sent invoice under the Automatic default should show the standard eight-day grace period.
+4. Run `xero_send_reminders.php?dry_run=1` or `php xero_send_reminders.php cron preview-only` to check today's plan without SMTP or Xero sync. Preview a template with **Send sample email** on **Email templates**.
+5. On an isolated mail transport, run cron twice and verify that an already sent reminder does not repeat. Confirm that partial payments, changed balances and failed current Xero lookups block sends. Very firm and Final require owner approval.
+6. Check that a mixed-stage statement uses the gentlest stage, leaves held invoices out and advances only the matching stages. A delivery with an uncertain result should appear in **Deliveries to check**.
 
 ---
 
@@ -95,7 +39,7 @@ The trailing `cron` argument tells the script it's running under cron
 
 ### 3b. Confirm the cron actually fires
 On the day after you wire it up:
-1. Check `monthly_invoicing.php` — every opted-in invoice should have a
+1. Check `monthly_invoicing.php` — invoices contacted by cron should have a
    `Last reminder` date that matches the cron run.
 2. Check the cPanel **Cron Output** (or the email it sends to you) for
    the script's stdout. It should say:
@@ -121,61 +65,25 @@ On the day after you wire it up:
 
 ---
 
-## 4. Examples — sending sample emails to yourself
+## 4. Sample emails
 
-You'll often want to "see what the client would see" before flipping
-opt-in. Three quick recipes:
+Open **Email templates** and choose **Send sample email** on the saved template.
+The recipient is an internal mailbox and the body uses fictional invoice data.
+Check both the plain text and HTML versions. Use an isolated mail transport to
+test real PDF attachment handling without sending a customer document.
 
-### Email a single invoice to your own inbox
-```
-xero_invoice_email.php  → not directly callable; instead use
-xero_send_reminders.php?test=1&test_to=erik@cadviz.co.nz&invoice_no=9489
-```
-That sends the regular reminder (not the invoice email). To preview the
-*invoice email* itself, push the invoice to Xero on a test client whose
-billing email is yours, then click "Email from CADViz" on the invoice
-list.
-
-### Preview the very-firm wording on a real invoice
-```
-xero_send_reminders.php?test=1&force_tone=very_firm
-```
-Every overdue invoice on the system gets the very-firm wording, all
-diverted to your inbox, all `Sent` flags untouched.
-
-### Preview the final-notice wording on a single specific invoice
-```
-xero_send_reminders.php?test=1&force_tone=final&invoice_no=9489
-```
-Single invoice, final tone, diverted.
-
-### Preview the multi-overdue statement wording
-Pick a client with multiple overdue invoices, run:
-```
-xero_send_reminders.php?test=1&test_to=you@yourdomain.co.nz
-```
-The statement email includes all overdue invoices for clients with 2+,
-diverted to your inbox.
-
----
-
-## 5. CLI test recipes (for terminal users)
+## 5. CLI preview and test copies
 
 ```bash
-# Dry-run — shows who would be reminded, sends nothing
-php xero_send_reminders.php cron dry-run
-
-# Test mode — diverts to the default test inbox (accounts@cadviz.co.nz)
-php xero_send_reminders.php cron test
-
-# Test mode + custom recipient
-CADVIZ_REMINDER_TEST_TO="erik@cadviz.co.nz" php xero_send_reminders.php cron test
-
-# Test mode + force a specific tone
-# (no flag — pass via env var so it survives a `cron`-style invocation)
-CADVIZ_REMINDER_TEST_MODE=1 CADVIZ_REMINDER_TEST_TO=you@example.com \
-    php xero_send_reminders.php cron
+php xero_send_reminders.php cron preview-only
 ```
+
+Use `cron dry-run` to send copies of the planned reminders to
+`jai@nielsen.org.nz`. The copies are labelled **[DRY RUN]**, show the
+intended recipients, and omit PDFs and live payment links. Dry runs read
+the local queue and leave reminder history untouched, so the same copies
+can repeat if the test cron stays scheduled. A live run verifies every
+invoice in Xero immediately before delivery.
 
 ---
 
@@ -217,7 +125,7 @@ audit trail to clean up.
 
 | What | How to clear |
 |---|---|
-| Spurious `reminder_started_client_<cid>` rows | `DELETE FROM App_Meta WHERE meta_key LIKE 'reminder_started_client_%'` (then opt back in via the UI). Legacy per-invoice keys (`reminder_started_<n>`, no `client_`) are ignored by the cron and can be cleaned with `DELETE FROM App_Meta WHERE meta_key LIKE 'reminder_started_%' AND meta_key NOT LIKE 'reminder_started_client_%'` |
+| Wrong client or invoice policy | Use **Invoice Reminders** to adjust the setting and verify the next planned email. |
 | Spurious `reminder_last_<n>` rows | `DELETE FROM App_Meta WHERE meta_key LIKE 'reminder_last_%'` |
 | `Sent = 1` set by a real (not test-mode) email | `UPDATE Invoices SET Sent = 0, date_sent = NULL WHERE Invoice_No = ?` |
 | Stuck Xero tokens | menu → Disconnect Xero → Connect again |

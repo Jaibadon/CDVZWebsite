@@ -38,7 +38,7 @@ below).
   `invoice.php`/`credit_notice.php` (print), `invoice_list*.php`, `payments`.
 - **Xero** — `xero_client.php` (OAuth2 + refresh), `xero_invoice_push.php`
   (timesheets → grouped Xero lines), `xero_sync.php` (**the only writer that flips
-  `Invoices.Paid` from Xero**), `xero_send_reminders.php` (8/15/31/46/61-day cron),
+  `Invoices.Paid` from Xero**), `xero_send_reminders.php` (daily cron with tracked reminder stages),
   statements, `email_templates.php`.
 - **Akahu bank feed** — `akahu_sync.php` + `bankfeed_match.php` (ref-regex + blacklist
   → `Bank_Allocations` → `Invoices.AmountPaid`; flips `Paid` only when

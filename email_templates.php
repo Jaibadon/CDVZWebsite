@@ -2,53 +2,47 @@
 /**
  * Editable email templates — admin can rewrite the wording of every
  * outbound email (single invoice, manual statement, 5 reminder tones,
- * 4 overdue-statement tones) without touching PHP.
+ * 5 overdue-statement tones) without touching PHP.
  *
  * Templates live in App_Meta as `tpl_<key>_<field>` rows. When a row
  * is empty we fall back to the hardcoded default in
  * helpers.php :: default_email_templates(). "Reset" deletes the row.
  *
- * Per-template "send test" buttons fire xero_send_reminders.php in
- * test mode against a chosen invoice, so the admin can preview the
- * exact rendered email in their inbox before pushing changes live.
+ * Sample emails are rendered with fictional invoice data.
  */
 require_once 'auth_check.php';
 require_once 'db_connect.php';
-require_once 'helpers.php';
+require_once 'invoice_email_safety.php';
 
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403); die('Admin only.');
 }
 
 $pdo = get_db();
-
-// ── POST: save a single template's three fields ──────────────────────
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'save_template') {
-    $key = $_POST['template_key'] ?? '';
-    $defaults = default_email_templates();
-    if (isset($defaults[$key])) {
-        foreach (['subject','text','html'] as $field) {
-            $val = $_POST[$field] ?? '';
-            // Empty input = revert to the hardcoded default (drops the
-            // App_Meta row). Non-empty = persist as override.
-            email_template_set($pdo, $key, $field, $val);
+$csrf = invoice_email_csrf();
+$registry = default_email_templates();
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    invoice_email_require_post();
+    $key = is_string($_POST['template_key'] ?? null) ? $_POST['template_key'] : '';
+    $action = $_POST['action'] ?? '';
+    try {
+        if (!isset($registry[$key]) || !in_array($action, ['save_template', 'reset_template'], true)) {
+            throw new RuntimeException('Choose a valid email template and action.');
         }
-        $_SESSION['template_flash'] = 'Saved "' . $defaults[$key]['label'] . '". Test it via the Send-test buttons before relying on the new wording.';
-    } else {
-        $_SESSION['template_flash_err'] = 'Unknown template key: ' . $key;
+        $pdo->beginTransaction();
+        foreach (['subject','text','html'] as $field) {
+            if ($action === 'save_template' && !is_string($_POST[$field] ?? null)) {
+                throw new RuntimeException('The email template was incomplete. Reload the form and try again.');
+            }
+            email_template_set($pdo, $key, $field, $action === 'reset_template' ? '' : $_POST[$field]);
+        }
+        $pdo->commit();
+        $_SESSION['template_flash'] = 'Updated "' . $registry[$key]['label'] . '".';
+    } catch (Throwable $e) {
+        if ($pdo->inTransaction()) $pdo->rollBack();
+        $_SESSION['template_flash_err'] = $e->getMessage();
     }
-    header('Location: email_templates.php#' . urlencode($key));
-    exit;
-}
-
-// ── POST: reset a single template back to its hardcoded default ──────
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'reset_template') {
-    $key = $_POST['template_key'] ?? '';
-    foreach (['subject','text','html'] as $field) {
-        email_template_set($pdo, $key, $field, '');
-    }
-    $_SESSION['template_flash'] = 'Reset "' . $key . '" back to default.';
-    header('Location: email_templates.php#' . urlencode($key));
+    header('Location: email_templates.php#' . urlencode($key), true, 303);
     exit;
 }
 
@@ -56,53 +50,6 @@ $flash    = $_SESSION['template_flash']     ?? '';
 $flashErr = $_SESSION['template_flash_err'] ?? '';
 unset($_SESSION['template_flash'], $_SESSION['template_flash_err']);
 
-$registry = default_email_templates();
-
-// ── Pick a default invoice for "Send test" buttons ───────────────────
-// Most-recently-pushed unpaid invoice with both Xero data and a billing
-// email. Falls back to the first row if nothing matches the preferred
-// criteria.
-$defaultTestInvoice = 0;
-try {
-    $row = $pdo->query(
-        "SELECT i.Invoice_No
-           FROM Invoices i
-           LEFT JOIN Clients c ON i.Client_ID = c.Client_id
-          WHERE i.Xero_InvoiceID IS NOT NULL
-            AND COALESCE(c.billing_email, c.email, '') <> ''
-          ORDER BY i.Invoice_No DESC
-          LIMIT 1"
-    )->fetch(PDO::FETCH_ASSOC);
-    $defaultTestInvoice = (int)($row['Invoice_No'] ?? 0);
-} catch (Exception $e) {}
-
-// Fetch a list of recent invoices to populate the dropdown.
-$invoiceOptions = [];
-try {
-    $invoiceOptions = $pdo->query(
-        "SELECT i.Invoice_No, c.Client_Name, i.Xero_AmountDue, i.Xero_DueDate, i.Xero_InvoiceID
-           FROM Invoices i
-           LEFT JOIN Clients c ON i.Client_ID = c.Client_id
-          WHERE i.Paid = 0
-          ORDER BY i.Invoice_No DESC
-          LIMIT 60"
-    )->fetchAll(PDO::FETCH_ASSOC);
-} catch (Exception $e) {}
-
-$testTo = $_SESSION['UserID'] === 'erik' ? 'erik@cadviz.co.nz' : 'accounts@cadviz.co.nz';
-
-// Map template key → cron force_tone value (for the test-send link)
-$keyToForceTone = [
-    'reminder_gentle'              => 'gentle',
-    'reminder_reminder'            => 'reminder',
-    'reminder_firm'                => 'firm',
-    'reminder_very_firm'           => 'very_firm',
-    'reminder_final'               => 'final',
-    'overdue_statement_gentle'     => 'gentle',
-    'overdue_statement_firm'       => 'firm',
-    'overdue_statement_very_firm'  => 'very_firm',
-    'overdue_statement_final'      => 'final',
-];
 ?>
 <!DOCTYPE html>
 <html><head>
@@ -164,21 +111,8 @@ nav.toc a:hover { text-decoration:underline; }
 </p>
 
 <div class="test-bar">
-  <strong>Test sending:</strong> every "🧪 Send test" button below diverts to
-  <strong><?= htmlspecialchars($testTo) ?></strong> with subject prefixed
-  <code>[TEST]</code>. The real client never sees the email and the
-  invoice's Sent / reminder_last flags are NOT touched.
-  Test invoice:
-  <select id="test-invoice" onchange="document.querySelectorAll('a.test-link').forEach(a => { var u = new URL(a.href); u.searchParams.set('invoice_no', this.value); a.href = u.toString(); })">
-    <?php foreach ($invoiceOptions as $opt):
-        $invNo = (int)$opt['Invoice_No'];
-        $label = 'CAD-' . str_pad((string)$invNo, 5, '0', STR_PAD_LEFT) . ' — ' . ($opt['Client_Name'] ?? '?')
-               . (!empty($opt['Xero_AmountDue']) ? ' ($' . number_format((float)$opt['Xero_AmountDue'], 2) . ')' : '');
-        $sel   = ($invNo === $defaultTestInvoice) ? ' selected' : '';
-    ?>
-      <option value="<?= $invNo ?>"<?= $sel ?>><?= htmlspecialchars($label) ?></option>
-    <?php endforeach; ?>
-  </select>
+  Sample emails use fictional invoice data and go to the internal test mailbox for your account.
+  Save changes first to test the latest wording.
 </div>
 
 <nav class="toc">
@@ -199,7 +133,6 @@ nav.toc a:hover { text-decoration:underline; }
         meta_get($pdo, 'tpl_' . $key . '_text')    !== null ||
         meta_get($pdo, 'tpl_' . $key . '_html')    !== null
     );
-    $forceTone = $keyToForceTone[$key] ?? null;
 ?>
 <div class="tpl" id="<?= htmlspecialchars($key) ?>">
   <h2><?= htmlspecialchars($tpl['label']) ?>
@@ -220,7 +153,7 @@ nav.toc a:hover { text-decoration:underline; }
   </div>
 
   <form method="post" action="email_templates.php">
-    <input type="hidden" name="action" value="save_template">
+    <input type="hidden" name="email_csrf" value="<?= htmlspecialchars($csrf) ?>">
     <input type="hidden" name="template_key" value="<?= htmlspecialchars($key) ?>">
 
     <label>Subject</label>
@@ -235,33 +168,15 @@ nav.toc a:hover { text-decoration:underline; }
     </details>
 
     <div class="btn-row">
-      <input type="submit" class="btn-primary" value="💾 Save changes">
-
+      <button type="submit" name="action" value="save_template" class="btn-primary">Save changes</button>
       <?php if ($isOverridden): ?>
-        <button type="submit" class="btn-secondary"
-                formaction="email_templates.php"
-                onclick="this.form.action='email_templates.php'; this.form.querySelectorAll('input[name=action]')[0].value='reset_template'; return confirm('Reset this template back to the hardcoded default? Your custom wording will be lost.');">
-          ↺ Reset to default
-        </button>
+        <button type="submit" class="btn-secondary" name="action" value="reset_template"
+                onclick="return confirm('Reset this template to its default wording?');">Reset to default</button>
       <?php endif; ?>
-
-      <?php if ($forceTone !== null): ?>
-        <a class="btn-test test-link" target="_blank"
-           href="xero_send_reminders.php?test=1&test_to=<?= urlencode($testTo) ?>&force_tone=<?= urlencode($forceTone) ?>&invoice_no=<?= $defaultTestInvoice ?>">
-          🧪 Send test (this tone, single invoice)
-        </a>
-      <?php elseif ($key === 'invoice'): ?>
-        <a class="btn-test test-link" target="_blank"
-           href="xero_invoice_email.php?Invoice_No=<?= $defaultTestInvoice ?>&test_to=<?= urlencode($testTo) ?>"
-           onclick="return confirm('Send a TEST invoice email to <?= htmlspecialchars($testTo) ?>?\n\n(Diverted recipient, [TEST] subject prefix.)');">
-          🧪 Send test (single invoice email)
-        </a>
-      <?php elseif ($key === 'statement_manual'): ?>
-        <a class="btn-test test-link" target="_blank"
-           href="send_statement.php?test_to=<?= urlencode($testTo) ?>&invoice_no=<?= $defaultTestInvoice ?>"
-           onclick="return confirm('Send a TEST manual statement to <?= htmlspecialchars($testTo) ?>?\n\nThis picks the client of the chosen invoice and statements all of their unpaid invoices.');">
-          🧪 Send test (manual statement)
-        </a>
+      <?php if (in_array($key, ['invoice', 'statement_manual'], true) || str_starts_with($key, 'reminder_') || str_starts_with($key, 'overdue_statement_')): ?>
+        <button type="submit" class="btn-test" formaction="invoice_email_test.php"
+                name="test_template" value="<?= htmlspecialchars($key) ?>"
+                onclick="return confirm('Send a sample email to the internal test mailbox?');">Send sample email</button>
       <?php endif; ?>
     </div>
   </form>

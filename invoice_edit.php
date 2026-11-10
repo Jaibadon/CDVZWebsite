@@ -1,6 +1,7 @@
 <?php
 session_start();
 require_once 'db_connect.php';
+require_once 'invoice_email_safety.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
@@ -172,6 +173,7 @@ if ($enterTarget === '' || ($selfBase !== '' && strpos($enterTarget, $selfBase) 
       </tr>
 </table>
 <form method="POST" name="invoice_update_form" action="invoice_update.php">
+<input type="hidden" name="email_csrf" value="<?= invoice_email_csrf() ?>">
   <table width="810" border="0">
     <tr>
       <td width="100">Client:</td>

@@ -556,7 +556,7 @@ document.addEventListener('DOMContentLoaded', function() {
         lockedNote.hidden = !locked;
         hint.textContent = locked
             ? 'This entry has been invoiced.'
-            : 'Changes update this row as you type. Submit the timesheet to save them.';
+            : 'This description can appear on the client’s invoice. Submit the timesheet to save your changes.';
         dialog.showModal();
         if (locked) {
             lockedNote.scrollTop = 0;
@@ -743,7 +743,7 @@ if ($mustFillFullWeek && !$isViewingCurrentWeek && !empty($missingCurrWeekUpToYe
   <th style="width:130px">Project</th>
   <th style="width:0"></th><!-- hidden Invoice_No col -->
   <th class="task-heading">Task <span style="font-weight:normal;font-size:10px">(remaining hrs)</span></th>
-  <th class="notes-heading">Notes</th>
+  <th class="notes-heading">Invoice description</th>
   <?php for ($d = 0; $d < 7; $d++): ?>
     <th class="day-input">
       <?= $dayNames[$d] ?><br><?= $dayDates[$d] ?><br>
@@ -809,10 +809,10 @@ for ($a = 1; $a <= $renderRows; $a++):
   <td>
     <div class="notes-cell">
       <textarea <?= $locked ? 'disabled' : '' ?> name="Desc<?= $a ?>" rows="1"
-                class="desc-inp" placeholder="(notes)" aria-label="Notes for row <?= $a ?>">
+                class="desc-inp" placeholder="(invoice description)" aria-label="Invoice description for row <?= $a ?>">
 <?= htmlspecialchars($taskTxt) ?></textarea>
       <button type="button" class="notes-open" hidden aria-haspopup="dialog"
-              aria-label="Open notes for row <?= $a ?>" title="Open notes editor">&#x2197;</button>
+              aria-label="Open invoice description for row <?= $a ?>" title="Open invoice description">&#x2197;</button>
     </div>
   </td>
   <?php for ($d = 1; $d <= 7; $d++):
@@ -839,7 +839,7 @@ for ($a = 1; $a <= $renderRows; $a++):
 
 <dialog id="notes-dialog" class="notes-dialog" aria-labelledby="notes-title" aria-describedby="notes-hint">
   <form method="dialog">
-    <h2 id="notes-title">Timesheet notes</h2>
+    <h2 id="notes-title">Invoice description</h2>
     <div id="notes-hint" class="notes-hint"></div>
     <textarea id="notes-editor" aria-labelledby="notes-title" autofocus></textarea>
     <div id="notes-locked" class="notes-locked" role="region" aria-labelledby="notes-title" tabindex="0" hidden></div>

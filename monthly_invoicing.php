@@ -1,318 +1,305 @@
 <?php
-require_once 'auth_check.php';
-require_once 'db_connect.php';
-require_once 'helpers.php';
-require_once 'xero_client.php';
+require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/xero_client.php';
+require_once __DIR__ . '/invoice_reminder_policy.php';
 
-$userID = $_SESSION['UserID'];
-
-// Only allow access for authorised users (mirrors original ASP logic)
-$allowed = ['erik', 'jen'];
-if (!in_array($userID, $allowed)) {
-    echo "<p>Access denied.</p>";
-    exit;
+if (!in_array($_SESSION['UserID'] ?? '', ['erik', 'jen'], true)) {
+    http_response_code(403);
+    exit('Admin only.');
 }
 
 $pdo = get_db();
-$xeroConnected = XeroClient::isConfigured() && XeroClient::isConnected($pdo);
+$csrf = $_SESSION['invoice_reminders_csrf'] ??= bin2hex(random_bytes(32));
+$flash = $_SESSION['xero_flash'] ?? '';
+$flashErr = $_SESSION['xero_flash_err'] ?? '';
+unset($_SESSION['xero_flash'], $_SESSION['xero_flash_err']);
 
-// ── Start / stop automatic reminders for a CLIENT (all of their invoices) ──
-// xero_send_reminders.php now requires explicit OPT-IN, but the flag is
-// PER-CLIENT (App_Meta['reminder_started_client_<Client_ID>']). Flipping it
-// on for any one of a client's overdue invoices covers ALL of that client's
-// overdue invoices — current and future — until Erik clicks Stop again.
-// We do this client-wide so the statement-batch path (which bundles every
-// overdue invoice for a client into a single email) doesn't leave invoices
-// out: if it covered only the opted-in subset, the resulting email would
-// say "Statement balance: $X" while the client's actual balance was higher.
-// Manual ?invoice_no=N reminders still bypass opt-in for one-offs.
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_reminders') {
-    $cid = (int)($_POST['client_id'] ?? 0);
-    if ($cid > 0) {
-        $key  = 'reminder_started_client_' . $cid;
-        $cur  = meta_get($pdo, $key);
-        if (!empty($cur)) {
-            try { $pdo->prepare("DELETE FROM App_Meta WHERE meta_key = ?")->execute([$key]); } catch (Exception $e) {}
-        } else {
-            meta_set($pdo, $key, 'started by ' . $userID . ' on ' . date('Y-m-d'));
-        }
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (!hash_equals($csrf, (string)($_POST['csrf'] ?? ''))) {
+        http_response_code(403);
+        exit('Refresh Monthly Invoicing and try again.');
     }
-    header('Location: monthly_invoicing.php');
+    $clientId = (int)($_POST['client_id'] ?? 0);
+    $mode = $_POST['reminder_mode'] ?? '';
+    try {
+        invoice_reminder_context($pdo);
+        invoice_reminder_lock($pdo);
+        try {
+            invoice_reminder_set_client_policy($pdo, $clientId, $mode);
+        } finally {
+            invoice_reminder_unlock($pdo);
+        }
+        $_SESSION['xero_flash'] = $mode === 'manual'
+            ? 'Automatic reminders stopped for this client. Their invoice settings were kept.'
+            : 'Automatic reminders started for this client. Only eligible invoices will continue on their existing schedule.';
+    } catch (Throwable $e) {
+        $_SESSION['xero_flash_err'] = $e->getMessage();
+    }
+    header('Location: monthly_invoicing.php#client-' . $clientId, true, 303);
     exit;
 }
 
-// Pull the follow-up list: invoices that are AUTHORISED in Xero with money
-// still owing past the due date.
-$followups = [];
-if ($xeroConnected) {
-    try {
-        $followups = $pdo->query(
-            "SELECT i.Invoice_No, i.Date, i.Subtotal, i.Notes, i.Order_No_INV,
-                    i.Xero_Status, i.Xero_AmountDue, i.Xero_AmountPaid, i.Xero_DueDate,
-                    i.Xero_LastSynced, i.Xero_OnlineUrl,
-                    DATEDIFF(CURDATE(), i.Xero_DueDate) AS days_overdue,
-                    c.Client_Name, c.billing_email, c.Phone
-               FROM Invoices i
-               LEFT JOIN Clients c ON i.Client_ID = c.Client_id
-              WHERE i.Xero_InvoiceID IS NOT NULL
-                AND i.Xero_Status = 'AUTHORISED'
-                AND i.Xero_AmountDue > 0
-                AND (i.Xero_DueDate IS NULL OR i.Xero_DueDate < CURDATE())
-              ORDER BY i.Xero_DueDate ASC, i.Invoice_No DESC"
-        )->fetchAll();
-    } catch (Exception $e) { /* migration may not be run */ }
-}
-
-$flash    = $_SESSION['xero_flash']     ?? '';
-$flashErr = $_SESSION['xero_flash_err'] ?? '';
-unset($_SESSION['xero_flash'], $_SESSION['xero_flash_err']);
-?>
-<script language="Javascript">
-    document.onkeydown = function() {
-        if (event.keyCode == 13) {
-            window.location = "more.php"
-        }
-    }
-</script>
-<html>
-<head>
-<meta http-equiv="Content-Type" content="text/html; charset=utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Content-Language" content="en-nz">
-<title>Invoicing</title>
-<link href="site.css" rel="stylesheet">
-<link href="global2.css" rel="stylesheet" type="text/css" />
-<basefont face="arial">
-<style type="text/css">
-.style1 { background-color: #9B9B1B; }
-</style>
-</head>
-<body bgcolor="#EBEBEB" text="black">
-
-<?php if ($flash): ?><div style="max-width:900px;margin:10px auto;padding:8px 12px;background:#d6f5d6;color:#1a6b1a;border-radius:4px"><?= htmlspecialchars($flash) ?></div><?php endif; ?>
-<?php if ($flashErr): ?><div style="max-width:900px;margin:10px auto;padding:8px 12px;background:#ffd6d6;color:#a00;border-radius:4px"><?= htmlspecialchars($flashErr) ?></div><?php endif; ?>
-
-<table width="600" border="0" cellspacing="0" cellpadding="0" bgcolor="#EBEBEB" id="table8">
-  <tr>
-    <td>
-      <table border="0" cellspacing="0" width="644" cellpadding="0" id="table9" class="style1">
-        <tr>
-          <td align="center" colspan="4" height="26">
-            <p align="left"><b>&nbsp;<font size="3">&nbsp;</font><font color="#FFFFFF" size="3">&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;INVOICING FOR LAST 12 MONTHS</font></b></td>
-          <td align="center" colspan="3" height="26">
-            <a href="logout.php"><font color="#FFFFFF" size="2">logout</font></a></td>
-        </tr>
-        <tr>
-          <td align="center"><a href="projects.php"><font color="#FFFFFF">My Projects</font></a></td>
-          <td align="center"><a href="main.php"><font color="#FFFFFF">My Timesheet</font></a></td>
-          <td align="center"><a href="login.php"><font color="#FFFFFF">Login Again</font></a></td>
-          <td align="center" colspan="2"><a href="report.php"><font color="#FFFFFF">Reports</font></a></td>
-          <td align="center">&nbsp;</td>
-          <td align="center">&nbsp;</td>
-        </tr>
-        <tr>
-          <td align="center">&nbsp;</td>
-          <td align="center">&nbsp;</td>
-          <td align="center"></td>
-          <td align="center">&nbsp;</td>
-          <td align="center">&nbsp;
-            <?php if ($userID === 'erik' || $userID === 'jen'): ?>
-              <a href='more.php'><font color='#FFFFFF' size='2'>More...</font></a>
-            <?php endif; ?>
-          </td>
-          <td align="center">&nbsp;</td>
-          <td align="center">&nbsp;</td>
-          <td align="center">&nbsp;</td>
-        </tr>
-      </table>
-    </td>
-  </tr>
-</table>
-<p></p>
-
-<?php
-// Council fee staffer (App_Meta, default 46) — to show net design revenue.
+$months = $pdo->query(
+    "SELECT YEAR(`date`) AS yr, MONTH(`date`) AS mnth, SUM(Subtotal) AS subtotal
+       FROM Invoices
+      WHERE `date` > DATE_SUB(NOW(), INTERVAL 12 MONTH)
+      GROUP BY YEAR(`date`), MONTH(`date`)
+      ORDER BY yr DESC, mnth DESC"
+)->fetchAll();
+$grand = array_sum(array_column($months, 'subtotal'));
 $councilEmp = (int)meta_get($pdo, 'council_fee_employee_id', '46');
-
-// Last 12 months of invoices grouped by year/month
-$sql = "SELECT YEAR(`date`) AS yr, MONTH(`date`) AS mnth, SUM(subtotal) AS subtotal
-        FROM Invoices
-        WHERE `date` > DATE_SUB(NOW(), INTERVAL 12 MONTH)
-        GROUP BY YEAR(`date`), MONTH(`date`)
-        ORDER BY YEAR(`date`), MONTH(`date`)";
-
-$stmt = $pdo->query($sql);
-$rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
-
-// Council fees billed in the same window (labour under the council staffer) —
-// a pass-through, so subtract it to show net design revenue.
-$councilGrand = 0.0;
+$councilTotal = null;
 try {
-    $cstmt = $pdo->prepare(
-        "SELECT SUM(t.Hours * COALESCE(t.Rate,0))
-           FROM Timesheets t INNER JOIN Invoices i ON t.Invoice_No = i.Invoice_No
+    $st = $pdo->prepare(
+        "SELECT SUM(t.Hours * COALESCE(t.Rate, 0))
+           FROM Timesheets t JOIN Invoices i ON i.Invoice_No = t.Invoice_No
           WHERE t.Employee_id = ? AND i.`date` > DATE_SUB(NOW(), INTERVAL 12 MONTH)"
     );
-    $cstmt->execute([$councilEmp]);
-    $councilGrand = (float)$cstmt->fetchColumn();
-} catch (Exception $e) { /* non-fatal */ }
-
-$grand = 0.0;
-foreach ($rows as $row) {
-    $tot    = (float) $row['subtotal'];
-    $grand += $tot;
-    echo '<br>';
-    echo htmlspecialchars($row['yr']) . '/' . htmlspecialchars($row['mnth']);
-    echo '&nbsp;=&nbsp;';
-    echo '$' . number_format($tot, 2);
-}
-echo '<br><strong>GRAND TOTAL [excl]......$' . number_format($grand, 2) . '</strong>';
-if ($councilGrand > 0) {
-    echo '<br>Council fees (staff #' . (int)$councilEmp . ')......-$' . number_format($councilGrand, 2);
-    echo '<br><strong>NET DESIGN REVENUE......$' . number_format($grand - $councilGrand, 2) . '</strong>';
+    $st->execute([$councilEmp]);
+    $councilTotal = (float)$st->fetchColumn();
+} catch (PDOException $e) {
+    // Monthly totals remain available when council fee data is unavailable.
 }
 
-// ── Xero overdue follow-up list ───────────────────────────────────────
-require_once 'xero_client.php';
-$xeroConnected = XeroClient::isConnected($pdo);
-$overdue = [];
+$xeroConfigured = XeroClient::isConfigured();
+$xeroConnected = $xeroConfigured && XeroClient::isConnected($pdo);
+$groups = [];
+$outstanding = $overdue = 0.0;
+$invoiceCount = $overdueCount = 0;
 $lastSync = null;
+$invoiceError = '';
+$reminderError = '';
+$remindersAvailable = false;
+$plans = $clientPolicies = [];
+
 if ($xeroConnected) {
     try {
-        // Note: actual Clients columns are `Phone`, `Mobile`, `email`,
-        // `Billing_Email`. The previous query used `c.Phone_1` which
-        // doesn't exist — error was silently swallowed by the catch
-        // below, leaving $overdue=[] and the table never rendering.
-        $st = $pdo->query(
+        $invoices = $pdo->query(
             "SELECT i.Invoice_No, i.Client_ID, i.Xero_Status, i.Xero_AmountDue, i.Xero_DueDate, i.Xero_OnlineUrl,
-                    i.Xero_LastSynced,
-                    c.Client_Name, c.Phone, c.Mobile, c.email, c.billing_email
+                    DATEDIFF(CURDATE(), i.Xero_DueDate) AS days_overdue,
+                    c.Client_Name, c.Phone, c.Mobile, c.email, c.billing_email,
+                    m.updated_at AS last_reminder
                FROM Invoices i
                LEFT JOIN Clients c ON i.Client_ID = c.Client_id
+               LEFT JOIN App_Meta m ON m.meta_key = CONCAT('reminder_last_', i.Invoice_No)
               WHERE i.Xero_InvoiceID IS NOT NULL
                 AND i.Xero_AmountDue > 0
-                AND i.Xero_Status IN ('AUTHORISED','SUBMITTED')
-                AND COALESCE(i.Paid, 0) = 0  /* hide invoices Akahu (or a manual tick) has already marked paid locally — Xero_AmountDue may still be positive while Xero waits to reconcile */
-              ORDER BY i.Xero_DueDate ASC"
-        );
-        $overdue = $st->fetchAll();
-    } catch (Exception $e) {
-        // Surface the failure instead of silently rendering empty.
-        $_SESSION['xero_flash_err'] = 'Overdue list query failed: ' . $e->getMessage();
-        $flashErr = $_SESSION['xero_flash_err']; unset($_SESSION['xero_flash_err']);
+                AND i.Xero_Status IN ('AUTHORISED', 'SUBMITTED')
+                AND COALESCE(i.Paid, 0) = 0
+              ORDER BY i.Xero_DueDate IS NULL, i.Xero_DueDate, i.Invoice_No"
+        )->fetchAll();
+        foreach ($invoices as $invoice) {
+            $id = (int)$invoice['Client_ID'];
+            if (!isset($groups[$id])) {
+                $groups[$id] = ['client' => $invoice, 'invoices' => [], 'total' => 0.0, 'overdue' => 0.0];
+            }
+            $amount = (float)$invoice['Xero_AmountDue'];
+            $groups[$id]['invoices'][] = $invoice;
+            $groups[$id]['total'] += $amount;
+            $outstanding += $amount;
+            $invoiceCount++;
+            if ((int)$invoice['days_overdue'] > 0) {
+                $groups[$id]['overdue'] += $amount;
+                $overdue += $amount;
+                $overdueCount++;
+            }
+        }
+        uasort($groups, fn($a, $b) => ($b['overdue'] <=> $a['overdue'])
+            ?: strcasecmp($a['client']['Client_Name'] ?? '', $b['client']['Client_Name'] ?? ''));
+        $lastSync = $pdo->query('SELECT MAX(Xero_LastSynced) FROM Invoices')->fetchColumn();
+    } catch (PDOException $e) {
+        error_log('Monthly invoicing: ' . $e->getMessage());
+        $invoiceError = 'Could not load the Xero balances. Try syncing again.';
     }
-    try {
-        $lastSync = $pdo->query("SELECT MAX(Xero_LastSynced) FROM Invoices")->fetchColumn();
-    } catch (Exception $e) {}
+    if ($groups) {
+        try {
+            $context = invoice_reminder_context($pdo);
+            foreach (invoice_reminder_rows($pdo, $context['today']) as $row) {
+                $plans[(int)$row['Invoice_No']] = invoice_reminder_plan($row, $context);
+            }
+            $clientPolicies = $pdo->query('SELECT Client_ID, mode FROM Client_Reminder_Policy')->fetchAll(PDO::FETCH_KEY_PAIR);
+            $remindersAvailable = true;
+        } catch (Throwable $e) {
+            $reminderError = 'Reminder controls unavailable. Check the setup on the Invoice Reminders page.';
+        }
+    }
+}
+
+function monthly_h($value): string {
+    return htmlspecialchars((string)$value);
+}
+function monthly_money(float $amount): string {
+    return '$' . number_format($amount, 2);
 }
 ?>
+<!doctype html>
+<html lang="en-NZ">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monthly invoicing</title>
+<link href="site.css" rel="stylesheet">
+<style>
+.invoicing-nav a { white-space:nowrap; }
+.invoicing-tools, .client-tools { display:flex; flex-wrap:wrap; align-items:center; gap:8px; }
+.invoicing-tools { margin:10px 0; }
+.invoice-summary { display:grid; grid-template-columns:repeat(auto-fit, minmax(170px, 1fr)); gap:10px; margin:12px 0; }
+.invoice-summary .card { margin:0; }
+.invoice-summary strong { display:block; font-size:22px; font-variant-numeric:tabular-nums; }
+.invoice-label { color:#555; font-size:12px; }
+.invoice-muted { color:#555; }
+.invoice-alert { border-left:4px solid #c33; }
+.invoice-success { border-left:4px solid #1a6b1a; }
+.client-group { border:1px solid #ddd; border-radius:6px; margin:14px 0; overflow:hidden; scroll-margin-top:16px; }
+.client-heading { padding:12px; background:#f5f5e9; display:flex; justify-content:space-between; align-items:start; flex-wrap:wrap; gap:10px; }
+.client-heading h3 { margin:0; color:#222; font-size:16px; overflow-wrap:anywhere; }
+.client-heading p { margin:3px 0 0; }
+.client-tools form { margin:0; }
+.client-balance { font-weight:bold; font-variant-numeric:tabular-nums; }
+.client-contact a { overflow-wrap:anywhere; }
+.invoice-grid { display:grid; grid-template-columns:minmax(100px, .85fr) minmax(100px, .85fr) minmax(95px, .7fr) minmax(145px, 1.35fr) minmax(90px, .8fr); gap:8px 12px; align-items:start; padding:9px 12px; }
+.invoice-grid-head { font-size:11px; font-weight:bold; color:#555; }
+.invoice-grid-row { border-top:1px solid #eee; }
+.invoice-grid-row:nth-child(odd) { background:#fafafa; }
+.invoice-grid p { margin:2px 0; }
+.invoice-grid strong, .invoice-grid .badge { display:inline-block; }
+.invoice-amount { font-weight:bold; font-variant-numeric:tabular-nums; }
+.invoice-due-late { color:#a00; }
+.invoice-history { max-width:560px; }
+.invoice-history th:last-child, .invoice-history td:last-child { text-align:right; }
+.invoice-mobile-label { display:none; }
+@media (max-width:640px) {
+    .invoice-grid-head { display:none; }
+    .invoice-grid-row { grid-template-columns:repeat(2, minmax(0, 1fr)); }
+    .invoice-mobile-label { display:block; }
+    .invoice-row-actions { grid-column:1 / -1; }
+}
+</style>
+</head>
+<body><main class="page">
+  <nav class="topnav invoicing-nav">
+    <h1>Monthly invoicing</h1>
+    <a href="invoice_list.php">Invoice list</a>
+    <a href="invoice_reminders.php">Invoice Reminders</a>
+    <a href="more.php">More</a>
+    <a href="menu.php">Main menu</a>
+    <a href="logout.php">Log out</a>
+  </nav>
 
-<div class="page" style="max-width:900px;margin-top:20px">
-  <div class="card">
-    <h2 style="margin-top:0">Xero — Outstanding & Overdue Invoices</h2>
-    <?php if (!XeroClient::isConfigured()): ?>
-      <p style="color:#a00">Xero not configured. Add XERO_CLIENT_ID / XERO_CLIENT_SECRET to config.php (see config.xero.sample.php).</p>
-    <?php elseif (!$xeroConnected): ?>
-      <p>Not connected. <a href="xero_connect.php" class="btn-primary">Connect to Xero</a> (Erik must complete the OAuth consent).</p>
-    <?php else: ?>
-      <p>
-        <a href="xero_sync.php" class="btn-primary">🔄 Sync from Xero now</a>
-        <?php if ($lastSync): ?>
-          <span style="color:#666;font-size:11px;margin-left:10px">Last synced: <?= htmlspecialchars($lastSync) ?> UTC</span>
-        <?php endif; ?>
-      </p>
-      <?php if (empty($overdue)): ?>
-        <p style="color:#1a6b1a">✓ Nothing outstanding. Great.</p>
-      <?php else: ?>
-        <p style="font-size:11px;color:#555">
-          Automatic reminders are <strong>opt-in</strong>. Click
-          <strong>🔔 Start reminders</strong> on a row to let cron email
-          that client on the 8 / 15 / 31 / 46 / 61-day overdue stages
-          (1 day past the typical 7/14/30/45/60 schedule, because Xero's
-          bank feed surfaces payments roughly a day late and we don't
-          want to chase a client who paid yesterday). 61d is the final
-          notice and the hard-stop &mdash; cron does not auto-send after
-          that.
-          The per-row <strong>✉ Send reminder</strong> button always
-          works regardless of opt-in &mdash; useful for one-off chases
-          after a phone call.
-          <br>
-          When a client has <em>multiple</em> overdue invoices they get
-          a single overdue-statement email covering all of them, instead
-          of N individual reminders.
-          <br>
-          <a href="xero_send_reminders.php?dry_run=1" target="_blank">Preview reminder run (dry-run)</a>
-          &nbsp;|&nbsp;
-          <a href="xero_send_reminders.php" target="_blank" onclick="return confirm('Send overdue reminders to ALL clients due for one right now?\n\nXero is synced first, paid invoices are skipped (Akahu auto-flips Paid=1 the moment bank evidence covers an invoice), opt-in flag is required. Continue?');">Run reminder batch now</a>
-          <br>
-          <strong style="color:#7a5a00">Test mode (no real client emails):</strong>
-          <a href="xero_send_reminders.php?test=1" target="_blank">Run with diversion only</a>
-          &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=gentle"    target="_blank">8d / gentle</a>
-          &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=reminder"  target="_blank">15d / reminder</a>
-          &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=firm"      target="_blank">31d / firm</a>
-          &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=very_firm" target="_blank">46d / very_firm</a>
-          &middot;
-          <a href="xero_send_reminders.php?test=1&force_tone=final"     target="_blank">61d / final</a>
-        </p>
-        <table class="table">
-          <tr><th>Invoice</th><th>Client</th><th>Phone</th><th>Email</th><th>Due</th><th class="right">Amount Due</th><th>Status</th><th>Last reminder</th><th>Action</th></tr>
-          <?php foreach ($overdue as $od):
-              $isOverdue    = $od['Xero_DueDate'] && $od['Xero_DueDate'] < date('Y-m-d');
-              $lastReminder = meta_get($pdo, 'reminder_last_'           . (int)$od['Invoice_No']);
-              $startedFlag  = meta_get($pdo, 'reminder_started_client_' . (int)$od['Client_ID']);
-              $isStarted    = !empty($startedFlag);
-          ?>
-            <tr<?= $isOverdue ? ' style="background:#ffd6d6"' : '' ?>>
-              <td>CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?>
-                <?php if ($isStarted): ?>
-                  <br><span style="background:#1a6b1a;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px" title="Client-wide opt-in: <?= htmlspecialchars($startedFlag) ?>">AUTO-REMINDERS ON (client)</span>
-                <?php else: ?>
-                  <br><span style="background:#888;color:#fff;padding:1px 5px;border-radius:3px;font-size:9px" title="No automatic reminders are being sent for this client. Default state. Click 'Start reminders' on any of this client's invoices to enable for ALL of them.">auto-reminders off</span>
-                <?php endif; ?>
-              </td>
-              <td><?= htmlspecialchars($od['Client_Name'] ?? '?') ?></td>
-              <td><?php
-                  $ph = trim((string)($od['Phone'] ?? '')) ?: trim((string)($od['Mobile'] ?? ''));
-                  echo htmlspecialchars($ph);
-              ?></td>
-              <td><?php
-                  $em = trim((string)($od['billing_email'] ?? '')) ?: trim((string)($od['email'] ?? ''));
-                  if ($em !== '') echo '<a href="mailto:' . htmlspecialchars($em) . '">' . htmlspecialchars($em) . '</a>';
-              ?></td>
-              <td><?= $od['Xero_DueDate'] ? date('d/m/Y', strtotime($od['Xero_DueDate'])) : '?' ?>
-                <?php if ($isOverdue): ?><br><strong style="color:#a00">OVERDUE</strong><?php endif; ?></td>
-              <td class="right">$<?= number_format((float)$od['Xero_AmountDue'], 2) ?></td>
-              <td><?= htmlspecialchars($od['Xero_Status']) ?></td>
-              <td style="font-size:11px"><?= $lastReminder ? date('d/m/Y', strtotime($lastReminder)) : '<span style="color:#999">—</span>' ?></td>
-              <td>
-                <?php if ($od['Xero_OnlineUrl']): ?>
-                  <a href="<?= htmlspecialchars($od['Xero_OnlineUrl']) ?>" target="_blank" style="font-size:11px">Online</a> ·
-                <?php endif; ?>
-                <a href="invoice.php?Invoice_No=<?= (int)$od['Invoice_No'] ?>" style="font-size:11px">Local</a>
-                <br>
-                <a href="xero_send_reminders.php?invoice_no=<?= (int)$od['Invoice_No'] ?>"
-                   onclick="return confirm('Send overdue reminder for CAD-<?= str_pad((string)$od['Invoice_No'], 5, '0', STR_PAD_LEFT) ?> now from accounts@cadviz.co.nz?\n\nXero is re-synced first; if Akahu has already seen the payment in the bank, the cron has flipped Paid=1 and this manual send still goes (manual override). Continue?');"
-                   style="background:#9B9B1B;color:#fff;padding:2px 8px;border-radius:3px;text-decoration:none;font-size:11px">✉ Send reminder</a>
-                <form method="post" action="monthly_invoicing.php" style="display:inline;margin-left:4px"
-                      onsubmit="return confirm('<?= $isStarted ? 'Stop' : 'Start' ?> automatic reminders for ALL of <?= htmlspecialchars(addslashes((string)($od['Client_Name'] ?? 'this client')), ENT_QUOTES) ?>’s overdue invoices?\n\n<?= $isStarted ? 'This switches OFF automatic reminders for every overdue invoice this client has — current and future. The per-row Send reminder button still works.' : 'This switches ON automatic reminders for every overdue invoice this client has — current and future. Cron will send on the 8/15/31/46/61-day stages (1-day buffer past the typical 7/14/30/45/60 schedule, because Xero takes ~1 day to surface payments from the bank feed) until paid. Day 61 is the hard-stop. The per-row Send reminder button always works regardless.' ?>');">
-                  <input type="hidden" name="action" value="toggle_reminders">
-                  <input type="hidden" name="client_id" value="<?= (int)$od['Client_ID'] ?>">
-                  <input type="submit" value="<?= $isStarted ? '🔕 Stop reminders (client)' : '🔔 Start reminders (client)' ?>"
-                         style="background:<?= $isStarted ? '#666' : '#1a6b1a' ?>;color:#fff;border:none;padding:2px 6px;border-radius:3px;cursor:pointer;font-size:10px">
-                </form>
-              </td>
-            </tr>
-          <?php endforeach; ?>
-        </table>
-        <p style="font-size:11px;color:#666;margin-top:6px">Once paid, run "Sync from Xero now" again — paid invoices drop off this list automatically. Disable Xero's built-in auto-reminders so clients don't get duplicate emails.</p>
-      <?php endif; ?>
+  <?php if ($flash): ?><p class="card invoice-success" role="status"><?= monthly_h($flash) ?></p><?php endif; ?>
+  <?php if ($flashErr): ?><p class="card invoice-alert" role="alert"><?= monthly_h($flashErr) ?></p><?php endif; ?>
+
+  <section class="invoice-summary" aria-label="Invoicing totals">
+    <div class="card"><span class="invoice-label">Invoiced in the last 12 months · excl. GST</span><strong><?= monthly_money($grand) ?></strong></div>
+    <?php if ($councilTotal !== null && $councilTotal > 0): ?>
+      <div class="card"><span class="invoice-label">Net design revenue · excl. GST</span><strong><?= monthly_money($grand - $councilTotal) ?></strong><small class="invoice-muted"><?= monthly_money($councilTotal) ?> council fees excluded</small></div>
     <?php endif; ?>
-  </div>
-</div>
+    <?php if ($xeroConnected && !$invoiceError): ?>
+      <div class="card"><span class="invoice-label">Outstanding balance</span><strong><?= monthly_money($outstanding) ?></strong><small class="invoice-muted"><?= $invoiceCount ?> open invoices</small></div>
+      <div class="card"><span class="invoice-label">Overdue balance</span><strong<?= $overdueCount ? ' class="invoice-due-late"' : '' ?>><?= monthly_money($overdue) ?></strong><small class="invoice-muted"><?= $overdueCount ?> past due</small></div>
+    <?php endif; ?>
+  </section>
 
-</body>
+  <section class="card">
+    <h2>Outstanding invoices</h2>
+    <div class="invoicing-tools">
+      <a href="invoice_reminders.php" class="btn-primary">Preview and manage reminders</a>
+      <?php if ($xeroConnected): ?>
+        <a href="xero_sync.php" class="btn-secondary">Sync from Xero</a>
+        <?php if ($lastSync): ?><small class="invoice-muted">Last synced <?= monthly_h($lastSync) ?> UTC</small><?php endif; ?>
+      <?php endif; ?>
+    </div>
+    <?php if (!$xeroConfigured): ?>
+      <p>Xero is not configured. See config.xero.sample.php.</p>
+    <?php elseif (!$xeroConnected): ?>
+      <p><a href="xero_connect.php">Connect to Xero</a> to load outstanding invoices.</p>
+    <?php elseif ($invoiceError): ?>
+      <p role="alert"><?= monthly_h($invoiceError) ?></p>
+    <?php elseif (!$groups): ?>
+      <p>No outstanding invoices.</p>
+    <?php else: ?>
+      <p class="invoice-muted">Start or stop automatic reminders once per client. Starting lets eligible invoices continue on their existing schedule. Backlog review, dated holds and manual invoice settings still apply. Neither button sends an email immediately.</p>
+      <?php if ($reminderError): ?><p role="status"><?= monthly_h($reminderError) ?></p><?php endif; ?>
+      <?php foreach ($groups as $id => $group):
+          $client = $group['client'];
+          $phone = trim((string)$client['Phone']) ?: trim((string)$client['Mobile']);
+          $recipients = pick_billing_emails($client['billing_email'], $client['email']);
+          $automatic = ($clientPolicies[$id] ?? 'automatic') === 'automatic';
+      ?>
+      <article class="client-group" id="client-<?= $id ?>">
+        <header class="client-heading">
+          <div>
+            <h3><?= monthly_h($client['Client_Name'] ?: 'Unknown client') ?></h3>
+            <p><span class="client-balance"><?= monthly_money($group['total']) ?> outstanding</span>
+              <?php if ($group['overdue'] > 0): ?><span class="badge badge-bad"><?= monthly_money($group['overdue']) ?> overdue</span><?php endif; ?>
+            </p>
+            <?php if ($phone || $recipients): ?>
+              <p class="client-contact invoice-muted"><?= monthly_h($phone) ?><?= $phone && $recipients ? ' · ' : '' ?>
+                <?php foreach ($recipients as $index => $address): ?><?= $index ? ', ' : '' ?><a href="mailto:<?= monthly_h($address) ?>"><?= monthly_h($address) ?></a><?php endforeach; ?>
+              </p>
+            <?php endif; ?>
+          </div>
+          <?php if ($id > 0 && $remindersAvailable): ?>
+          <div class="client-tools">
+            <span class="badge <?= $automatic ? 'badge-ok' : 'badge-warn' ?>"><?= $automatic ? 'Automatic' : 'Manual only' ?></span>
+            <form method="post">
+              <input type="hidden" name="csrf" value="<?= monthly_h($csrf) ?>">
+              <input type="hidden" name="client_id" value="<?= $id ?>">
+              <button class="btn-secondary" name="reminder_mode" value="<?= $automatic ? 'manual' : 'automatic' ?>"><?= $automatic ? 'Stop automatic reminders' : 'Start automatic reminders' ?></button>
+            </form>
+            <a href="invoice_reminders.php?client_id=<?= $id ?>#client-defaults">Client settings</a>
+          </div>
+          <?php endif; ?>
+        </header>
+        <div class="invoice-grid invoice-grid-head" aria-hidden="true"><div>Invoice</div><div>Due date</div><div>Balance due</div><div>Reminder status</div><div>Actions</div></div>
+        <?php foreach ($group['invoices'] as $invoice):
+            $no = (int)$invoice['Invoice_No'];
+            $days = $invoice['days_overdue'];
+            $plan = $plans[$no] ?? null;
+        ?>
+          <div class="invoice-grid invoice-grid-row">
+            <div><span class="invoice-mobile-label invoice-label">Invoice</span>
+              <strong><a href="invoice.php?Invoice_No=<?= $no ?>"><?= invoice_reminder_number($no) ?></a></strong>
+              <?php if ($invoice['Xero_Status'] === 'SUBMITTED'): ?><p class="invoice-label">Submitted to Xero</p><?php endif; ?>
+            </div>
+            <div><span class="invoice-mobile-label invoice-label">Due date</span>
+              <?= $invoice['Xero_DueDate'] ? date('d/m/Y', strtotime($invoice['Xero_DueDate'])) : 'Unknown' ?>
+              <?php if ((int)$days > 0): ?><p class="invoice-due-late"><?= (int)$days ?> days overdue</p><?php endif; ?>
+            </div>
+            <div class="invoice-amount"><span class="invoice-mobile-label invoice-label">Balance due</span><?= monthly_money((float)$invoice['Xero_AmountDue']) ?></div>
+            <div><span class="invoice-mobile-label invoice-label">Reminder status</span>
+              <?= monthly_h($plan['status'] ?? ($invoice['Xero_Status'] === 'SUBMITTED' ? 'Awaiting authorisation' : 'Unavailable')) ?>
+              <?php if ($plan && $plan['date']): ?><p class="invoice-label">Eligible <?= date('d/m/Y', strtotime($plan['date'])) ?></p><?php endif; ?>
+              <?php if ($invoice['last_reminder']): ?><p class="invoice-label">Last contacted <?= date('d/m/Y', strtotime($invoice['last_reminder'])) ?></p><?php endif; ?>
+            </div>
+            <div class="invoice-row-actions">
+              <a href="invoice_reminders.php?invoice_no=<?= $no ?>">Reminder options</a>
+              <?php if ($invoice['Xero_OnlineUrl']): ?><p><a href="<?= monthly_h($invoice['Xero_OnlineUrl']) ?>" target="_blank" rel="noopener">View in Xero</a></p><?php endif; ?>
+            </div>
+          </div>
+        <?php endforeach; ?>
+      </article>
+      <?php endforeach; ?>
+    <?php endif; ?>
+  </section>
+
+  <section class="card invoice-history">
+    <h2>Invoicing by month</h2>
+    <?php if (!$months): ?><p>No invoices in the last 12 months.</p><?php else: ?>
+    <table class="table">
+      <thead><tr><th scope="col">Month</th><th scope="col">Subtotal excl. GST</th></tr></thead>
+      <tbody><?php foreach ($months as $month): ?>
+        <tr><td><?= date('F Y', mktime(0, 0, 0, (int)$month['mnth'], 1, (int)$month['yr'])) ?></td><td><?= monthly_money((float)$month['subtotal']) ?></td></tr>
+      <?php endforeach; ?></tbody>
+      <tfoot><tr><td><strong>12-month total</strong></td><td><strong><?= monthly_money($grand) ?></strong></td></tr></tfoot>
+    </table>
+    <?php endif; ?>
+  </section>
+  <nav class="topnav invoicing-nav" aria-label="Work navigation">
+    <a href="projects.php">My projects</a>
+    <a href="main.php">My timesheet</a>
+    <a href="report.php">Reports</a>
+    <a href="login.php">Log in again</a>
+  </nav>
+</main></body>
 </html>

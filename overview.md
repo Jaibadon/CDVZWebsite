@@ -48,7 +48,7 @@ This is a PHP 7.4+ app, originally Classic ASP / MSSQL, ported to PHP / MySQL. L
 - **`invoice_edit.php`** — edit individual invoice line items. **Note:** ticking the "Paid" checkbox here flips local `Paid=1` + `DatePaid` but does NOT push payment to Xero. See "Top bugs" item #11.
 - **`invoice_gen.php`** — bulk-generate invoices from unprocessed timesheet entries. Race-proofed with zombie cleanup + retry-on-duplicate around the MAX(Invoice_No)+1 insert.
 - **`unprocessed.php`** — admin view of timesheet rows where `IFNULL(Invoice_No, 0) = 0`.
-- **`monthly_invoicing.php`** — Jen/Erik's "outstanding & overdue" page. Sync from Xero button + per-row Send Reminder + per-CLIENT Start/Stop reminders toggle + dry-run preview + per-tone test-mode quick-links. (Outdated query bug already fixed: was `c.Phone_1` which doesn't exist, now `c.Phone, c.Mobile`.)
+- **`monthly_invoicing.php`** — monthly totals, Xero sync and outstanding invoices grouped by client, with client-wide start/stop controls and per-invoice reminder status.
 - **`payments.php`** + payments CRUD.
 - **`statement.php`** — printable statement (PDF-able). Pulls overdue Xero data per client.
 - **`send_statement.php`** — POST handler. Bundles a client's unpaid invoices into one email with PDF attachments per invoice, marks each `Sent=1`. Test mode: `?test_to=…&invoice_no=N` (derives Client_ID from invoice).
@@ -61,7 +61,8 @@ This is a PHP 7.4+ app, originally Classic ASP / MSSQL, ported to PHP / MySQL. L
 - **`xero_connect.php`** / **`xero_callback.php`** / **`xero_disconnect.php`** — OAuth flow.
 - **`xero_invoice_push.php`** — POST handler + library function `push_invoice_to_xero(PDO, int): array`. Auto-creates Xero contact via `ensureContact()` if missing. Account code 240. Lines built from Timesheets, **grouped by JobName** so each project gets a section header in the description; each task line ends with "by FirstName" (Staff.First_Name fallback to login). Falls back to `Invoices.Subtotal` lump-sum if no timesheets. **Discount-doubling fix:** Timesheets.Rate already has Multiplier baked in by invoice_gen.php, so we only multiply baseRate fallback. Library mode via `XERO_INVOICE_PUSH_LIBRARY_ONLY`.
 - **`xero_sync.php`** — `run_xero_sync(PDO): array` library function (CLI runnable too). Pulls AUTHORISED/SUBMITTED/PAID invoices from Xero and updates local `Xero_*` columns. When Xero says PAID, also flips local `Paid=1` + `DatePaid`. **Also pushes DueDate corrections back to Xero** when the local `compute_pay_by(Date, PaymentOption)` disagrees with what Xero has. Library mode via `XERO_SYNC_LIBRARY_ONLY`.
-- **`xero_send_reminders.php`** — overdue-reminder script. Web (admin) + CLI (cron) modes. **Schedule: 8 / 15 / 31 / 46 / 61 days past due** (1-day buffer past the typical 7/14/30/45/60 because Xero's bank feed reflects payments ~1 day late — see "Reminder & statement system" below). Tracks "last sent" via `App_Meta['reminder_last_<invoice_no>']`. Spam-guard: 6-day min gap. **Opt-in is per-CLIENT** (`App_Meta['reminder_started_client_<Client_ID>']`). Stale-sync guard: aborts if MAX(Xero_LastSynced) is > 36 hours old.
+- **`invoice_reminders.php`** — owner/admin preview for next recipient, included invoices, date and tone. Manage existing backlog, per-invoice holds, client policies and final notices.
+- **`xero_send_reminders.php`** — daily reminder sender. Uses `invoice_reminder_policy.php` to plan emails from successfully delivered stages. See the reminder section below.
 
 ### Email (SMTP via Google OAuth2)
 - **`smtp_oauth.php`** — `SmtpOAuth` class. Same shape as XeroClient. Tokens in `Smtp_Tokens` table.
@@ -151,45 +152,16 @@ Caveats:
 
 ---
 
-## Reminder & statement system (the part that surprises people)
+## Reminder and statement system
 
-The cron lives in `xero_send_reminders.php`. Run on a daily cron. End-to-end:
+`invoice_reminders.php` previews the next email per client. `xero_send_reminders.php cron` checks current Xero identity, balance and due date for each planned invoice and skips the message on a mismatch or failed lookup. CLI `dry-run` emails test copies to Jai. CLI `preview-only` and browser `?dry_run=1` log or display the plan without sending. These preview modes use local data and leave reminder history untouched.
 
-1. **Pre-sync.** First action is `run_xero_sync($pdo)` so the local Xero mirror is fresh.
-2. **Stale-sync guard.** If `MAX(Xero_LastSynced)` is > 36h old (sync failed for 2 nights, OAuth expired, etc.), abort the whole run with a prominent banner. Better to miss a stage day than chase a client whose payment hasn't synced.
-3. **Candidate select.** All invoices with `Xero_Status='AUTHORISED'`, `Xero_AmountDue>0`, `Xero_DueDate<CURDATE()`, valid email, `Xero_InvoiceID` not null. Each row carries the per-CLIENT opt-in flag (`reminder_started_client_<Client_ID>` from `App_Meta`).
-4. **Group by client.**
-5. **For each client:**
-   - If client has ≥ 2 overdue invoices → batch into ONE statement email covering all of them. Tone derived from the worst-overdue invoice. Per-client spam guard (`reminder_statement_last_<cid>`, 6-day gap).
-   - If client has 1 overdue invoice → individual reminder.
-
-### Schedule (days past due)
-| Stage | Day | Tone | Wording |
-|-------|-----|------|---------|
-| 1 | 8 | gentle | friendly reminder |
-| 2 | 15 | reminder | please pay soon |
-| 3 | 31 | firm | prompt payment requested |
-| 4 | 46 | very_firm | seriously overdue |
-| 5 | 61 | final | final notice — collections next. **Hard-stop** — cron does not auto-send past this. |
-
-The schedule is offset +1 day from the typical 7/14/30/45/60 because **Xero's bank feed reflects payments ~1 day after the bank actually clears them**. Sending on day 7 risked chasing clients who'd paid the day before. The boilerplate `{disregard}` placeholder also explicitly asks the client to disregard if they paid in the last 24–48 hours.
-
-### Opt-in is PER-CLIENT, not per-invoice
-- App_Meta key: `reminder_started_client_<Client_ID>` (legacy `reminder_started_<n>` keys are ignored).
-- Pressing **🔔 Start reminders (client)** on any one of a client's overdue invoices flips it for ALL of that client's overdue invoices (current and future).
-- Reason: the statement-batch path includes EVERY overdue invoice for the client. If the toggle were per-invoice, the statement would awkwardly say "balance: $X" while the client's actual balance was higher.
-- Toggle UIs: `monthly_invoicing.php` (per row) and `invoice_list.php` (per row, falls back to looking up Client_ID from invoice_no for safety).
-
-### Email templates (editable)
-- `default_email_templates()` in helpers.php registers 11 templates: `invoice`, `statement_manual`, `reminder_(gentle|reminder|firm|very_firm|final)`, `overdue_statement_(gentle|firm|very_firm|final)`.
-- Admins override via `email_templates.php` (writes App_Meta). Override is shown with a "CUSTOMISED" badge and a Reset-to-default button.
-- Common boilerplate (`{disregard}`, `{kind_regards}`, `{bank_details}`) lives in `default_email_boilerplate()`.
-- Substitution: `{var_name}` → value; unknown placeholders pass through unchanged so admins notice typos in test sends.
-
-### Manual override paths (bypass opt-in)
-- `xero_send_reminders.php?invoice_no=N` — fire one reminder for a specific invoice. Always works regardless of opt-in or schedule. Used by the per-row "✉ Send reminder" button.
-- Test mode: `?test=1&test_to=...&force_tone=...&force_days=...` — diverts every email to `test_to`, doesn't update Sent flags or `reminder_last_*`. The per-tone quick-link buttons on `monthly_invoicing.php` use this.
-- "Send Statement" button on `invoice_list.php` posts to `send_statement.php` directly — independent of the cron.
+- **Automatic** is the client default for invoices sent after the cutover. The default grace period is eight days past due and clients can have a longer grace period. **Manual only** suppresses automatic emails for that client.
+- The cutover snapshots existing overdue invoices for review. Previous sends still count toward the minimum contact gap, even when their tone is unknown. **Start gently** queues the first stage once eligible. **Hold until date** releases the invoice on that date, preserving any known stage. **Keep manual** suppresses automatic sends for that invoice. **Resume** continues a known sequence.
+- The first email is gentle. The next three stages become eligible 7, 16 and 15 days after the previous successful send. Very firm and the subsequent Final notice require owner approval of the rendered email. A late cron run sends the next pending stage.
+- A client with multiple eligible invoices receives a single statement in the gentlest pending tone. Held and manual invoices stay out. Only invoices whose pending stage matches the selected tone advance. All emails observe the client contact gap.
+- An interrupted or uncertain delivery appears under **Deliveries to check**. The owner can mark it sent after verifying delivery or release it for retry after confirming it did not send.
+- Templates are editable in `email_templates.php`. Its sample-email buttons use fictional invoice data and a fixed internal destination. Manual account statements in `send_statement.php` are separate from the reminder schedule.
 
 ---
 
@@ -217,7 +189,7 @@ The schedule is offset +1 day from the typical 7/14/30/45/60 because **Xero's ba
 - **`Staff` column names with spaces** (legacy MSSQL): `\`First Name\``, `\`Last Name\``, `\`Billing Rate\``. MySQL is case-insensitive on column identifiers by default, so older queries using `\`BILLING RATE\`` (uppercase) still work alongside the canonical mixed-case from `SHOW CREATE TABLE`. Other Staff cols: `Employee_ID`, `Login`, `email`, `Mobile`, `Pay_Rate`, `Level`, `Last_Review`, `Last_Increase`, `Bank_Acc`, `Active`, `password`, `securepword`, `Efficiency_Factor`. **`Efficiency_Factor` is dead** — column exists, no code reads it. Don't rely on it.
 - **TBA quote rate** — sourced from `Staff WHERE Employee_ID = 29` (the placeholder "T.B.A." record) via `helpers.php::get_tba_rate()`. **Edit it from `staff_admin.php`** by changing Staff #29's `Billing Rate`. Falls back to $90 only if the row is missing. The single source of truth — `quote.php`, `quote_variations.php`, `stages_editor.php`, `helpers.php::compute_project_estimate()`, `my_checklist.php`, and `xero_invoice_push.php` all call `get_tba_rate()`. (Old code hardcoded `$baseRate = 90.00` in five places — that's been removed.)
 - **`App_Meta` reminder keys:**
-  - `reminder_started_client_<Client_ID>` — client-wide opt-in flag.
+  - `invoice_reminder_cutover` — separates pre-rollout invoice history from newly sent invoices.
   - `reminder_last_<Invoice_No>` — last-sent timestamp (per invoice).
   - `reminder_statement_last_<Client_ID>` — last per-client statement timestamp.
   - `reminder_min_gap_days` — overrides the default 6-day spam-guard window.
@@ -273,7 +245,7 @@ Located in `migrations/`. Apply via phpMyAdmin SQL tab.
 9. **mod_rewrite filesystem path** in Location: headers from .htaccess RewriteRule without `RewriteBase /` and a leading `/` on the substitution — produces redirects to `/home3/sys_5e4089532_6/public_html/...` instead of the URL. Already fixed; if you see this again, check `.htaccess`.
 10. **Output before `header()`** kills redirects. POST handlers must `ob_start()` (or just `require_once 'db_connect.php'` which now does it) before any HTML.
 11. **Local `Paid=1` does NOT push to Xero.** Direction is one-way: `xero_sync.php` flips local Paid when Xero says PAID; ticking Paid in `invoice_edit.php` sets local Paid + DatePaid only. The next sync leaves the local tick alone (`Paid = CASE WHEN ?='PAID' THEN 1 ELSE Paid END`) but `Xero_Status`, `Xero_AmountDue`, `Xero_DueDate` come back fresh from Xero — so anything filtering on the Xero mirror (monthly_invoicing.php, the reminder cron, Erik's 30+ callout) keeps showing the invoice as overdue. Manual tick only affects pages that filter on `Invoices.Paid` directly (e.g. invoice_list.php's `WHERE Paid = 0`). This is intentional — Xero is the source of truth because that's where bank-feed reconciliation happens — but there's a UX gap when a client confirms payment by phone and Xero hasn't synced yet.
-12. **Xero bank-feed lag (~1 day).** Xero's bank feed reflects payments ~1 day after the bank actually clears them. The reminder schedule has a +1 day buffer (8/15/31/46/61) and every reminder/statement template's `{disregard}` boilerplate explicitly mentions "the last 24–48 hours" so a recently-paid client knows why they got the email.
+12. **Xero bank-feed lag (~1 day).** Xero's bank feed reflects payments ~1 day after the bank actually clears them. The standard first reminder has an eight-day grace period and every reminder/statement template's `{disregard}` boilerplate explicitly mentions "the last 24–48 hours" so a recently-paid client knows why they got the email.
 13. **HTTP/2 protocol errors** — see `HTTP2_ERRORS.md`. The 80% case (PHP warning text bleeding into HTML) is fixed in db_connect.php. The other 20% (slow query, mod_security cancel, segfault) is on the host side.
 14. **`invoices_for_client.php` / `invoices_for_job.php` are POST-loaded.** Their URL has no querystring, so naive HTTP_REFERER-based "back" navigation from invoice.php loses the filter. Fixed via `?back=` param + Client_ID/proj_id reconstruction in invoice.php.
 
@@ -285,10 +257,10 @@ Located in `migrations/`. Apply via phpMyAdmin SQL tab.
 |------|------|
 | Add a new column to invoices | edit `Invoices` schema, then update SELECT + UPDATE in `invoice.php`, `invoice_edit.php`, `invoice_list.php`, `xero_invoice_push.php` |
 | Change invoice number prefix | `xero_invoice_push.php` (`'CAD-'`) and `xero_invoice_email.php` |
-| Tweak email reminder schedule | `xero_send_reminders.php` `$reminderStages = [8, 15, 31, 46, 61]` and the matching `$forceDaysFromTone` mapping below it |
+| Reminder schedule | Client grace in Invoice Reminders. Follow-up intervals in `invoice_reminder_policy.php`. |
 | Edit an email body | `email_templates.php` (admin UI) — writes to `App_Meta`, falls back to `default_email_templates()` in helpers.php |
-| Stop sending reminders for one client | `monthly_invoicing.php` → 🔕 Stop reminders (client) on any of their overdue rows |
-| Mute reminders for everyone temporarily | `DELETE FROM App_Meta WHERE meta_key LIKE 'reminder_started_client_%'` (back to default opt-out state) |
+| Start or stop automatic reminders for a client | Use the button in the client heading in Monthly Invoicing or edit Client defaults in Invoice Reminders. Both preserve invoice holds, backlog decisions, and stage history. |
+| Pause automatic sends globally | Pause the reminder cron and leave the preview available. |
 | Add a new POST action to stages_editor | `stages_editor.php` POST handler block, then add the matching `<form>` in render section |
 | Disable dormancy sweep temporarily | `meta_set($pdo, 'dormancy_last_run', date('Y-m'));` on the menu — or comment out the call in `menu.php` |
 | Reset Xero connection | menu → Disconnect Xero, OR `DELETE FROM Xero_Tokens;` |
@@ -305,7 +277,7 @@ Located in `migrations/`. Apply via phpMyAdmin SQL tab.
 - The redirect after POST pattern. Without it, refresh re-submits and you get duplicate rows.
 - The `is_employed_staff()` check (currently `dmitriyp`, `hannah`). If full-time staff change, update `helpers.php`.
 - The output buffer in `db_connect.php`. Don't add `ob_end_flush()` calls anywhere — let the shutdown handler manage it.
-- Reminder opt-in is **per-client**, key `reminder_started_client_<Client_ID>`. The legacy per-invoice key (`reminder_started_<n>`) is ignored; don't reintroduce it.
+- Client policies and invoice overrides live in `Client_Reminder_Policy` and `Invoice_Reminder_State`.
 - `xero_sync.php` is the only path that should flip `Invoices.Paid`. Don't add code that flips Paid based on local-only signals (e.g. don't auto-mark a client paid because they replied to an email).
 
 ---
@@ -317,7 +289,7 @@ Located in `migrations/`. Apply via phpMyAdmin SQL tab.
 4. **Blank table where data should be**: query is fine but returned 0 rows — check WHERE clauses (esp. `Variation_ID IS NULL`, `Is_Removed = 0`, `Active <> 0`, `Xero_AmountDue > 0`).
 5. **Push/sync to Xero fails with 401**: token expired and auto-refresh failed. Disconnect + reconnect in menu.
 6. **Email fails**: check `smtp_flash` / `xero_flash_err` on the menu page. Common causes: SMTP not connected (do OAuth flow), or the Gmail alias not verified yet.
-7. **Reminders not firing despite opt-in**: check the cron's HTML report — the stale-sync guard may have aborted (Xero connection dead for >36h). Reconnect Xero, run the cron manually.
+7. **Reminders not firing**: check the reminder preview for hold, payment, stale Xero data or delivery review status.
 8. **"I paid that invoice yesterday why am I still being chased"**: bank-feed lag — payment cleared the bank but Xero hasn't reconciled yet. The 1-day schedule buffer absorbs most of this; the disclaimer in the email body explains it. Confirm by looking at the invoice in Xero directly.
 9. **"Submission blocked" unexpectedly**: `is_employed_staff()` block — but we removed the hard block in submit.php. If it returns, check submit.php top.
 
@@ -340,7 +312,7 @@ Column ownership:
 - `monthly_invoicing.php` outstanding-and-overdue list
 - `menu.php` "30+ days overdue, please call" callout
 
-**Reminder cron also skips partial payments.** `xero_send_reminders.php`'s candidate filter additionally requires `AmountPaid` (Akahu) AND `Xero_AmountPaid` (Xero) to both be ~$0. The moment ANY payment is recorded against the invoice — full or partial, captured from either source — the auto-cron stops chasing. Partials surface on Erik's menu via the "💰 partial payment received" panel for manual action (send-thanks, credit shortfall) instead. Erik's per-row manual `?invoice_no=N` send still bypasses every filter so he can fire a one-off if needed. `monthly_invoicing.php`'s overdue list and the menu's 30+ overdue callout still SHOW partial-paid invoices (so Erik can see them and call) — only the auto-emailing cron skips them.
+**Reminder cron also skips partial payments.** `xero_send_reminders.php`'s candidate filter additionally requires `AmountPaid` (Akahu) AND `Xero_AmountPaid` (Xero) to both be ~$0. The moment ANY payment is recorded against the invoice — full or partial, captured from either source — the auto-cron stops chasing. Partials surface on Erik's menu via the "💰 partial payment received" panel for manual action (send-thanks, credit shortfall) instead. Manual reminders use the same live Xero checks. `monthly_invoicing.php`'s overdue list and the menu's 30+ overdue callout still SHOW partial-paid invoices (so Erik can see them and call) — only the auto-emailing cron skips them.
 
 Without these changes, an Akahu-flipped Paid would have been ignored by the cron (which used to filter only on `Xero_AmountDue > 0`), and reminders would have continued chasing clients who paid days ago. With the changes, Erik's holiday scenario works: Akahu sees the bank deposit, flips Paid locally (full payment) or just records the allocation (partial), the cron stops chasing in either case, the menu shows "needs reconciling in Xero" / "partial payment received" so Erik catches up the books on his return. xero_sync's "sticky 1" means the local Paid never gets reset back when Xero hasn't yet caught up.
 

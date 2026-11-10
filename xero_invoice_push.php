@@ -17,7 +17,7 @@
  *   email      (optional)  — '1' to also email the client after pushing
  */
 require_once __DIR__ . '/db_connect.php';
-require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/invoice_email_safety.php';
 require_once __DIR__ . '/xero_client.php';
 
 /**
@@ -161,6 +161,10 @@ function push_invoice_to_xero(PDO $pdo, int $invoiceNo): array
     }
 
     if (empty($head['Client_Name'])) throw new Exception("Client missing name; can't create Xero contact.");
+    $existingContact = null;
+    if ($head['Xero_InvoiceID']) {
+        $existingContact = invoice_email_xero_contact($head, $xc->getInvoice($head['Xero_InvoiceID']));
+    }
 
     // Build the buyer identifier set. Email is picked via the same fallback
     // the email helpers use so we never push an "invalid placeholder" that
@@ -175,6 +179,9 @@ function push_invoice_to_xero(PDO $pdo, int $invoiceNo): array
         'country'       => 'New Zealand',
         'contactPerson' => $head['ContactPerson'] ?? null,
     ]);
+    if ($existingContact !== null && strcasecmp($existingContact, $contactId) !== 0) {
+        throw new RuntimeException('The Xero contact changed. Review the invoice in Xero before updating it.');
+    }
 
     if (empty($xeroLines)) throw new Exception("Invoice #$invoiceNo has no line items and no subtotal — nothing to send.");
 
@@ -295,9 +302,7 @@ require_once __DIR__ . '/lib_invoice_email.php';
 if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403); die('Admin only.');
 }
-if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
-    http_response_code(405); die('POST only.');
-}
+invoice_email_require_post();
 
 $invoiceNo = (int)($_POST['Invoice_No'] ?? 0);
 $alsoEmail = !empty($_POST['email']);

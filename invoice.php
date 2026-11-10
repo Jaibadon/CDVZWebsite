@@ -1,7 +1,7 @@
 <?php
 session_start();
 require_once 'db_connect.php';
-require_once 'helpers.php';
+require_once 'invoice_email_safety.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
@@ -404,7 +404,8 @@ if (in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)):
       <p style="margin:6px 0 0">
         <?php if ($xc_url): ?><a href="<?= htmlspecialchars($xc_url) ?>" target="_blank" class="btn-primary">Open in Xero</a><?php endif; ?>
         <a href="xero_sync.php" class="btn-secondary">Sync now</a>
-        <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Re-push this invoice to Xero? Will create a NEW Xero invoice if the existing Xero ID is unrecognised.');">
+        <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Update this existing invoice in Xero?');">
+          <input type="hidden" name="email_csrf" value="<?= invoice_email_csrf() ?>">
           <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
           <input type="hidden" name="email" value="0">
           <button type="submit" class="btn-secondary">Re-push (no email)</button>
@@ -413,11 +414,13 @@ if (in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)):
     <?php else: ?>
       <p style="margin:0">Not yet pushed to Xero.</p>
       <form method="post" action="xero_invoice_push.php" style="margin-top:6px;display:inline" onsubmit="return confirm('Push CAD-<?= str_pad((string)$invoice_no, 5, '0', STR_PAD_LEFT) ?> to Xero as AUTHORISED?\n\nThis only creates the invoice in Xero — no email is sent. Continue?');">
+        <input type="hidden" name="email_csrf" value="<?= invoice_email_csrf() ?>">
         <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
         <input type="hidden" name="email" value="0">
         <button type="submit" class="btn-primary">Push to Xero</button>
       </form>
       <form method="post" action="xero_invoice_push.php" style="display:inline" onsubmit="return confirm('Push CAD-<?= str_pad((string)$invoice_no, 5, '0', STR_PAD_LEFT) ?> to Xero AND email it to the client now?\n\nThe email goes from accounts@cadviz.co.nz with the Xero PDF attached. Continue?');">
+        <input type="hidden" name="email_csrf" value="<?= invoice_email_csrf() ?>">
         <input type="hidden" name="Invoice_No" value="<?= $invoice_no ?>">
         <input type="hidden" name="email" value="1">
         <button type="submit" class="btn-primary" style="background:#1a6b1a">Push + Email to Client</button>

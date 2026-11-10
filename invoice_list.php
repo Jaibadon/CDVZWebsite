@@ -1,7 +1,7 @@
 <?php
 session_start();
 require_once 'db_connect.php';
-require_once 'helpers.php';
+require_once 'invoice_email_safety.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
@@ -12,41 +12,7 @@ if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     echo '<p>Admin only. <a href="menu.php">Back to menu</a></p>';
     exit;
 }
-
-// ── Start / stop automatic reminders for a CLIENT (all of their invoices) ──
-// Mirrors monthly_invoicing.php. The opt-in flag is per-CLIENT
-// (reminder_started_client_<Client_ID>) so flipping it covers every overdue
-// invoice for that client — current and future. This keeps the cron's
-// statement-batch path consistent: when a client has 2+ overdue invoices the
-// statement bundles ALL of them, so we don't want partial opt-in. The
-// invoice_no in the form is just the row the user clicked on; the handler
-// resolves it to a Client_ID before flipping the meta key.
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'toggle_reminders') {
-    $pdoForToggle = get_db();
-    $cid = (int)($_POST['client_id'] ?? 0);
-    if ($cid <= 0) {
-        // fall back to looking up the client from invoice_no
-        $invNo = (int)($_POST['invoice_no'] ?? 0);
-        if ($invNo > 0) {
-            try {
-                $st = $pdoForToggle->prepare("SELECT Client_ID FROM Invoices WHERE Invoice_No = ?");
-                $st->execute([$invNo]);
-                $cid = (int)($st->fetchColumn() ?: 0);
-            } catch (Exception $e) {}
-        }
-    }
-    if ($cid > 0) {
-        $key = 'reminder_started_client_' . $cid;
-        $cur = meta_get($pdoForToggle, $key);
-        if (!empty($cur)) {
-            try { $pdoForToggle->prepare("DELETE FROM App_Meta WHERE meta_key = ?")->execute([$key]); } catch (Exception $e) {}
-        } else {
-            meta_set($pdoForToggle, $key, 'started by ' . ($_SESSION['UserID'] ?? '?') . ' on ' . date('Y-m-d'));
-        }
-    }
-    header('Location: invoice_list.php');
-    exit;
-}
+$emailCsrf = invoice_email_csrf();
 
 // ── Inline "set contact" handler ────────────────────────────────────────
 // Fired from the per-row "⚠ Missing greeting" alert. Saves the Contact
@@ -327,41 +293,25 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
             }
             $resendNote = $sentFlag !== 0 ? '\\n\\nThis invoice has already been sent — clicking will RESEND.' : '';
             echo " <form method=\"post\" action=\"xero_invoice_email.php\" style=\"display:inline\" onsubmit=\"return confirm('Email invoice #$invNo to the client now from accounts@cadviz.co.nz?$resendNote\\n\\nContinue?');\">"
+               . "<input type=\"hidden\" name=\"email_csrf\" value=\"$emailCsrf\">"
                . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
                . "<input type=\"submit\" value=\"&#9993; " . ($sentFlag !== 0 ? 'Re-email from CADViz' : 'Email from CADViz') . "\" style=\"background:#9B9B1B;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
                . "</form>";
-
-            // Start / Stop reminders toggle — shown only on Xero-pushed
-            // unpaid invoices (paid invoices don't trigger reminders even
-            // if started). Per-CLIENT App_Meta key — flipping it covers
-            // every overdue invoice for the client, current and future.
-            if ($xs !== 'PAID' && $clientId > 0) {
-                $started     = !empty(meta_get(get_db(), 'reminder_started_client_' . $clientId));
-                $startBg     = $started ? '#666' : '#1a6b1a';
-                $startLabel  = $started ? '&#128276; Stop reminders (client)' : '&#128276; Start reminders (client)';
-                $startTitle  = $started
-                    ? "Cron is sending automatic reminders for ALL of " . htmlspecialchars((string)$client) . "'s overdue invoices. Click to stop for the whole client."
-                    : "Reminders are OFF for " . htmlspecialchars((string)$client) . " (default). Click to enable cron-driven reminders for ALL of this client's overdue invoices, current and future.";
-                $clientNameJs = addslashes((string)$client);
-                $confirmMsg  = $started
-                    ? "Stop automatic reminders for ALL of {$clientNameJs}\xe2\x80\x99s overdue invoices?\\n\\nThis switches OFF cron-driven reminders for every overdue invoice this client has — current and future. The per-row Send reminder button still works."
-                    : "Start automatic reminders for ALL of {$clientNameJs}\xe2\x80\x99s overdue invoices?\\n\\nThis switches ON cron-driven reminders for every overdue invoice this client has — current and future. Cron sends on the 8/15/31/46/61-day stages until paid (1-day buffer past the typical 7/14/30/45/60 because Xero takes ~1 day to surface bank-fed payments). Day 61 = hard-stop.";
-                echo " <form method=\"post\" action=\"invoice_list.php\" style=\"display:inline\" onsubmit=\"return confirm('" . htmlspecialchars($confirmMsg, ENT_QUOTES) . "');\">"
-                   . "<input type=\"hidden\" name=\"action\" value=\"toggle_reminders\">"
-                   . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
-                   . "<input type=\"submit\" value=\"$startLabel\" title=\"" . htmlspecialchars($startTitle, ENT_QUOTES) . "\" style=\"background:$startBg;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:4px\">"
-                   . "</form>";
-            }
         }
     } else {
         if ($checked) {
             echo " <form method=\"post\" action=\"xero_invoice_push.php\" style=\"display:inline\" onsubmit=\"return confirm('Push invoice #$invNo to Xero (creates the invoice; does NOT send the email yet)?');\">"
+               . "<input type=\"hidden\" name=\"email_csrf\" value=\"$emailCsrf\">"
                . "<input type=\"hidden\" name=\"Invoice_No\" value=\"" . (int)$invNo . "\">"
                . "<input type=\"submit\" value=\"&#10140; Push to Xero\" style=\"background:#13B5EA;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
                . "</form>";
         } else {
             echo " <span style=\"color:#888;font-size:11px;margin-left:6px\">(set status to Ready to Send before pushing)</span>";
         }
+    }
+
+    if ($xs !== 'PAID' && $clientId > 0) {
+        echo ' <a class="row-btn" href="invoice_reminders.php?invoice_no=' . (int)$invNo . '">Reminder options</a>';
     }
 
     // Statement button — same gates as the single-invoice email button:
@@ -372,7 +322,8 @@ while ($rs = $stmt->fetch(PDO::FETCH_ASSOC)) {
     //   - The client has >1 unpaid invoice (otherwise the per-invoice
     //     Email button is the right choice)
     if ($checked && $xs && $clientId > 0 && ($unpaidPerClient[$clientId] ?? 0) > 1) {
-        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Send a STATEMENT email to this client now?\\n\\nIncludes PDFs of every unpaid invoice and marks each one as Sent.\\n\\nContinue?');\">"
+        echo " <form method=\"post\" action=\"send_statement.php\" style=\"display:inline\" onsubmit=\"return confirm('Send a STATEMENT email to this client now?\\n\\nIncludes reviewed outstanding Xero invoices and marks the included invoices as Sent.\\n\\nContinue?');\">"
+           . "<input type=\"hidden\" name=\"email_csrf\" value=\"$emailCsrf\">"
            . "<input type=\"hidden\" name=\"client_id\" value=\"" . $clientId . "\">"
            . "<input type=\"submit\" value=\"&#9993; Send Statement\" style=\"background:#5d3a9b;color:#fff;border:none;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:11px;margin-left:6px\">"
            . "</form>";

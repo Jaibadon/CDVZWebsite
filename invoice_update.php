@@ -1,7 +1,7 @@
 <?php
 session_start();
 require_once 'db_connect.php';
-require_once 'helpers.php';
+require_once 'invoice_email_safety.php';
 
 if (empty($_SESSION['UserID'])) {
     echo "<p>Your session has expired. Please <a href=\"login.php\">login</a> again</p>";
@@ -11,6 +11,7 @@ if (!in_array($_SESSION['UserID'] ?? '', ['erik','jen'], true)) {
     http_response_code(403); die('Admin only.');
 }
 
+invoice_email_require_post();
 $pdo = get_db();
 
 $invoice_no = (int)$_POST['Invoice_No'];
@@ -42,6 +43,10 @@ $prevDatePaid = $ci($rs, ['DatePaid']);
 
 // Build update fields
 $client_id = (int)($_POST['CLIENT_BOX'] ?? 0);
+if ($ci($rs, ['Xero_InvoiceID']) && $client_id !== (int)$ci($rs, ['Client_ID'])) {
+    http_response_code(409);
+    exit('This invoice already belongs to a Xero billing client. Review or reissue it in Xero before changing clients.');
+}
 
 $inv_date = !empty($_POST['INV_DATE']) ? to_mysql_date($_POST['INV_DATE']) : null;
 

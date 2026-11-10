@@ -1,7 +1,7 @@
 <?php
 require_once 'auth_check.php';
 require_once 'db_connect.php';
-require_once 'helpers.php';
+require_once 'invoice_email_safety.php';
 require_once 'xero_client.php';
 // Refresh local Xero_* columns before drawing the statement so the
 // figures match Xero's source of truth (paid invoices drop off).
@@ -326,7 +326,8 @@ foreach ($rows as $row) {
 <p class="no-print" style="margin-top:14px">
   <a href="invoice_list.php" class="btn-secondary">Back to invoice list</a>
   <?php if (!empty($rows)): ?>
-    <form method="post" action="send_statement.php" style="display:inline;margin-left:8px" onsubmit="return confirm('Email this statement plus PDFs of every unpaid invoice to <?= htmlspecialchars($billto) ?> now?\n\nEach unsent invoice will be marked as Sent. The client is asked to disregard for any invoice already paid. Continue?');">
+    <form method="post" action="send_statement.php" style="display:inline;margin-left:8px" onsubmit="return confirm('Email the reviewed outstanding Xero invoices for this client?');">
+      <input type="hidden" name="email_csrf" value="<?= invoice_email_csrf() ?>">
       <input type="hidden" name="client_id" value="<?= (int)$client_id ?>">
       <button type="submit" class="btn-primary">&#9993; Send Statement to Client</button>
     </form>

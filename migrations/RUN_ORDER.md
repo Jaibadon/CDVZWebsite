@@ -100,6 +100,21 @@ dump).
 26. `add_keynote_clause_map.sql`
 27. `add_approval_policy.sql`
 28. `add_drive_provisioning.sql`
+29. `add_invoice_reminders.sql` — client reminder defaults, invoice stages and delivery review. Requires the App_Meta, Xero and Akahu migrations.
+30. `add_verified_invoice_delivery.sql` — original delivery and recipient binding. Apply before deploying the audited invoice email and reminder code.
+
+### Invoice reminder rollout
+
+Pause the reminder cron during rollout. Apply both reminder migrations
+before deploying and enabling the new sender. The first migration saves a cutover
+timestamp and puts invoices already overdue into backlog review. It can be run
+again without resetting the cutover or enrolling more backlog.
+
+Open **More → Invoice Reminders** to review the backlog and set client exceptions
+to **Manual only**. Check the plan with `cron preview-only` before resuming cron. New invoices
+with a verified CADViz send use Automatic by default. Existing Sent checkboxes
+are not migrated as delivery evidence. For backlog without a CADViz delivery
+record, confirm the original send and billing addresses before starting.
 
 ---
 
